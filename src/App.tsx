@@ -737,7 +737,7 @@ function DataPanel({
           />
         </label>
         <label className="mt-3 block text-xs text-stone-500">
-          Cesium ion token (terrain + aligned 3D buildings)
+          Cesium ion token (optional terrain elevation)
           <input
             className="mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm text-stone-800"
             value={ionToken}
@@ -746,8 +746,7 @@ function DataPanel({
             placeholder="eyJ…"
           />
           <span className="mt-1 block text-[10px] text-stone-400">
-            Free at cesium.com/ion — seats buildings on the ground. Buildings only appear when you
-            zoom in close.
+            Free at cesium.com/ion — adds real terrain height to the globe.
           </span>
         </label>
       </div>

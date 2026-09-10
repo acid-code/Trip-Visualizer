@@ -37,7 +37,7 @@ npm run gen:excel  # regenerate sample France South Loop .xlsx
 | Esri imagery (default) | Free satellite basemap |
 | OpenStreetMap | Free street tiles |
 | Google Photorealistic 3D | Optional; paste a Maps key in **Data** |
-| Cesium ion terrain + OSM buildings | Optional; paste an ion token in **Data** — buildings only show when zoomed in close |
+| Cesium ion terrain | Optional; paste an ion token in **Data** for elevation |
 
 Touch (phone): one-finger pan, two-finger pinch zoom + tilt.
 

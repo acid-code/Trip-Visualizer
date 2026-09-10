@@ -6,7 +6,6 @@ import {
   Cesium3DTileset,
   Color,
   DistanceDisplayCondition,
-  EllipsoidTerrainProvider,
   HeightReference,
   HorizontalOrigin,
   Ion,
@@ -17,7 +16,6 @@ import {
   UrlTemplateImageryProvider,
   VerticalOrigin,
   Viewer,
-  createOsmBuildingsAsync,
   createWorldTerrainAsync,
   Math as CesiumMath,
   BoundingSphere,
@@ -35,11 +33,6 @@ import { stepOrderMap } from '../data/analytics'
 export type MapStack = 'esri' | 'osm' | 'google3d'
 
 let googleTileset: Cesium3DTileset | null = null
-let buildingsTileset: Cesium3DTileset | null = null
-let buildingsCameraListener: (() => void) | null = null
-
-/** Only show 3D buildings when the camera is this close to the surface (meters). */
-const BUILDINGS_MAX_CAMERA_HEIGHT_M = 1100
 
 export async function createTripViewer(
   container: HTMLElement,
@@ -76,7 +69,6 @@ export async function createTripViewer(
 
   await applyMapStack(viewer, 'esri')
 
-  // Terrain first — OSM buildings are authored for world terrain; without it they float
   if (opts?.ionToken) {
     try {
       viewer.terrainProvider = await createWorldTerrainAsync()
@@ -84,8 +76,6 @@ export async function createTripViewer(
       // keep ellipsoid
     }
   }
-
-  await loadBuildings(viewer)
 
   return viewer
 }
@@ -187,53 +177,7 @@ export async function applyMapStack(
   )
 }
 
-async function loadBuildings(viewer: Viewer) {
-  if (buildingsTileset) {
-    syncBuildingsVisibility(viewer)
-    return
-  }
-
-  const hasTerrain = !(viewer.terrainProvider instanceof EllipsoidTerrainProvider)
-
-  try {
-    // Ion OSM buildings match World Terrain (no hover). Re:Earth works without a token
-    // but can float slightly on a bare ellipsoid until terrain is enabled.
-    if (hasTerrain && Ion.defaultAccessToken) {
-      buildingsTileset = await createOsmBuildingsAsync()
-    } else {
-      buildingsTileset = await Cesium3DTileset.fromUrl(
-        'https://buildings.reearth.land/tileset.json',
-        {
-          cacheBytes: 512 * 1024 * 1024,
-          maximumCacheOverflowBytes: 256 * 1024 * 1024,
-          preloadWhenHidden: false,
-          maximumScreenSpaceError: 24,
-        },
-      )
-    }
-    buildingsTileset.show = false
-    buildingsTileset.maximumScreenSpaceError = 24
-    viewer.scene.primitives.add(buildingsTileset)
-
-    if (buildingsCameraListener) {
-      viewer.camera.changed.removeEventListener(buildingsCameraListener)
-    }
-    buildingsCameraListener = () => syncBuildingsVisibility(viewer)
-    viewer.camera.changed.addEventListener(buildingsCameraListener)
-    syncBuildingsVisibility(viewer)
-  } catch (err) {
-    console.warn('3D buildings unavailable', err)
-  }
-}
-
-function syncBuildingsVisibility(viewer: Viewer) {
-  if (!buildingsTileset) return
-  const height = viewer.camera.positionCartographic.height
-  // Street-level only — hide when looking from city / country overview
-  buildingsTileset.show = height < BUILDINGS_MAX_CAMERA_HEIGHT_M
-}
-
-/** Call when the user adds/changes a Cesium ion token so terrain + buildings can seat correctly. */
+/** Call when the user adds/changes a Cesium ion token for world terrain elevation. */
 export async function applyIonTerrain(viewer: Viewer, ionToken: string) {
   if (!ionToken) return
   Ion.defaultAccessToken = ionToken
@@ -241,14 +185,7 @@ export async function applyIonTerrain(viewer: Viewer, ionToken: string) {
     viewer.terrainProvider = await createWorldTerrainAsync()
   } catch (err) {
     console.warn('World terrain failed', err)
-    return
   }
-  // Swap to Ion OSM buildings (aligned to terrain) if we only had Re:Earth so far
-  if (buildingsTileset) {
-    viewer.scene.primitives.remove(buildingsTileset)
-    buildingsTileset = null
-  }
-  await loadBuildings(viewer)
 }
 
 export function clearTripEntities(viewer: Viewer) {
