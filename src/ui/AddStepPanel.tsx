@@ -22,6 +22,12 @@ export type AddContext = {
   beforeId?: string | null
   /** Prefilled when inserting between steps */
   hint?: string
+  /** Replace an auto-generated day-base placeholder with this new step */
+  replaceId?: string
+  /** Force date (e.g. when filling a day base) */
+  date?: string
+  /** Suggested starting type when filling a day base */
+  defaultType?: ItemType
 }
 
 type Props = {
@@ -74,15 +80,16 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
 
   const defaults = useMemo(() => {
     const date = requireIsoDate(
-      after?.date || before?.date || meta.startDate,
+      context?.date || after?.date || before?.date || meta.startDate,
       todayIso(),
     )
     const start = sanitizeTime(midpointTime(after?.end || after?.start, before?.start))
     const city = after?.city || before?.city || ''
-    return { date, start, city }
-  }, [after, before, meta.startDate])
+    const type = context?.defaultType ?? 'sight'
+    return { date, start, city, type }
+  }, [after, before, meta.startDate, context?.date, context?.defaultType])
 
-  const [type, setType] = useState<ItemType>('sight')
+  const [type, setType] = useState<ItemType>(defaults.type)
   const [title, setTitle] = useState('')
   const [place, setPlace] = useState('')
   const [city, setCity] = useState(defaults.city)
@@ -180,9 +187,11 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
           <h3 className="brand-mark text-xl text-stone-900">New step</h3>
           <p className="mt-0.5 text-xs text-stone-500">
             {context?.hint ||
-              (after || before
-                ? `Slots between ${after?.title ?? 'start'} → ${before?.title ?? 'end'}. Date/time auto-sorts the timeline.`
-                : 'Name it, paste an address, pick date — it lands on the map automatically.')}
+              (context?.replaceId
+                ? 'This day needs a real start — hotel, arrival, or station.'
+                : after || before
+                  ? `Slots between ${after?.title ?? 'start'} → ${before?.title ?? 'end'}. Date/time auto-sorts the timeline.`
+                  : 'Name it, paste an address, pick date — it lands on the map automatically.')}
           </p>
         </div>
         <button type="button" className="text-sm text-stone-500" onClick={onCancel}>

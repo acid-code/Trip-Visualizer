@@ -1,10 +1,26 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { TripItem, TripMeta } from '../domain/types'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import type { ItemType, TripItem, TripMeta } from '../domain/types'
 import { TYPE_COLORS } from '../domain/types'
 import { dayIndex, stepOrderMap } from '../data/analytics'
 import { dayColor } from '../data/dayTheme'
 import { sortItems } from '../data/db'
-import { isPlaceholderBase } from '../data/dayBases'
+import { isPlaceholderBase, itemTouchesDay } from '../data/dayBases'
+
+const TYPE_EMOJI: Record<ItemType, string> = {
+  flight: '✈️',
+  train: '🚆',
+  bus: '🚌',
+  ferry: '⛴️',
+  drive: '🚗',
+  hotel: '🛏️',
+  sight: '📍',
+  restaurant: '🍽️',
+  activity: '🎟️',
+  city: '🏙️',
+  note: '📝',
+  other: '✨',
+}
 
 type Props = {
   meta: TripMeta
@@ -23,6 +39,8 @@ type Props = {
   onDeleteStep?: (id: string) => void
   /** Desktop vertical rail vs phone Polarsteps-style horizontal strip. */
   layout?: 'vertical' | 'horizontal'
+  /** When Detail is open on desktop, pin the selected card to the top of the list. */
+  detailOpen?: boolean
 }
 
 export function TimelinePanel({
@@ -39,12 +57,15 @@ export function TimelinePanel({
   onAddDay,
   onDeleteStep,
   layout = 'vertical',
+  detailOpen = false,
 }: Props) {
   const horizontal = layout === 'horizontal'
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const prevDetailOpen = useRef(detailOpen)
+  const prevDayFilter = useRef(dayFilter)
   const sorted = sortItems(items).filter((i) => {
-    if (dayFilter && i.date !== dayFilter && i.endDate !== dayFilter) return false
+    if (dayFilter && !itemTouchesDay(i, dayFilter)) return false
     if (typeFilter && i.type !== typeFilter) return false
     return true
   })
@@ -52,37 +73,81 @@ export function TimelinePanel({
   const types = [...new Set(items.map((i) => i.type))]
   const order = stepOrderMap(meta, items)
 
+  // If a *new* map/list selection is hidden by filters, clear them so it can appear.
+  // Do not run when the user is actively changing filters (that would undo the pick).
   useEffect(() => {
     if (!selectedId) return
     const item = items.find((i) => i.id === selectedId)
     if (!item) return
-    if (dayFilter && item.date !== dayFilter && item.endDate !== dayFilter) {
+    if (dayFilter && !itemTouchesDay(item, dayFilter)) {
       onDayFilter(null)
     }
     if (typeFilter && item.type !== typeFilter) {
       onTypeFilter(null)
     }
-  }, [selectedId, items, dayFilter, typeFilter, onDayFilter, onTypeFilter])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when selection changes
+  }, [selectedId, items])
 
-  // Center the selected card when selection/filters change (no-op if already centered).
-  // Closing Detail does not remount the strip, so it won't re-animate.
+  // When a day filter is chosen, jump the list to the first matching step.
   useEffect(() => {
-    if (!selectedId) return
-    const id = `step-card-${selectedId}`
+    const dayChanged = prevDayFilter.current !== dayFilter
+    prevDayFilter.current = dayFilter
+    if (!dayChanged || !dayFilter) return
+
+    const firstId = sorted[0]?.id
+    if (!firstId) return
+
+    const align: 'center' | 'top' = horizontal ? 'center' : 'top'
     const run = () => {
       const root = listRef.current
-      const el = root?.querySelector(`#${CSS.escape(id)}`) as HTMLElement | null
+      const el = root?.querySelector(
+        `#${CSS.escape(`step-card-${firstId}`)}`,
+      ) as HTMLElement | null
       if (!root || !el) return
-      scrollCardIntoView(root, el, horizontal)
+      scrollCardIntoView(root, el, horizontal, align)
     }
     const raf = requestAnimationFrame(() => {
       requestAnimationFrame(run)
     })
     return () => cancelAnimationFrame(raf)
-  }, [selectedId, dayFilter, typeFilter, horizontal])
+    // sorted[0] updates with the filter; include length so empty→items still scrolls
+  }, [dayFilter, sorted[0]?.id, sorted.length, horizontal])
+
+  // Center on phone / highlight; on desktop with Detail open, pin to top of the list.
+  // Closing Detail does not remount the strip and should not re-animate.
+  useEffect(() => {
+    if (!selectedId) {
+      prevDetailOpen.current = detailOpen
+      return
+    }
+    const justClosedDetail = prevDetailOpen.current && !detailOpen
+    prevDetailOpen.current = detailOpen
+    if (justClosedDetail && !horizontal) return
+
+    const id = `step-card-${selectedId}`
+    const align: 'center' | 'top' =
+      !horizontal && detailOpen ? 'top' : 'center'
+    const run = () => {
+      const root = listRef.current
+      const el = root?.querySelector(`#${CSS.escape(id)}`) as HTMLElement | null
+      if (!root || !el) return
+      scrollCardIntoView(root, el, horizontal, align)
+    }
+    const raf = requestAnimationFrame(() => {
+      requestAnimationFrame(run)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [selectedId, horizontal, detailOpen])
 
   function openCard(id: string) {
     setConfirmId(null)
+    const item = sorted.find((i) => i.id === id)
+    // Placeholder day bases → create flow immediately (not a fake hotel editor)
+    if (item && isPlaceholderBase(item)) {
+      if (onOpenDetail) onOpenDetail(id)
+      else onSelect(id)
+      return
+    }
     // First tap: highlight / move to it. Second tap on the same card: open Detail.
     if (id !== selectedId) {
       onSelect(id)
@@ -92,97 +157,65 @@ export function TimelinePanel({
     else onSelect(id)
   }
 
+  const filterRow = (
+    <div className={`flex items-center gap-1.5 ${horizontal ? 'px-0.5' : 'pb-1'}`}>
+      <FilterMenu
+        label="Day"
+        valueLabel={
+          dayFilter == null ? 'All days' : `Day ${dayIndex(meta, dayFilter)}`
+        }
+        valueColor={dayFilter ? dayColor(meta, dayFilter) : undefined}
+        options={[
+          { id: '', label: 'All days', color: undefined },
+          ...days.map((d) => ({
+            id: d,
+            label: `Day ${dayIndex(meta, d)} · ${d.slice(5)}`,
+            color: dayColor(meta, d),
+            swatch: true,
+          })),
+        ]}
+        selectedId={dayFilter ?? ''}
+        onPick={(id) => onDayFilter(id || null)}
+      />
+      <FilterMenu
+        label="Type"
+        valueLabel={
+          typeFilter == null
+            ? '🧳 All'
+            : `${TYPE_EMOJI[typeFilter as ItemType] ?? '✨'} ${typeFilter}`
+        }
+        valueColor={typeFilter ? TYPE_COLORS[typeFilter as ItemType] : undefined}
+        options={[
+          { id: '', label: '🧳 All types', color: undefined },
+          ...types.map((t) => ({
+            id: t,
+            label: `${TYPE_EMOJI[t as ItemType] ?? '✨'} ${t}`,
+            color: TYPE_COLORS[t as ItemType],
+            swatch: true,
+          })),
+        ]}
+        selectedId={typeFilter ?? ''}
+        onPick={(id) => onTypeFilter(id || null)}
+      />
+      {onAddDay ? (
+        <button
+          type="button"
+          onClick={onAddDay}
+          className="shrink-0 rounded-full border border-dashed border-[var(--coral)]/45 bg-orange-50 px-2.5 py-1.5 text-[11px] font-bold text-[var(--coral)]"
+        >
+          + Day
+        </button>
+      ) : null}
+    </div>
+  )
+
   return (
     <div
       className={`flex min-h-0 text-stone-800 ${
         horizontal ? 'flex-col gap-1.5' : 'h-full flex-col gap-2'
       }`}
     >
-      {horizontal ? (
-        <div className="flex items-center gap-2 px-0.5">
-          <label className="flex min-w-0 flex-1 items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
-            Day
-            <select
-              className="min-w-0 flex-1 truncate rounded-full border border-stone-200 bg-white px-2 py-1.5 text-xs font-medium normal-case tracking-normal text-stone-700"
-              value={dayFilter ?? ''}
-              onChange={(e) => onDayFilter(e.target.value || null)}
-            >
-              <option value="">All</option>
-              {days.map((d) => (
-                <option key={d} value={d}>
-                  Day {dayIndex(meta, d)} · {d.slice(5)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex min-w-0 flex-1 items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
-            Type
-            <select
-              className="min-w-0 flex-1 truncate rounded-full border border-stone-200 bg-white px-2 py-1.5 text-xs font-medium normal-case tracking-normal capitalize text-stone-700"
-              value={typeFilter ?? ''}
-              onChange={(e) => onTypeFilter(e.target.value || null)}
-            >
-              <option value="">All</option>
-              {types.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </label>
-          {onAddDay ? (
-            <button
-              type="button"
-              onClick={onAddDay}
-              className="shrink-0 rounded-full border border-dashed border-stone-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-stone-600"
-            >
-              + Day
-            </button>
-          ) : null}
-        </div>
-      ) : (
-        <>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            <Chip active={dayFilter == null} onClick={() => onDayFilter(null)}>
-              All days
-            </Chip>
-            {days.map((d) => {
-              const n = dayIndex(meta, d)
-              return (
-                <Chip
-                  key={d}
-                  active={dayFilter === d}
-                  onClick={() => onDayFilter(d)}
-                  color={dayColor(meta, d)}
-                >
-                  Day {n}
-                </Chip>
-              )
-            })}
-            {onAddDay ? (
-              <Chip active={false} onClick={onAddDay}>
-                + Day
-              </Chip>
-            ) : null}
-          </div>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            <Chip active={typeFilter == null} tone="teal" onClick={() => onTypeFilter(null)}>
-              Steps
-            </Chip>
-            {types.map((t) => (
-              <Chip
-                key={t}
-                active={typeFilter === t}
-                tone="teal"
-                onClick={() => onTypeFilter(t)}
-                accent={TYPE_COLORS[t]}
-              >
-                {t}
-              </Chip>
-            ))}
-          </div>
-        </>
-      )}
+      {filterRow}
 
       <div
         ref={listRef}
@@ -205,6 +238,17 @@ export function TimelinePanel({
           const next = sorted[idx + 1]
           const placeholder = isPlaceholderBase(item)
           const confirming = confirmId === item.id
+          // Shown under day filter because stay spans into this day (not start date)
+          const viaEndDate = Boolean(
+            dayFilter &&
+              item.date !== dayFilter &&
+              item.endDate &&
+              itemTouchesDay(item, dayFilter),
+          )
+          const endDayNum =
+            viaEndDate && item.endDate ? dayIndex(meta, item.endDate) : null
+          const endDayColor =
+            viaEndDate && item.endDate ? dayColor(meta, item.endDate) : undefined
           return (
             <div
               key={item.id}
@@ -247,7 +291,7 @@ export function TimelinePanel({
                   <div
                     className={`flex items-center justify-between gap-1 ${horizontal ? '' : 'pl-1 pr-8'}`}
                   >
-                    <div className="flex min-w-0 items-center gap-1">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1">
                       {ord ? (
                         <span
                           className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold text-white"
@@ -264,6 +308,15 @@ export function TimelinePanel({
                       >
                         {placeholder ? 'base' : item.type}
                       </span>
+                      {viaEndDate && endDayNum != null ? (
+                        <span
+                          className="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold text-white"
+                          style={{ background: endDayColor }}
+                          title={`Spans to ${item.endDate} — shown because it covers this day`}
+                        >
+                          → D{endDayNum}
+                        </span>
+                      ) : null}
                     </div>
                     {!horizontal ? (
                       <span className="text-xs text-stone-400">
@@ -398,11 +451,12 @@ function TrashIcon() {
   )
 }
 
-/** Center the selected card in the strip (skip if already close enough). */
+/** Align the selected card in the list (skip if already close enough). */
 function scrollCardIntoView(
   root: HTMLElement,
   el: HTMLElement,
   horizontal: boolean,
+  align: 'center' | 'top',
 ) {
   const rootRect = root.getBoundingClientRect()
   const elRect = el.getBoundingClientRect()
@@ -415,6 +469,16 @@ function scrollCardIntoView(
     const max = Math.max(0, root.scrollWidth - root.clientWidth)
     const next = Math.max(0, Math.min(root.scrollLeft + delta, max))
     root.scrollTo({ left: next, behavior: 'smooth' })
+    return
+  }
+
+  if (align === 'top') {
+    const pad = 6
+    const delta = elRect.top - rootRect.top - pad
+    if (Math.abs(delta) < slop) return
+    const max = Math.max(0, root.scrollHeight - root.clientHeight)
+    const next = Math.max(0, Math.min(root.scrollTop + delta, max))
+    root.scrollTo({ top: next, behavior: 'smooth' })
     return
   }
 
@@ -541,37 +605,154 @@ function InsertControl({
   )
 }
 
-function Chip({
-  children,
-  active,
-  onClick,
-  tone = 'coral',
-  accent,
-  color,
+function FilterMenu({
+  label,
+  valueLabel,
+  valueColor,
+  options,
+  selectedId,
+  onPick,
 }: {
-  children: ReactNode
-  active: boolean
-  onClick: () => void
-  tone?: 'coral' | 'teal'
-  accent?: string
-  color?: string
+  label: string
+  valueLabel: string
+  valueColor?: string
+  options: { id: string; label: string; color?: string; swatch?: boolean }[]
+  selectedId: string
+  onPick: (id: string) => void
 }) {
-  const on = color
-    ? 'text-white'
-    : tone === 'coral'
-      ? 'bg-[var(--coral)] text-white'
-      : 'bg-teal-600 text-white'
-  const off = 'bg-white text-stone-600 border border-stone-200'
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null)
+
+  useEffect(() => {
+    if (!open || !btnRef.current) {
+      setPos(null)
+      return
+    }
+    const place = () => {
+      const r = btnRef.current!.getBoundingClientRect()
+      const width = Math.max(r.width, 168)
+      const left = Math.min(r.left, window.innerWidth - width - 8)
+      const menuH = Math.min(208, options.length * 40 + 8)
+      const openUp = r.top > menuH + 16
+      setPos({
+        top: openUp ? r.top - menuH - 6 : r.bottom + 6,
+        left: Math.max(8, left),
+        width,
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open, options.length])
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: PointerEvent) => {
+      const t = e.target as Node
+      if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    // Wait so the open tap / option tap aren't stolen on mobile
+    const t = window.setTimeout(() => {
+      document.addEventListener('pointerdown', onDoc)
+    }, 120)
+    return () => {
+      window.clearTimeout(t)
+      document.removeEventListener('pointerdown', onDoc)
+    }
+  }, [open])
+
+  function pick(id: string) {
+    onPick(id)
+    setOpen(false)
+  }
+
   return (
-    <button
-      className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium capitalize ${active ? on : off}`}
-      onClick={onClick}
-      style={{
-        ...(active && color ? { background: color } : undefined),
-        ...(!active && accent ? { boxShadow: `inset 3px 0 0 ${accent}` } : undefined),
-      }}
-    >
-      {children}
-    </button>
+    <div className="relative min-w-0 flex-1">
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 rounded-full border border-stone-200 bg-white py-1.5 pl-1.5 pr-2 text-left shadow-sm"
+        style={
+          valueColor
+            ? { boxShadow: `inset 3px 0 0 ${valueColor}, 0 1px 2px rgba(15,23,42,0.06)` }
+            : undefined
+        }
+      >
+        {valueColor ? (
+          <span
+            className="h-5 w-5 shrink-0 rounded-full"
+            style={{ background: valueColor }}
+            aria-hidden
+          />
+        ) : (
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-stone-100 text-[10px] font-bold text-stone-500">
+            {label[0]}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 truncate text-[11px] font-semibold capitalize text-stone-800">
+          {valueLabel}
+        </span>
+        <span className="text-[9px] text-stone-400" aria-hidden>
+          ▾
+        </span>
+      </button>
+
+      {open && pos
+        ? createPortal(
+            <div
+              ref={menuRef}
+              role="listbox"
+              aria-label={label}
+              className="fixed z-[200] max-h-52 overflow-y-auto rounded-2xl border border-stone-200 bg-white py-1 shadow-xl"
+              style={{ top: pos.top, left: pos.left, width: pos.width }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              {options.map((opt) => {
+                const on = opt.id === selectedId
+                return (
+                  <button
+                    key={opt.id || 'all'}
+                    type="button"
+                    role="option"
+                    aria-selected={on}
+                    className={`flex w-full items-center gap-2 px-2.5 py-2.5 text-left text-xs font-medium capitalize touch-manipulation ${
+                      on ? 'bg-orange-50 text-stone-900' : 'text-stone-700 active:bg-stone-50'
+                    }`}
+                    onPointerDown={(e) => {
+                      // Apply on pointerdown — mobile often drops click if the menu unmounts first
+                      e.preventDefault()
+                      e.stopPropagation()
+                      pick(opt.id)
+                    }}
+                  >
+                    {opt.swatch && opt.color ? (
+                      <span
+                        className="h-3.5 w-3.5 shrink-0 rounded-full"
+                        style={{ background: opt.color }}
+                        aria-hidden
+                      />
+                    ) : (
+                      <span
+                        className="h-3.5 w-3.5 shrink-0 rounded-full bg-stone-200"
+                        aria-hidden
+                      />
+                    )}
+                    <span className="truncate">{opt.label}</span>
+                  </button>
+                )
+              })}
+            </div>,
+            document.body,
+          )
+        : null}
+    </div>
   )
 }

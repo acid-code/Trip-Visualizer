@@ -19,6 +19,17 @@ export function isPlaceholderBase(item: TripItem): boolean {
   return item.tags?.includes('day-base') === true && item.tags?.includes('placeholder') === true
 }
 
+/** True if the step starts on `day`, or a hotel stay covers that calendar day. */
+export function itemTouchesDay(item: TripItem, day: string): boolean {
+  if (item.date === day) return true
+  if (item.type === 'hotel' && item.endDate && item.date < day && item.endDate >= day) {
+    return true
+  }
+  // Explicit end-date match (e.g. checkout day listed on filter)
+  if (item.endDate === day && item.date !== day) return true
+  return false
+}
+
 function emptyBase(day: string, dayNum: number, currency: string): TripItem {
   return {
     id: createId('B'),
@@ -78,11 +89,7 @@ function isRealStep(item: TripItem): boolean {
 }
 
 function touchesDay(item: TripItem, day: string): boolean {
-  if (item.date === day) return true
-  if (item.type === 'hotel' && item.endDate && item.date < day && item.endDate >= day) {
-    return true
-  }
-  return false
+  return itemTouchesDay(item, day)
 }
 
 function dayHasRealSteps(items: TripItem[], day: string): boolean {

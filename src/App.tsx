@@ -33,7 +33,7 @@ import { AddStepPanel, type AddContext } from './ui/AddStepPanel'
 import type { MapStack } from './globe/viewer'
 import { EXAMPLE_TRIP_ID } from './data/examples/france-south-loop'
 import { downloadPolarstepsJson } from './data/polarsteps'
-import { ensureDayStartBases, deleteStepAndPrune } from './data/dayBases'
+import { ensureDayStartBases, deleteStepAndPrune, isPlaceholderBase, itemTouchesDay } from './data/dayBases'
 import { normalizeCurrency } from './data/fx'
 import {
   isIsoDate,
@@ -267,12 +267,36 @@ export default function App() {
     setPanelOpen(true)
   }
 
+  /** Auto day-base placeholders open the create sheet instead of a fake hotel Detail. */
+  function openFillDayBase(item: TripItem) {
+    setSelectedId(item.id)
+    setAddContext({
+      replaceId: item.id,
+      date: item.date,
+      defaultType: 'hotel',
+      hint: `Day ${item.date.slice(5)} start — pick hotel, flight/train arrival, or station.`,
+    })
+    setNavTab('timeline')
+    setLowerMode('insert')
+    setDetailExpanded(false)
+    setPanelOpen(true)
+  }
+
+  function stepById(id: string) {
+    return active?.items.find((i) => i.id === id) ?? null
+  }
+
   /** Highlight a step without opening Detail (list first-tap / phone map tap). */
   function highlightStep(id: string | null) {
     if (!id) {
       setSelectedId(null)
       setLowerMode((m) => (m === 'detail' ? 'none' : m))
       setDetailExpanded(false)
+      return
+    }
+    const item = stepById(id)
+    if (item && isPlaceholderBase(item)) {
+      openFillDayBase(item)
       return
     }
     setSelectedId(id)
@@ -283,26 +307,18 @@ export default function App() {
     setDetailExpanded(false)
   }
 
-  /** Map pin tap — phone: highlight only; desktop: open Detail. */
+  /** Map pin tap — highlight only (Detail opens from the Steps list). */
   function selectFromMap(id: string | null) {
-    if (!id) {
-      highlightStep(null)
-      return
-    }
-    if (isPhone) {
-      highlightStep(id)
-      return
-    }
-    setSelectedId(id)
-    setNavTab('timeline')
-    setLowerMode('detail')
-    setDetailExpanded(true)
-    setPanelOpen(true)
-    setAddContext(null)
+    highlightStep(id)
   }
 
-  /** Second tap on an already-highlighted step — opens Detail. */
+  /** Second tap on an already-highlighted step — opens Detail (or fill form for placeholders). */
   function selectFromList(id: string) {
+    const item = stepById(id)
+    if (item && isPlaceholderBase(item)) {
+      openFillDayBase(item)
+      return
+    }
     if (id === selectedId && lowerMode === 'detail' && detailExpanded) {
       closeLower()
       return
@@ -357,8 +373,17 @@ export default function App() {
     const dates = sanitizeMetaDates(active.meta.startDate || base, nextEnd)
     const meta = { ...active.meta, ...dates }
     const items = ensureDayStartBases(meta, active.items)
+    const newBase =
+      items.find((i) => i.date === nextEnd && isPlaceholderBase(i)) ??
+      items.find((i) => i.date === nextEnd) ??
+      null
     await persist({ ...active, meta, items })
-    setDayFilter(nextEnd)
+    // Show full strip and land on the new day's base (don't leave an old selection → scroll to start)
+    setTypeFilter(null)
+    setDayFilter(null)
+    setSelectedId(newBase?.id ?? null)
+    setLowerMode('none')
+    setDetailExpanded(false)
     setNavTab('timeline')
     setPanelOpen(true)
     setStatus(`Added Day · ${nextEnd}`)
@@ -382,10 +407,14 @@ export default function App() {
   function createStep(item: TripItem) {
     void (async () => {
       if (!active) return
+      const replaceId = addContext?.replaceId
       setStatus(`Pinning “${item.title}” on the map…`)
       const pinned = await pinItemOnMap(item)
-      const nextItems = sortItems([...active.items, pinned])
-      const next = { ...active, items: nextItems }
+      const withoutPlaceholder = replaceId
+        ? active.items.filter((i) => i.id !== replaceId)
+        : active.items
+      const nextItems = sortItems([...withoutPlaceholder, pinned])
+      const next = { ...active, items: ensureDayStartBases(active.meta, nextItems) }
       await persist(next)
       setSelectedId(pinned.id)
       setAddContext(null)
@@ -417,7 +446,7 @@ export default function App() {
   const filteredItems = useMemo(() => {
     if (!active) return []
     return active.items.filter((i) => {
-      if (dayFilter && i.date !== dayFilter && i.endDate !== dayFilter) return false
+      if (dayFilter && !itemTouchesDay(i, dayFilter)) return false
       if (typeFilter && i.type !== typeFilter) return false
       return true
     })
@@ -554,6 +583,7 @@ export default function App() {
                     onAddDay={() => void addDay()}
                     onDeleteStep={(id) => void deleteStep(id)}
                     layout="vertical"
+                    detailOpen={lowerMode === 'detail'}
                   />
                 </div>
               ) : null}
