@@ -66,12 +66,10 @@ export async function createTripViewer(
   viewer.scene.globe.preloadSiblings = true
   viewer.scene.globe.preloadAncestors = true
   viewer.scene.fog.enabled = false
-  // Depth-test vs terrain often throws render errors when zoomed far into space
   viewer.scene.globe.depthTestAgainstTerrain = false
   viewer.camera.percentageChanged = 0.08
 
   configureTouchCameraControls(viewer)
-  installGlobeSafetyGuards(viewer)
 
   await applyMapStack(viewer, 'esri')
 
@@ -86,84 +84,9 @@ export async function createTripViewer(
   return viewer
 }
 
-/** Keep the camera on Earth; recover if WebGL render dies after extreme zoom / look-away. */
-const MAX_CAMERA_HEIGHT_M = 2.2e7 // ~full-Earth view; less empty starfield than 4e7
+/** Soft zoom limits — do not mutate the camera during preRender (that blacks out Cesium). */
+const MAX_CAMERA_HEIGHT_M = 2.5e7
 const MIN_CAMERA_HEIGHT_M = 40
-
-function installGlobeSafetyGuards(viewer: Viewer) {
-  const controller = viewer.scene.screenSpaceCameraController
-  controller.minimumZoomDistance = MIN_CAMERA_HEIGHT_M
-  controller.maximumZoomDistance = MAX_CAMERA_HEIGHT_M
-  controller.enableCollisionDetection = true
-
-  // Don't let Cesium leave a permanent yellow "Rendering has stopped" panel
-  viewer.scene.rethrowRenderErrors = false
-
-  let recovering = false
-  viewer.scene.renderError.addEventListener(() => {
-    if (recovering || viewer.isDestroyed()) return
-    recovering = true
-    logClientError('cesium-render', 'renderError — resetting camera to Earth')
-    try {
-      // Prefer showing the globe again (Google 3D can hide it and leave only stars)
-      viewer.scene.globe.show = true
-      if (googleTileset) {
-        try {
-          viewer.scene.primitives.remove(googleTileset)
-        } catch {
-          // ignore
-        }
-        googleTileset = null
-      }
-      viewer.camera.setView({
-        destination: Cartesian3.fromDegrees(12, 42, 9e6),
-        orientation: {
-          heading: 0,
-          pitch: CesiumMath.toRadians(-90),
-          roll: 0,
-        },
-      })
-      viewer.scene.requestRender()
-    } catch (err) {
-      logClientError('cesium-recover', err)
-    } finally {
-      // Allow another recovery later if it happens again
-      window.setTimeout(() => {
-        recovering = false
-      }, 1500)
-    }
-  })
-
-  // Soft clamp: inertia / programmatic fly can briefly exceed max zoom
-  viewer.scene.preRender.addEventListener(() => {
-    if (viewer.isDestroyed()) return
-    const carto = viewer.camera.positionCartographic
-    if (!carto || !Number.isFinite(carto.height)) {
-      viewer.camera.setView({
-        destination: Cartesian3.fromDegrees(12, 42, 9e6),
-      })
-      return
-    }
-    if (carto.height > MAX_CAMERA_HEIGHT_M) {
-      viewer.camera.setView({
-        destination: Cartesian3.fromRadians(
-          carto.longitude,
-          carto.latitude,
-          MAX_CAMERA_HEIGHT_M * 0.98,
-        ),
-      })
-    } else if (carto.height < 1) {
-      // Underground / invalid — pull back up
-      viewer.camera.setView({
-        destination: Cartesian3.fromRadians(
-          carto.longitude,
-          carto.latitude,
-          MIN_CAMERA_HEIGHT_M,
-        ),
-      })
-    }
-  })
-}
 
 /**
  * Google Earth–style phone gestures:
@@ -187,6 +110,7 @@ function configureTouchCameraControls(viewer: Viewer) {
 
   controller.minimumZoomDistance = MIN_CAMERA_HEIGHT_M
   controller.maximumZoomDistance = MAX_CAMERA_HEIGHT_M
+  controller.enableCollisionDetection = true
   controller.maximumTiltAngle = CesiumMath.PI_OVER_TWO
 
   // One finger = move around the globe
