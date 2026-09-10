@@ -45,6 +45,8 @@ export default function App() {
   const [navTab, setNavTab] = useState<NavTab>('timeline')
   const [panelOpen, setPanelOpen] = useState(true)
   const [lowerMode, setLowerMode] = useState<LowerMode>('none')
+  /** Detail sheet: peek (compact) → half (50% edit) → closed */
+  const [detailExpanded, setDetailExpanded] = useState(false)
   const [dayFilter, setDayFilter] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
   const [mapStack, setMapStack] = useState<MapStack>('esri')
@@ -228,23 +230,48 @@ export default function App() {
   }
 
   function selectStep(id: string | null) {
+    // Same step again while expanded → save & close
+    if (id && id === selectedId && lowerMode === 'detail' && detailExpanded) {
+      closeLower()
+      return
+    }
     setSelectedId(id)
     if (id) {
       setNavTab('timeline')
       setLowerMode('detail')
+      // Open already usable at 50% so the pin stays editable above a proper sheet
+      setDetailExpanded(true)
       setPanelOpen(true)
       setAddContext(null)
     } else {
       setLowerMode((m) => (m === 'detail' ? 'none' : m))
+      setDetailExpanded(false)
     }
   }
 
   function closeLower() {
+    const wasDetail = lowerMode === 'detail'
     setAddContext(null)
-    setLowerMode((mode) => {
-      if (mode === 'detail') setSelectedId(null)
-      return 'none'
-    })
+    setLowerMode('none')
+    setDetailExpanded(false)
+    if (wasDetail) {
+      setSelectedId(null)
+      setStatus('Step saved')
+    }
+  }
+
+  function onSheetHandle() {
+    if (lowerMode === 'detail') {
+      if (!detailExpanded) {
+        // First press: expand to half-screen to fill in
+        setDetailExpanded(true)
+        return
+      }
+      // Second press: save & close
+      closeLower()
+      return
+    }
+    closeLower()
   }
 
   async function addDay() {
@@ -274,6 +301,7 @@ export default function App() {
     if (selectedId === id) {
       setSelectedId(null)
       setLowerMode('none')
+      setDetailExpanded(false)
     }
     if (dayFilter && dayFilter > meta.endDate) setDayFilter(null)
     setStatus('Step deleted')
@@ -292,6 +320,7 @@ export default function App() {
       setAddContext(null)
       setNavTab('timeline')
       setLowerMode('detail')
+      setDetailExpanded(true)
       setPanelOpen(true)
       const onMap =
         pinned.lat != null && pinned.lon != null
@@ -545,15 +574,36 @@ export default function App() {
         </nav>
       </aside>
 
-      {/* Detail / Insert bottom sheet (Google-style map + sheet) */}
+      {/* Detail / Insert bottom sheet
+          Detail: opens at 50% to edit; tap handle (or same step again) to save & close */}
       {lowerOpen ? (
         <section
           className={`journal-sheet absolute inset-x-0 bottom-0 z-40 flex flex-col rounded-t-[1.75rem] border shadow-[0_-12px_40px_rgba(15,23,42,0.35)] transition-all ${
-            lowerMode === 'insert' ? 'h-[72%]' : 'h-[52%]'
+            lowerMode === 'insert'
+              ? 'h-[62%]'
+              : detailExpanded
+                ? 'h-[50%]'
+                : 'h-[26%]'
           }`}
         >
-          <button type="button" className="w-full pb-1 pt-1" onClick={closeLower}>
+          <button
+            type="button"
+            className="flex w-full flex-col items-center gap-0.5 pb-1 pt-1"
+            onClick={onSheetHandle}
+            title={
+              lowerMode === 'detail'
+                ? detailExpanded
+                  ? 'Tap to save & close'
+                  : 'Tap to expand'
+                : 'Close'
+            }
+          >
             <div className="sheet-handle" />
+            {lowerMode === 'detail' ? (
+              <span className="text-[10px] font-medium text-stone-400">
+                {detailExpanded ? 'Tap to save & close' : 'Tap to expand'}
+              </span>
+            ) : null}
           </button>
           <div className="min-h-0 flex-1 overflow-hidden px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-stone-800">
             {lowerMode === 'detail' && selected ? (

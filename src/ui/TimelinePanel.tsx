@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { TripItem, TripMeta } from '../domain/types'
 import { TYPE_COLORS } from '../domain/types'
 import { dayIndex, stepOrderMap } from '../data/analytics'
@@ -34,6 +34,7 @@ export function TimelinePanel({
   onDeleteStep,
 }: Props) {
   const [confirmId, setConfirmId] = useState<string | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   const sorted = sortItems(items).filter((i) => {
     if (dayFilter && i.date !== dayFilter && i.endDate !== dayFilter) return false
     if (typeFilter && i.type !== typeFilter) return false
@@ -42,6 +43,34 @@ export function TimelinePanel({
   const days = [...new Set(items.map((i) => i.date).filter(Boolean))].sort()
   const types = [...new Set(items.map((i) => i.type))]
   const order = stepOrderMap(meta, items)
+
+  // If a map pick is hidden by filters, clear them so the step can appear
+  useEffect(() => {
+    if (!selectedId) return
+    const item = items.find((i) => i.id === selectedId)
+    if (!item) return
+    if (dayFilter && item.date !== dayFilter && item.endDate !== dayFilter) {
+      onDayFilter(null)
+    }
+    if (typeFilter && item.type !== typeFilter) {
+      onTypeFilter(null)
+    }
+  }, [selectedId, items, dayFilter, typeFilter, onDayFilter, onTypeFilter])
+
+  // Scroll the Steps list so the selected card sits at the top (visible above Detail sheet)
+  useEffect(() => {
+    if (!selectedId) return
+    const id = `step-card-${selectedId}`
+    const run = () => {
+      const root = listRef.current
+      const el = root?.querySelector(`#${CSS.escape(id)}`) as HTMLElement | null
+      if (!root || !el) return
+      const delta = el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
+      root.scrollTo({ top: Math.max(0, delta - 6), behavior: 'smooth' })
+    }
+    const t = window.setTimeout(run, 50)
+    return () => window.clearTimeout(t)
+  }, [selectedId, dayFilter, typeFilter, sorted.length])
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2 text-stone-800">
@@ -85,7 +114,10 @@ export function TimelinePanel({
         ))}
       </div>
 
-      <div className="step-rail min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
+      <div
+        ref={listRef}
+        className="step-rail min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1"
+      >
         <InsertButton
           label="Add at start"
           onClick={() => onInsertBetween(null, sorted[0]?.id ?? null)}
@@ -99,7 +131,7 @@ export function TimelinePanel({
           const placeholder = isPlaceholderBase(item)
           const confirming = confirmId === item.id
           return (
-            <div key={item.id}>
+            <div key={item.id} id={`step-card-${item.id}`}>
               <div
                 className={`relative w-full rounded-2xl border text-left transition ${
                   placeholder

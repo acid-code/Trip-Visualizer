@@ -25,6 +25,8 @@ import {
   sampleTerrainMostDetailed,
   Cartographic,
   ConstantProperty,
+  Matrix4,
+  Transforms,
 } from 'cesium'
 import type { TripItem, TripMeta } from '../domain/types'
 import { dayColor, dayColorByIndex } from '../data/dayTheme'
@@ -577,11 +579,14 @@ export function parseTripEndpoint(entityId: string): 'a' | 'b' | null {
 }
 
 function flyToLonLat(viewer: Viewer, lon: number, lat: number, range = 420) {
-  // Bounding-sphere fly keeps the pin centered (plain flyTo altitude overshoots upward)
-  const center = Cartesian3.fromDegrees(lon, lat, 0)
-  viewer.camera.flyToBoundingSphere(new BoundingSphere(center, 35), {
+  const pin = Cartesian3.fromDegrees(lon, lat, 0)
+  // Look slightly south of the pin so it sits in the upper map (above the Detail sheet)
+  const enu = Transforms.eastNorthUpToFixedFrame(pin)
+  const lookShift = new Cartesian3(0, -Math.max(range * 0.42, 140), 0)
+  const lookTarget = Matrix4.multiplyByPoint(enu, lookShift, new Cartesian3())
+  viewer.camera.flyToBoundingSphere(new BoundingSphere(lookTarget, 28), {
     duration: 0.85,
-    offset: new HeadingPitchRange(0, CesiumMath.toRadians(-28), range),
+    offset: new HeadingPitchRange(0, CesiumMath.toRadians(-30), range),
   })
 }
 
