@@ -1,0 +1,193 @@
+@import "tailwindcss";
+@import "cesium/Build/Cesium/Widgets/widgets.css";
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap");
+
+:root {
+  --bg: #0c1520;
+  --paper: #fffaf3;
+  --paper-2: #fff3e6;
+  --ink: #1c1917;
+  --ink-muted: #78716c;
+  --line: #e7e0d5;
+  --coral: #ff6b4a;
+  --coral-deep: #e85a3a;
+  --teal: #0d9488;
+  --sky: #38bdf8;
+  --flight: #3b82f6;
+  --hotel: #8b5cf6;
+  --sight: #10b981;
+  --restaurant: #f97316;
+  --drive: #eab308;
+  --train: #06b6d4;
+  --note: #a8a29e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: #f8fafc;
+  font-family: "DM Sans", "Segoe UI", system-ui, sans-serif;
+  overscroll-behavior: none;
+}
+
+.cesium-viewer,
+.cesium-viewer canvas {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.cesium-viewer-bottom,
+.cesium-viewer-toolbar,
+.cesium-viewer-animationContainer,
+.cesium-viewer-timelineContainer,
+.cesium-viewer-fullscreenContainer,
+.cesium-credit-logoContainer {
+  display: none !important;
+}
+
+.cesium-viewer-bottom {
+  display: block !important;
+  opacity: 0.45;
+  font-size: 10px;
+}
+
+.sheet-handle {
+  width: 42px;
+  height: 4px;
+  border-radius: 999px;
+  background: #d6d3d1;
+  margin: 10px auto 6px;
+}
+
+.journal-sheet,
+.side-panel {
+  background: linear-gradient(180deg, #fffaf3 0%, #fff7ed 100%);
+  color: var(--ink);
+  border-color: #f5e6d3 !important;
+}
+
+.side-shell {
+  max-width: min(22.5rem, 88vw);
+  gap: 0;
+  pointer-events: none;
+}
+
+.side-shell > * {
+  pointer-events: auto;
+}
+
+.side-shell-collapsed {
+  max-width: 3.25rem;
+}
+
+.side-panel {
+  border: 1px solid #f5e6d3;
+  border-radius: 1.25rem;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.28);
+  min-width: 0;
+  width: min(20rem, calc(88vw - 2.75rem));
+}
+
+.book-tongues {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.2rem 0.35rem 0;
+  flex-shrink: 0;
+  margin-left: -1px;
+}
+
+.book-tongue {
+  /* Straight edge against the sidebar; rounded edge toward the map */
+  writing-mode: sideways-lr;
+  border: 1px solid #e7e0d5;
+  border-left-color: transparent;
+  border-radius: 0 0.85rem 0.85rem 0;
+  background: #fffaf3;
+  color: #57534e;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.9rem 0.4rem;
+  box-shadow: 4px 2px 12px rgba(15, 23, 42, 0.12);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.book-tongue:hover {
+  background: #fff3e6;
+  color: #1c1917;
+}
+
+.book-tongue-on {
+  background: var(--coral);
+  color: #fff;
+  border-color: var(--coral-deep);
+  border-left-color: transparent;
+}
+
+.book-tongue-plus {
+  writing-mode: horizontal-tb;
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 0.6rem 0.5rem;
+  border-radius: 0 999px 999px 0;
+}
+
+@supports not (writing-mode: sideways-lr) {
+  .book-tongue:not(.book-tongue-plus) {
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    transform: none;
+  }
+}
+
+.step-rail {
+  position: relative;
+  padding-left: 1.35rem;
+}
+
+.step-rail::before {
+  content: "";
+  position: absolute;
+  left: 0.35rem;
+  top: 0.4rem;
+  bottom: 0.4rem;
+  width: 2px;
+  background: #f0e4d6;
+}
+
+.step-dot {
+  position: absolute;
+  left: 0;
+  top: 1.05rem;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 999px;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 2px currentColor;
+}
+
+.brand-mark {
+  font-family: "Fraunces", Georgia, serif;
+  letter-spacing: -0.02em;
+}
