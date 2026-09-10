@@ -1,4 +1,5 @@
 import type { TripItem } from '../domain/types'
+import { isPlaceholderBase, itemTouchesDay } from './dayBases'
 import { sortItems } from './db'
 import { getCachedRoute, routeCacheKey, setCachedRoute } from './routeCache'
 import { isValidCoord } from './validate'
@@ -114,15 +115,17 @@ const POINTISH = new Set([
 ])
 
 /**
- * Walking connectors between consecutive same-day steps (by time order).
- * Skips pairs that are already an explicit drive/flight/train leg.
+ * Walking connectors between consecutive same-day steps (by time order),
+ * plus hotel → first activity when a stay covers that morning.
  */
 export async function buildWalkingConnectors(
   items: TripItem[],
   onProgress?: (done: number, total: number) => void,
 ): Promise<RouteConnector[]> {
   const sorted = sortItems(
-    items.filter((i) => i.status !== 'cancelled' && i.type !== 'note'),
+    items.filter(
+      (i) => i.status !== 'cancelled' && i.type !== 'note' && !isPlaceholderBase(i),
+    ),
   )
   const byDate = new Map<string, TripItem[]>()
   for (const item of sorted) {
@@ -138,11 +141,42 @@ export async function buildWalkingConnectors(
     a: { lat: number; lon: number }
     b: { lat: number; lon: number }
   }> = []
+  const seen = new Set<string>()
+
+  function addPair(
+    date: string,
+    from: TripItem,
+    to: TripItem,
+    a: { lat: number; lon: number },
+    b: { lat: number; lon: number },
+    maxKm: number,
+  ) {
+    const id = `walk:${from.id}->${to.id}`
+    if (seen.has(id)) return
+    const d = distKm(a, b)
+    if (d < 0.05 || d > maxKm) return
+    seen.add(id)
+    pairs.push({ id, date, from, to, a, b })
+  }
 
   for (const [date, dayItems] of byDate) {
-    for (let i = 0; i < dayItems.length - 1; i++) {
-      const from = dayItems[i]
-      const to = dayItems[i + 1]
+    const daySteps = sortItems(dayItems)
+
+    // Morning hotel (overnight stay, or earliest same-day check-in) → first step after it
+    const hotel = hotelForMorning(sorted, date)
+    if (hotel) {
+      const firstAfterHotel = firstStepAfterMorningHotel(daySteps, hotel, date)
+      if (firstAfterHotel) {
+        const a = pointOf(hotel)
+        const b = pointOf(firstAfterHotel)
+        if (a && b) addPair(date, hotel, firstAfterHotel, a, b, 8)
+      }
+    }
+
+    // Consecutive same-calendar-day steps
+    for (let i = 0; i < daySteps.length - 1; i++) {
+      const from = daySteps[i]!
+      const to = daySteps[i + 1]!
 
       if (
         to.type === 'drive' ||
@@ -164,8 +198,7 @@ export async function buildWalkingConnectors(
         const a = anchorForDaySequence(from, 'arrive')
         const b = pointOf(to)
         if (!a || !b) continue
-        if (distKm(a, b) < 0.05 || distKm(a, b) > 12) continue
-        pairs.push({ id: `walk:${from.id}->${to.id}`, date, from, to, a, b })
+        addPair(date, from, to, a, b, 12)
         continue
       }
 
@@ -173,9 +206,7 @@ export async function buildWalkingConnectors(
       const a = pointOf(from)
       const b = pointOf(to)
       if (!a || !b) continue
-      const d = distKm(a, b)
-      if (d < 0.05 || d > 8) continue
-      pairs.push({ id: `walk:${from.id}->${to.id}`, date, from, to, a, b })
+      addPair(date, from, to, a, b, 8)
     }
   }
 
@@ -201,6 +232,60 @@ export async function buildWalkingConnectors(
     await new Promise((r) => setTimeout(r, 120))
   }
   return connectors
+}
+
+/**
+ * Hotel you're in at the start of the day:
+ * 1) Stay that began on a previous day and still covers this morning
+ * 2) Else earliest same-day check-in (before an afternoon hotel change)
+ */
+function hotelForMorning(items: TripItem[], day: string): TripItem | null {
+  const hotels = items.filter(
+    (i) =>
+      i.type === 'hotel' &&
+      i.status !== 'cancelled' &&
+      !isPlaceholderBase(i) &&
+      itemTouchesDay(i, day) &&
+      pointOf(i),
+  )
+  if (!hotels.length) return null
+
+  const overnight = hotels
+    .filter((h) => h.date < day && !!h.endDate && h.endDate >= day)
+    .sort((a, b) => b.date.localeCompare(a.date)) // most recent prior check-in
+  if (overnight[0]) return overnight[0]
+
+  // Same-day check-ins only — earliest time is the morning hotel
+  const sameDay = sortItems(hotels.filter((h) => h.date === day))
+  return sameDay[0] ?? null
+}
+
+/** First walkable step after the morning hotel (never an afternoon hotel or earlier activity). */
+function firstStepAfterMorningHotel(
+  daySteps: TripItem[],
+  hotel: TripItem,
+  day: string,
+): TripItem | null {
+  const isTransport = (t: TripItem['type']) =>
+    t === 'drive' || t === 'flight' || t === 'train' || t === 'bus' || t === 'ferry'
+
+  // Overnight hotel isn't in today's list — walk to the first activity today
+  if (hotel.date < day) {
+    return (
+      daySteps.find(
+        (i) => i.type !== 'hotel' && !isTransport(i.type),
+      ) ?? null
+    )
+  }
+
+  // Same-day morning hotel — only steps that come after it in the timeline
+  const idx = daySteps.findIndex((i) => i.id === hotel.id)
+  const after = idx >= 0 ? daySteps.slice(idx + 1) : daySteps
+  return (
+    after.find(
+      (i) => i.type !== 'hotel' && !isTransport(i.type),
+    ) ?? null
+  )
 }
 
 function distKm(
