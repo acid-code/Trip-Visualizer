@@ -352,15 +352,26 @@ export function TimelinePanel({
                 ) : null}
               </div>
 
-              <InsertControl
-                compact={horizontal}
-                label={
-                  next
-                    ? `Add between · Day ${ord?.day ?? '?'}`
-                    : 'Add at end'
-                }
-                onClick={() => onInsertBetween(item.id, next?.id ?? null)}
-              />
+              {next && next.date !== item.date ? (
+                <DayPassageInsert
+                  compact={horizontal}
+                  fromDay={dayIndex(meta, item.date)}
+                  toDay={dayIndex(meta, next.date)}
+                  fromColor={dayColor(meta, item.date)}
+                  toColor={dayColor(meta, next.date)}
+                  onClick={() => onInsertBetween(item.id, next.id)}
+                />
+              ) : (
+                <InsertControl
+                  compact={horizontal}
+                  label={
+                    next
+                      ? `Add between · Day ${ord?.day ?? '?'}`
+                      : 'Add at end'
+                  }
+                  onClick={() => onInsertBetween(item.id, next?.id ?? null)}
+                />
+              )}
             </div>
           )
         })}
@@ -415,6 +426,95 @@ function scrollCardIntoView(
   root.scrollTo({ top: next, behavior: 'smooth' })
 }
 
+function DayPassageInsert({
+  fromDay,
+  toDay,
+  fromColor,
+  toColor,
+  onClick,
+  compact,
+}: {
+  fromDay: number
+  toDay: number
+  fromColor: string
+  toColor: string
+  onClick: () => void
+  compact?: boolean
+}) {
+  if (compact) {
+    return (
+      <div
+        className="relative mx-0.5 flex w-[3.4rem] shrink-0 flex-col items-center justify-center self-stretch"
+        title={`Day ${fromDay} → Day ${toDay}`}
+      >
+        {/* Vertical dotted day-change line */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 left-1/2 z-0 w-0 -translate-x-1/2 border-l-2 border-dotted border-stone-300"
+        />
+        <span
+          aria-hidden
+          className="pointer-events-none absolute left-0 top-1/2 z-0 -translate-y-1/2 select-none text-[12px] font-bold tabular-nums opacity-40"
+          style={{ color: fromColor }}
+        >
+          {fromDay}
+        </span>
+        <span
+          aria-hidden
+          className="pointer-events-none absolute right-0 top-1/2 z-0 -translate-y-1/2 select-none text-[12px] font-bold tabular-nums opacity-40"
+          style={{ color: toColor }}
+        >
+          {toDay}
+        </span>
+        <button
+          type="button"
+          onClick={onClick}
+          aria-label={`Add between Day ${fromDay} and Day ${toDay}`}
+          className="relative z-10 flex h-8 w-8 items-center justify-center rounded-full border border-dashed border-stone-300 bg-white/95 text-lg font-semibold leading-none text-stone-400 shadow-sm hover:border-orange-300 hover:bg-orange-50 hover:text-[var(--coral)]"
+        >
+          +
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className="relative flex w-full items-center gap-2 py-1.5"
+      title={`Day ${fromDay} → Day ${toDay}`}
+    >
+      <span
+        className="select-none text-[11px] font-bold tabular-nums opacity-45"
+        style={{ color: fromColor }}
+      >
+        {fromDay}
+      </span>
+      <div
+        aria-hidden
+        className="h-0 flex-1 border-t-2 border-dotted border-stone-300"
+      />
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={`Add between Day ${fromDay} and Day ${toDay}`}
+        className="relative z-[1] flex h-7 w-7 items-center justify-center rounded-full border border-dashed border-stone-300 bg-white text-base font-semibold leading-none text-stone-400 hover:border-orange-300 hover:bg-orange-50 hover:text-[var(--coral)]"
+      >
+        +
+      </button>
+      <div
+        aria-hidden
+        className="h-0 flex-1 border-t-2 border-dotted border-stone-300"
+      />
+      <span
+        className="select-none text-[11px] font-bold tabular-nums opacity-45"
+        style={{ color: toColor }}
+      >
+        {toDay}
+      </span>
+    </div>
+  )
+}
+
 function InsertControl({
   label,
   onClick,
@@ -424,30 +524,19 @@ function InsertControl({
   onClick: () => void
   compact?: boolean
 }) {
-  if (compact) {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        title={label}
-        aria-label={label}
-        className="my-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-stone-300 bg-white text-lg font-semibold leading-none text-stone-400 shadow-sm hover:border-orange-300 hover:bg-orange-50 hover:text-[var(--coral)]"
-      >
-        +
-      </button>
-    )
-  }
   return (
     <button
       type="button"
       onClick={onClick}
-      className="group flex w-full items-center justify-center gap-2 py-1.5 text-[11px] font-medium text-stone-400 transition hover:text-[var(--coral)]"
+      title={label}
+      aria-label={label}
+      className={
+        compact
+          ? 'my-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-stone-300 bg-white text-lg font-semibold leading-none text-stone-400 shadow-sm hover:border-orange-300 hover:bg-orange-50 hover:text-[var(--coral)]'
+          : 'mx-auto flex h-7 w-7 items-center justify-center rounded-full border border-dashed border-stone-300 bg-white text-base font-semibold leading-none text-stone-400 transition hover:border-orange-300 hover:bg-orange-50 hover:text-[var(--coral)]'
+      }
     >
-      <span className="h-px flex-1 bg-stone-200 group-hover:bg-orange-200" />
-      <span className="rounded-full border border-dashed border-stone-300 px-2.5 py-0.5 group-hover:border-orange-300 group-hover:bg-orange-50">
-        + {label}
-      </span>
-      <span className="h-px flex-1 bg-stone-200 group-hover:bg-orange-200" />
+      +
     </button>
   )
 }
