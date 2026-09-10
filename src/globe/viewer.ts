@@ -106,7 +106,13 @@ function configureTouchCameraControls(viewer: Viewer) {
 
   controller.inertiaSpin = 0.9
   controller.inertiaTranslate = 0.9
-  controller.inertiaZoom = 0.8
+  // Snappier / faster pinch on phones; desktop stays a bit softer
+  const touch =
+    typeof window !== 'undefined' &&
+    (window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window)
+  controller.inertiaZoom = touch ? 0.55 : 0.8
+  // Default Cesium zoomFactor is 5 — raise for faster pinch / wheel zoom
+  controller.zoomFactor = touch ? 14 : 7
 
   controller.minimumZoomDistance = MIN_CAMERA_HEIGHT_M
   controller.maximumZoomDistance = MAX_CAMERA_HEIGHT_M

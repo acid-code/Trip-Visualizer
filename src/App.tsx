@@ -49,11 +49,13 @@ import {
   sanitizeSecretInput,
 } from './data/security'
 import { sanitizeTripRecord } from './domain/types'
+import { useIsNarrow } from './ui/useIsNarrow'
 
 type NavTab = 'timeline' | 'charts' | 'settings'
 type LowerMode = 'none' | 'detail' | 'insert'
 
 export default function App() {
+  const isPhone = useIsNarrow()
   const [trips, setTrips] = useState<TripRecord[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -265,24 +267,52 @@ export default function App() {
     setPanelOpen(true)
   }
 
-  function selectStep(id: string | null) {
-    // Same step again while expanded → save & close
-    if (id && id === selectedId && lowerMode === 'detail' && detailExpanded) {
+  /** Highlight a step without opening Detail (list first-tap / phone map tap). */
+  function highlightStep(id: string | null) {
+    if (!id) {
+      setSelectedId(null)
+      setLowerMode((m) => (m === 'detail' ? 'none' : m))
+      setDetailExpanded(false)
+      return
+    }
+    setSelectedId(id)
+    setNavTab('timeline')
+    setPanelOpen(true)
+    setAddContext(null)
+    setLowerMode('none')
+    setDetailExpanded(false)
+  }
+
+  /** Map pin tap — phone: highlight only; desktop: open Detail. */
+  function selectFromMap(id: string | null) {
+    if (!id) {
+      highlightStep(null)
+      return
+    }
+    if (isPhone) {
+      highlightStep(id)
+      return
+    }
+    setSelectedId(id)
+    setNavTab('timeline')
+    setLowerMode('detail')
+    setDetailExpanded(true)
+    setPanelOpen(true)
+    setAddContext(null)
+  }
+
+  /** Second tap on an already-highlighted step — opens Detail. */
+  function selectFromList(id: string) {
+    if (id === selectedId && lowerMode === 'detail' && detailExpanded) {
       closeLower()
       return
     }
     setSelectedId(id)
-    if (id) {
-      setNavTab('timeline')
-      setLowerMode('detail')
-      // Open already usable at 50% so the pin stays editable above a proper sheet
-      setDetailExpanded(true)
-      setPanelOpen(true)
-      setAddContext(null)
-    } else {
-      setLowerMode((m) => (m === 'detail' ? 'none' : m))
-      setDetailExpanded(false)
-    }
+    setNavTab('timeline')
+    setLowerMode('detail')
+    setDetailExpanded(true)
+    setPanelOpen(true)
+    setAddContext(null)
   }
 
   function closeLower() {
@@ -291,7 +321,8 @@ export default function App() {
     setLowerMode('none')
     setDetailExpanded(false)
     if (wasDetail) {
-      setSelectedId(null)
+      // Phone: keep highlight on the step so the strip stays centered there
+      if (!isPhone) setSelectedId(null)
       setStatus('Step saved')
     }
   }
@@ -412,14 +443,18 @@ export default function App() {
           googleKey={googleKey || undefined}
           ionToken={ionToken || undefined}
           overviewToken={overviewToken}
-          onSelect={selectStep}
+          onSelect={selectFromMap}
         />
       ) : (
         <div className="flex h-full items-center justify-center text-slate-400">Loading…</div>
       )}
 
-      {/* Map-side header — stays clear of the left panel */}
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 p-3 pl-[min(24rem,90vw)] pt-[max(0.75rem,env(safe-area-inset-top))]">
+      {/* Map-side header — desktop clears left panel; phone uses compact top bar */}
+      <header
+        className={`pointer-events-none absolute inset-x-0 top-0 z-20 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] ${
+          isPhone ? 'pl-3' : 'pl-[min(24rem,90vw)]'
+        }`}
+      >
         <div className="pointer-events-auto ml-auto flex max-w-md flex-col items-end gap-1">
           <div className="text-right">
             <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-orange-300/90">
@@ -464,7 +499,11 @@ export default function App() {
       </header>
 
       {active?.isExample ? (
-        <div className="pointer-events-auto absolute right-3 top-[5.5rem] z-20 flex max-w-sm items-center justify-between gap-2 rounded-2xl border border-orange-300/40 bg-orange-500/90 px-3 py-2 text-xs text-white shadow-lg backdrop-blur">
+        <div
+          className={`pointer-events-auto absolute right-3 z-20 flex max-w-sm items-center justify-between gap-2 rounded-2xl border border-orange-300/40 bg-orange-500/90 px-3 py-2 text-xs text-white shadow-lg backdrop-blur ${
+            isPhone ? 'top-[4.75rem]' : 'top-[5.5rem]'
+          }`}
+        >
           <span>Example trip — duplicate to keep a personal copy.</span>
           <button
             className="shrink-0 rounded-full bg-white px-3 py-1 font-semibold text-orange-700"
@@ -475,7 +514,8 @@ export default function App() {
         </div>
       ) : null}
 
-      {/* Google-style left sidebar + book tongues */}
+      {/* Desktop: left sidebar + side book tongues */}
+      {!isPhone ? (
       <aside
         className={`side-shell absolute bottom-0 left-0 top-0 z-30 flex pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.5rem,env(safe-area-inset-left))] ${
           panelOpen ? 'side-shell-open' : 'side-shell-collapsed'
@@ -506,12 +546,14 @@ export default function App() {
                     selectedId={selectedId}
                     dayFilter={dayFilter}
                     typeFilter={typeFilter}
-                    onSelect={selectStep}
+                    onSelect={highlightStep}
+                    onOpenDetail={selectFromList}
                     onDayFilter={setDayFilter}
                     onTypeFilter={setTypeFilter}
                     onInsertBetween={(after, before) => openInsert(after, before)}
                     onAddDay={() => void addDay()}
                     onDeleteStep={(id) => void deleteStep(id)}
+                    layout="vertical"
                   />
                 </div>
               ) : null}
@@ -612,16 +654,150 @@ export default function App() {
           })}
         </nav>
       </aside>
+      ) : null}
 
-      {/* Detail / Insert bottom sheet
-          Detail: opens at 50% to edit; tap handle (or same step again) to save & close */}
+      {/* Phone: map-first — horizontal steps strip + bottom book tongues */}
+      {isPhone ? (
+        <div className="mobile-dock absolute inset-x-0 bottom-0 z-30 flex flex-col pb-[max(0.25rem,env(safe-area-inset-bottom))]">
+          {panelOpen && lowerMode !== 'insert' ? (
+            <div
+              className={`mobile-panel mx-2 mb-1 overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
+                navTab === 'timeline'
+                  ? 'max-h-[38vh]'
+                  : 'max-h-[52vh]'
+              }`}
+            >
+              {navTab === 'timeline' && active ? (
+                <div className="px-2 pb-2 pt-2">
+                  <TimelinePanel
+                    meta={active.meta}
+                    items={active.items}
+                    selectedId={selectedId}
+                    dayFilter={dayFilter}
+                    typeFilter={typeFilter}
+                    onSelect={highlightStep}
+                    onOpenDetail={selectFromList}
+                    onDayFilter={setDayFilter}
+                    onTypeFilter={setTypeFilter}
+                    onInsertBetween={(after, before) => openInsert(after, before)}
+                    onAddDay={() => void addDay()}
+                    onDeleteStep={(id) => void deleteStep(id)}
+                    layout="horizontal"
+                  />
+                </div>
+              ) : null}
+
+              {navTab === 'charts' && active ? (
+                <div className="max-h-[52vh] overflow-y-auto overscroll-contain px-2 pb-2 pt-2">
+                  <ChartsPanel
+                    meta={active.meta}
+                    items={active.items}
+                    onHomeCurrencyChange={(code) =>
+                      void updateActive((t) => ({
+                        ...t,
+                        meta: { ...t.meta, homeCurrency: normalizeCurrency(code) },
+                      }))
+                    }
+                  />
+                </div>
+              ) : null}
+
+              {navTab === 'settings' ? (
+                <div className="max-h-[52vh] space-y-3 overflow-y-auto overscroll-contain px-3 pb-3 pt-2 text-sm text-stone-800">
+                  <DataPanel
+                    active={active}
+                    mapStack={mapStack}
+                    googleKey={googleKey}
+                    ionToken={ionToken}
+                    enrichProgress={enrichProgress}
+                    routesStatus={routesStatus}
+                    onOpenExample={() => void onOpenExample()}
+                    onDuplicate={() => void onDuplicate()}
+                    onBlank={() => void onBlank()}
+                    onImportFile={(f) => void onImportFile(f)}
+                    onExport={() => void onExport()}
+                    onExportExampleExcel={() => void onExportExampleExcel()}
+                    onExportTemplate={() => void onExportTemplate()}
+                    onPolarsteps={() => {
+                      if (!active) return
+                      downloadPolarstepsJson(active)
+                      setStatus('Polarsteps-compatible JSON downloaded')
+                    }}
+                    onEnrich={() => void onEnrich()}
+                    onRebuildRoutes={() => {
+                      if (!active) return
+                      void buildRoutes(active)
+                    }}
+                    onAddDay={() => void addDay()}
+                    setMapStack={(id) => {
+                      setMapStack(id)
+                      void setSetting('mapStack', id)
+                    }}
+                    setGoogleKey={setGoogleKey}
+                    setIonToken={setIonToken}
+                    updateActive={updateActive}
+                  />
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <nav className="book-tongues-bottom mx-2" aria-label="Phone navigation">
+            {(
+              [
+                { id: 'timeline' as const, label: 'Steps' },
+                { id: 'charts' as const, label: 'Stats' },
+                { id: 'insert' as const, label: '+' },
+                { id: 'settings' as const, label: 'Data' },
+              ] as const
+            ).map((t) => {
+              const activeTongue =
+                t.id === 'insert'
+                  ? insertActive
+                  : navTab === t.id && !insertActive && panelOpen
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`book-tongue-bottom ${activeTongue ? 'book-tongue-on' : ''} ${
+                    t.id === 'insert' ? 'book-tongue-bottom-plus' : ''
+                  }`}
+                  onClick={() => {
+                    if (
+                      panelOpen &&
+                      t.id !== 'insert' &&
+                      navTab === t.id &&
+                      !insertActive
+                    ) {
+                      setPanelOpen(false)
+                      return
+                    }
+                    onTongue(t.id)
+                  }}
+                  title={t.id === 'insert' ? 'Insert step' : t.label}
+                >
+                  {t.label}
+                </button>
+              )
+            })}
+          </nav>
+        </div>
+      ) : null}
+
+      {/* Detail / Insert bottom sheet — covers steps on phone; tongues stay reachable */}
       {lowerOpen ? (
         <section
-          className={`journal-sheet absolute inset-x-0 bottom-0 z-40 flex flex-col rounded-t-[1.75rem] border shadow-[0_-12px_40px_rgba(15,23,42,0.35)] transition-all ${
+          className={`journal-sheet absolute inset-x-0 z-40 flex flex-col rounded-t-[1.75rem] border shadow-[0_-12px_40px_rgba(15,23,42,0.35)] transition-all ${
+            isPhone ? 'bottom-[3.6rem]' : 'bottom-0'
+          } ${
             lowerMode === 'insert'
-              ? 'h-[62%]'
+              ? isPhone
+                ? 'h-[70%]'
+                : 'h-[62%]'
               : detailExpanded
-                ? 'h-[50%]'
+                ? isPhone
+                  ? 'h-[62%]'
+                  : 'h-[50%]'
                 : 'h-[26%]'
           }`}
         >
@@ -644,7 +820,11 @@ export default function App() {
               </span>
             ) : null}
           </button>
-          <div className="min-h-0 flex-1 overflow-hidden px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-stone-800">
+          <div
+            className={`min-h-0 flex-1 overflow-hidden px-3 text-stone-800 ${
+              isPhone ? 'pb-2' : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]'
+            }`}
+          >
             {lowerMode === 'detail' && selected ? (
               <div className="h-full min-h-0 overflow-y-auto overscroll-contain">
                 <ItemDrawer

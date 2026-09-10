@@ -161,6 +161,68 @@ textarea {
   }
 }
 
+/* Phone bottom dock — tongues sit under the map like book tabs */
+.mobile-dock {
+  pointer-events: none;
+}
+
+.mobile-dock > * {
+  pointer-events: auto;
+}
+
+.mobile-panel {
+  background: linear-gradient(180deg, #fffaf3 0%, #fff7ed 100%);
+  color: var(--ink);
+}
+
+.book-tongues-bottom {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.35rem;
+  padding: 0 0.15rem;
+  pointer-events: auto;
+}
+
+.book-tongue-bottom {
+  flex: 1;
+  border: 1px solid #e7e0d5;
+  border-bottom-color: transparent;
+  border-radius: 0.85rem 0.85rem 0 0;
+  background: #fffaf3;
+  color: #57534e;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.65rem 0.35rem 0.55rem;
+  box-shadow: 0 -4px 14px rgba(15, 23, 42, 0.14);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.book-tongue-bottom:hover {
+  background: #fff3e6;
+  color: #1c1917;
+}
+
+.book-tongue-bottom.book-tongue-on {
+  background: var(--coral);
+  color: #fff;
+  border-color: var(--coral-deep);
+  border-bottom-color: transparent;
+}
+
+.book-tongue-bottom-plus {
+  flex: 0.7;
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  border-radius: 999px 999px 0 0;
+  padding: 0.45rem 0.5rem 0.4rem;
+}
+
 .step-rail {
   position: relative;
   padding-left: 1.35rem;
@@ -174,6 +236,11 @@ textarea {
   bottom: 0.4rem;
   width: 2px;
   background: #f0e4d6;
+}
+
+.step-rail-h {
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
 }
 
 .step-dot {
