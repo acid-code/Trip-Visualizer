@@ -31,6 +31,8 @@ import {
 import type { TripItem, TripMeta } from '../domain/types'
 import { dayColor, dayColorByIndex } from '../data/dayTheme'
 import { stepOrderMap } from '../data/analytics'
+import { isValidCoord } from '../data/validate'
+import { logClientError, sanitizeEntityId } from '../data/security'
 
 export type MapStack = 'esri' | 'osm' | 'google3d'
 
@@ -165,7 +167,7 @@ export async function applyMapStack(
       viewer.scene.globe.show = false
       return
     } catch (err) {
-      console.warn('Google Photorealistic 3D failed; using Esri', err)
+      logClientError('google3d', err)
     }
   }
 
@@ -186,7 +188,7 @@ export async function applyIonTerrain(viewer: Viewer, ionToken: string) {
   try {
     viewer.terrainProvider = await createWorldTerrainAsync()
   } catch (err) {
-    console.warn('World terrain failed', err)
+    logClientError('ion-terrain', err)
   }
 }
 
@@ -270,7 +272,7 @@ function addBillboard(
 ) {
   const selected = opts.selected
   viewer.entities.add({
-    id: `trip:${item.id}${opts.suffix ?? ''}`,
+    id: `trip:${sanitizeEntityId(item.id)}${opts.suffix ?? ''}`,
     name: item.title,
     position: Cartesian3.fromDegrees(lon, lat, 0),
     point: {
@@ -300,7 +302,7 @@ function addBillboard(
       show: true,
       distanceDisplayCondition: new DistanceDisplayCondition(0.0, 4.5e5),
     },
-    description: item.id,
+    description: sanitizeEntityId(item.id),
     properties: {
       badgeText: opts.badge,
     },
@@ -323,7 +325,7 @@ function addArc(
     Cartesian3.fromDegrees(lon2, lat2, SURFACE_H),
   ]
   viewer.entities.add({
-    id: `trip:${item.id}:arc`,
+    id: `trip:${sanitizeEntityId(item.id)}:arc`,
     name: `${item.from} → ${item.to}`,
     polyline: {
       positions,
@@ -337,11 +339,11 @@ function addArc(
         : new ColorMaterialProperty(color.withAlpha(0.95)),
       arcType: ArcType.GEODESIC,
     },
-    description: item.id,
+    description: sanitizeEntityId(item.id),
   })
   addSeqLabel(
     viewer,
-    item.id,
+    sanitizeEntityId(item.id),
     (lon1 + lon2) / 2,
     (lat1 + lat2) / 2,
     SURFACE_H,
@@ -360,7 +362,7 @@ function addRoute(
 ) {
   if (coords.length < 2) return
   viewer.entities.add({
-    id: `trip:${item.id}:route`,
+    id: `trip:${sanitizeEntityId(item.id)}:route`,
     name: item.title,
     polyline: {
       positions: coords.map(([lat, lon]) => Cartesian3.fromDegrees(lon, lat, SURFACE_H)),
@@ -368,11 +370,12 @@ function addRoute(
       clampToGround: false,
       material: new ColorMaterialProperty(color.withAlpha(0.95)),
     },
-    description: item.id,
+    description: sanitizeEntityId(item.id),
   })
   const mid = midpointLonLat(coords)
   if (mid) {
-    addSeqLabel(viewer, item.id, mid.lon, mid.lat, SURFACE_H, badge, color, item.id)
+    const sid = sanitizeEntityId(item.id)
+    addSeqLabel(viewer, sid, mid.lon, mid.lat, SURFACE_H, badge, color, sid)
   }
 }
 
@@ -442,8 +445,8 @@ export function syncTripEntities(
   for (const item of items) {
     if (item.status === 'cancelled' || item.type === 'note') continue
 
-    const hasFrom = item.lat != null && item.lon != null
-    const hasTo = item.latTo != null && item.lonTo != null
+    const hasFrom = isValidCoord(item.lat, item.lon)
+    const hasTo = isValidCoord(item.latTo, item.lonTo)
     const order = orders.get(item.id)
     const badge = stepBadge(order)
     const color = colorForDay(meta, item.date, order?.day ?? 1)
@@ -596,26 +599,24 @@ export function flyToItem(
   endpoint: 'a' | 'b' | null = null,
 ) {
   // Clicked a specific pin — stay on that pin instead of jumping to the whole leg
-  if (endpoint === 'b' && item.latTo != null && item.lonTo != null) {
-    flyToLonLat(viewer, item.lonTo, item.latTo)
+  if (endpoint === 'b' && isValidCoord(item.latTo, item.lonTo)) {
+    flyToLonLat(viewer, item.lonTo!, item.latTo!)
     return
   }
 
-  if (endpoint === 'a' && item.lat != null && item.lon != null) {
-    flyToLonLat(viewer, item.lon, item.lat)
+  if (endpoint === 'a' && isValidCoord(item.lat, item.lon)) {
+    flyToLonLat(viewer, item.lon!, item.lat!)
     return
   }
 
   if (
     endpoint == null &&
-    item.lat != null &&
-    item.lon != null &&
-    item.latTo != null &&
-    item.lonTo != null
+    isValidCoord(item.lat, item.lon) &&
+    isValidCoord(item.latTo, item.lonTo)
   ) {
     const sphere = BoundingSphere.fromPoints([
-      Cartesian3.fromDegrees(item.lon, item.lat, 0),
-      Cartesian3.fromDegrees(item.lonTo, item.latTo, 0),
+      Cartesian3.fromDegrees(item.lon!, item.lat!, 0),
+      Cartesian3.fromDegrees(item.lonTo!, item.latTo!, 0),
     ])
     viewer.camera.flyToBoundingSphere(sphere, {
       duration: 1.2,
@@ -628,19 +629,19 @@ export function flyToItem(
     return
   }
 
-  if (item.lat != null && item.lon != null) {
-    flyToLonLat(viewer, item.lon, item.lat, item.type === 'hotel' ? 380 : 450)
+  if (isValidCoord(item.lat, item.lon)) {
+    flyToLonLat(viewer, item.lon!, item.lat!, item.type === 'hotel' ? 380 : 450)
   }
 }
 
 export function flyToTripOverview(viewer: Viewer, items: TripItem[]) {
   const pts: Cartesian3[] = []
   for (const item of items) {
-    if (item.lat != null && item.lon != null) {
-      pts.push(Cartesian3.fromDegrees(item.lon, item.lat))
+    if (isValidCoord(item.lat, item.lon)) {
+      pts.push(Cartesian3.fromDegrees(item.lon!, item.lat!))
     }
-    if (item.latTo != null && item.lonTo != null) {
-      pts.push(Cartesian3.fromDegrees(item.lonTo, item.latTo))
+    if (isValidCoord(item.latTo, item.lonTo)) {
+      pts.push(Cartesian3.fromDegrees(item.lonTo!, item.latTo!))
     }
   }
   if (!pts.length) return
@@ -661,8 +662,7 @@ export async function runTour(
     (i) =>
       i.status !== 'cancelled' &&
       i.type !== 'note' &&
-      i.lat != null &&
-      i.lon != null,
+      isValidCoord(i.lat, i.lon),
   )
   for (const item of stops) {
     if (signal?.aborted) return
@@ -675,8 +675,8 @@ export async function runTour(
 export async function clampEntityHeights(viewer: Viewer, items: TripItem[]) {
   const cartos: Cartographic[] = []
   for (const item of items) {
-    if (item.lat != null && item.lon != null) {
-      cartos.push(Cartographic.fromDegrees(item.lon, item.lat))
+    if (isValidCoord(item.lat, item.lon)) {
+      cartos.push(Cartographic.fromDegrees(item.lon!, item.lat!))
     }
   }
   if (!cartos.length) return

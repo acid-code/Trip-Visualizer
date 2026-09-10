@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { safeHttpsUrl, sanitizeEntityId, clampText } from '../data/security'
 
 export const ITEM_TYPES = [
   'flight',
@@ -20,63 +21,157 @@ export const ITEM_STATUSES = ['planned', 'booked', 'done', 'cancelled'] as const
 export type ItemType = (typeof ITEM_TYPES)[number]
 export type ItemStatus = (typeof ITEM_STATUSES)[number]
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+const TIME_HM = /^([01]?\d|2[0-3]):([0-5]\d)$|^$/
+
+const boundedStr = (max: number, fallback = '') =>
+  z
+    .unknown()
+    .transform((v) => clampText(v, max, fallback))
+    .pipe(z.string().max(max))
+
+const optionalIsoDate = z
+  .unknown()
+  .transform((v) => {
+    const s = clampText(v, 10)
+    return ISO_DATE.test(s) ? s : ''
+  })
+
+const requiredIsoDate = z
+  .unknown()
+  .transform((v) => clampText(v, 10))
+  .refine((s) => ISO_DATE.test(s), { message: 'Invalid date' })
+
+const finiteOrNull = z
+  .union([z.number(), z.null(), z.undefined(), z.nan()])
+  .transform((v) => {
+    if (v == null || (typeof v === 'number' && !Number.isFinite(v))) return null
+    return v as number
+  })
+  .nullable()
+
 export const TripMetaSchema = z.object({
-  name: z.string().min(1),
-  startDate: z.string(),
-  endDate: z.string(),
-  homeCurrency: z.string().default('EUR'),
-  timezoneNote: z.string().default('All times are local'),
-  travelers: z.string().default(''),
-  notes: z.string().default(''),
+  name: boundedStr(200, 'Untitled trip').pipe(z.string().min(1).max(200)),
+  startDate: requiredIsoDate,
+  endDate: requiredIsoDate,
+  homeCurrency: boundedStr(8, 'EUR').pipe(z.string().min(1).max(8)),
+  timezoneNote: boundedStr(200, 'All times are local'),
+  travelers: boundedStr(200),
+  notes: boundedStr(5000),
 })
 
 export const TripItemSchema = z.object({
-  id: z.string(),
+  id: z
+    .unknown()
+    .transform((v) => sanitizeEntityId(String(v ?? ''), 64))
+    .pipe(z.string().min(1).max(64)),
   type: z.enum(ITEM_TYPES),
-  title: z.string().min(1),
-  place: z.string().optional().default(''),
-  city: z.string().optional().default(''),
-  date: z.string(),
-  endDate: z.string().optional().default(''),
-  start: z.string().optional().default(''),
-  end: z.string().optional().default(''),
-  from: z.string().optional().default(''),
-  to: z.string().optional().default(''),
-  confirm: z.string().optional().default(''),
-  cost: z.number().nullable().optional().default(null),
-  currency: z.string().optional().default(''),
+  title: boundedStr(300, 'Untitled').pipe(z.string().min(1).max(300)),
+  place: boundedStr(500),
+  city: boundedStr(120),
+  date: requiredIsoDate,
+  endDate: optionalIsoDate,
+  start: z
+    .unknown()
+    .transform((v) => {
+      const s = clampText(v, 5)
+      return TIME_HM.test(s) ? s : ''
+    }),
+  end: z
+    .unknown()
+    .transform((v) => {
+      const s = clampText(v, 5)
+      return TIME_HM.test(s) ? s : ''
+    }),
+  from: boundedStr(200),
+  to: boundedStr(200),
+  confirm: boundedStr(200),
+  cost: finiteOrNull.transform((n) => (n != null && n >= 0 ? n : null)),
+  currency: boundedStr(8),
   status: z.enum(ITEM_STATUSES).default('planned'),
-  notes: z.string().optional().default(''),
-  url: z.string().optional().default(''),
-  tags: z.array(z.string()).default([]),
-  lat: z.number().nullable().optional().default(null),
-  lon: z.number().nullable().optional().default(null),
-  latTo: z.number().nullable().optional().default(null),
-  lonTo: z.number().nullable().optional().default(null),
-  wikidata: z.string().optional().default(''),
-  osmId: z.string().optional().default(''),
-  geocodeQuery: z.string().optional().default(''),
-  updatedAt: z.string().optional().default(''),
-  enrichmentSummary: z.string().optional().default(''),
-  enrichmentImage: z.string().optional().default(''),
-  enrichmentSource: z.string().optional().default(''),
+  notes: boundedStr(5000),
+  url: z.unknown().transform((v) => safeHttpsUrl(String(v ?? ''))),
+  tags: z
+    .array(z.unknown().transform((v) => clampText(v, 40)))
+    .max(32)
+    .default([]),
+  lat: finiteOrNull.transform((n) =>
+    n != null && n >= -90 && n <= 90 ? n : null,
+  ),
+  lon: finiteOrNull.transform((n) =>
+    n != null && n >= -180 && n <= 180 ? n : null,
+  ),
+  latTo: finiteOrNull.transform((n) =>
+    n != null && n >= -90 && n <= 90 ? n : null,
+  ),
+  lonTo: finiteOrNull.transform((n) =>
+    n != null && n >= -180 && n <= 180 ? n : null,
+  ),
+  wikidata: boundedStr(32),
+  osmId: boundedStr(64),
+  geocodeQuery: boundedStr(300),
+  updatedAt: boundedStr(40),
+  enrichmentSummary: boundedStr(2000),
+  enrichmentImage: z.unknown().transform((v) => safeHttpsUrl(String(v ?? ''))),
+  enrichmentSource: boundedStr(80),
   routeCoords: z
-    .array(z.tuple([z.number(), z.number()]))
+    .array(
+      z.tuple([
+        z.number().finite().min(-90).max(90),
+        z.number().finite().min(-180).max(180),
+      ]),
+    )
+    .max(5000)
     .optional()
     .default([]),
   source: z.enum(['excel', 'app', 'enriched', 'example']).default('app'),
 })
 
+export const TripRecordSchema = z.object({
+  id: z
+    .unknown()
+    .transform((v) => sanitizeEntityId(String(v ?? 'TRIP'), 64))
+    .pipe(z.string().min(1).max(64)),
+  meta: TripMetaSchema,
+  items: z.array(TripItemSchema).max(2000),
+  isExample: z.boolean().default(false),
+  createdAt: boundedStr(40),
+  updatedAt: boundedStr(40),
+})
+
 export type TripMeta = z.infer<typeof TripMetaSchema>
 export type TripItem = z.infer<typeof TripItemSchema>
+export type TripRecord = z.infer<typeof TripRecordSchema>
 
-export type TripRecord = {
-  id: string
-  meta: TripMeta
-  items: TripItem[]
-  isExample: boolean
-  createdAt: string
-  updatedAt: string
+/** Allowlist parse — drops / clamps invalid fields rather than trusting client shapes. */
+export function sanitizeTripRecord(input: unknown): TripRecord {
+  const parsed = TripRecordSchema.safeParse(input)
+  if (!parsed.success) {
+    throw new Error('Invalid trip data')
+  }
+  const trip = parsed.data
+  if (trip.meta.endDate < trip.meta.startDate) {
+    trip.meta.endDate = trip.meta.startDate
+  }
+  return trip
+}
+
+export function sanitizeTripItem(input: unknown): TripItem {
+  const parsed = TripItemSchema.safeParse(input)
+  if (!parsed.success) {
+    throw new Error('Invalid step data')
+  }
+  return parsed.data
+}
+
+export function sanitizeTripMeta(input: unknown): TripMeta {
+  const parsed = TripMetaSchema.safeParse(input)
+  if (!parsed.success) {
+    throw new Error('Invalid trip meta')
+  }
+  const meta = parsed.data
+  if (meta.endDate < meta.startDate) meta.endDate = meta.startDate
+  return meta
 }
 
 export const TYPE_COLORS: Record<ItemType, string> = {

@@ -1,6 +1,15 @@
 import type { TripItem } from '../domain/types'
 import { lookupAirport } from './airports'
 import { nowIso } from './db'
+import { MAX_GEOCODE_QUERY_LEN, safeHttpsUrl } from './security'
+import { isValidCoord, parseLat, parseLon } from './validate'
+
+function asCoord(lat: unknown, lon: unknown): { lat: number; lon: number } | null {
+  const la = parseLat(lat as string | number | null)
+  const lo = parseLon(lon as string | number | null)
+  if (!isValidCoord(la, lo)) return null
+  return { lat: la!, lon: lo! }
+}
 
 const NOMINATIM = 'https://nominatim.openstreetmap.org/search'
 const WIKIDATA = 'https://www.wikidata.org/w/api.php'
@@ -10,9 +19,10 @@ function sleep(ms: number) {
 }
 
 export async function geocodePlace(query: string): Promise<{ lat: number; lon: number } | null> {
-  if (!query.trim()) return null
+  const q = query.trim().slice(0, MAX_GEOCODE_QUERY_LEN)
+  if (!q) return null
   const url = new URL(NOMINATIM)
-  url.searchParams.set('q', query)
+  url.searchParams.set('q', q)
   url.searchParams.set('format', 'json')
   url.searchParams.set('limit', '1')
   const res = await fetch(url.toString(), {
@@ -21,7 +31,7 @@ export async function geocodePlace(query: string): Promise<{ lat: number; lon: n
   if (!res.ok) return null
   const data = (await res.json()) as Array<{ lat: string; lon: string }>
   if (!data[0]) return null
-  return { lat: Number(data[0].lat), lon: Number(data[0].lon) }
+  return asCoord(data[0].lat, data[0].lon)
 }
 
 /** Pull lat/lon out of a pasted Google Maps link, coords, or leave null to geocode text. */
@@ -30,18 +40,18 @@ export function extractCoordsFromText(input: string): { lat: number; lon: number
   if (!s) return null
 
   const at = s.match(/@(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)/)
-  if (at) return { lat: Number(at[1]), lon: Number(at[2]) }
+  if (at) return asCoord(at[1], at[2])
 
   const bang = s.match(/!3d(-?\d+\.?\d*)!4d(-?\d+\.?\d*)/)
-  if (bang) return { lat: Number(bang[1]), lon: Number(bang[2]) }
+  if (bang) return asCoord(bang[1], bang[2])
 
   const qCoords = s.match(
     /[?&](?:q|query)=(-?\d+\.?\d*)(?:%2C|,)\s*(-?\d+\.?\d*)/i,
   )
-  if (qCoords) return { lat: Number(qCoords[1]), lon: Number(qCoords[2]) }
+  if (qCoords) return asCoord(qCoords[1], qCoords[2])
 
   const plain = s.match(/^(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})$/)
-  if (plain) return { lat: Number(plain[1]), lon: Number(plain[2]) }
+  if (plain) return asCoord(plain[1], plain[2])
 
   return null
 }
@@ -95,7 +105,7 @@ export async function pinItemOnMap(item: TripItem): Promise<TripItem> {
   const isLeg = ['flight', 'train', 'bus', 'ferry', 'drive'].includes(item.type)
 
   if (isLeg) {
-    if (next.lat == null || next.lon == null) {
+    if (!isValidCoord(next.lat, next.lon)) {
       const airport = lookupAirport(item.from)
       if (airport) {
         next.lat = airport.lat
@@ -109,7 +119,7 @@ export async function pinItemOnMap(item: TripItem): Promise<TripItem> {
         }
       }
     }
-    if (next.latTo == null || next.lonTo == null) {
+    if (!isValidCoord(next.latTo, next.lonTo)) {
       const airport = lookupAirport(item.to)
       if (airport) {
         next.latTo = airport.lat
@@ -126,7 +136,7 @@ export async function pinItemOnMap(item: TripItem): Promise<TripItem> {
   }
 
   if (item.type === 'note') return next
-  if (next.lat != null && next.lon != null) return next
+  if (isValidCoord(next.lat, next.lon)) return next
 
   const pasted = item.place || item.geocodeQuery
   if (pasted) {
@@ -140,7 +150,7 @@ export async function pinItemOnMap(item: TripItem): Promise<TripItem> {
   }
 
   const q = [item.place || item.title, item.city].filter(Boolean).join(', ')
-  if (!q) return next
+  if (!q.trim()) return next
   next.geocodeQuery = q
   const g = await geocodePlace(q)
   if (g) {
@@ -154,12 +164,12 @@ function itemNeedsPinning(item: TripItem): boolean {
   if (item.type === 'note' || item.status === 'cancelled') return false
   const isLeg = ['flight', 'train', 'bus', 'ferry', 'drive'].includes(item.type)
   if (isLeg) {
-    const missFrom = item.lat == null || item.lon == null
-    const missTo = item.latTo == null || item.lonTo == null
+    const missFrom = !isValidCoord(item.lat, item.lon)
+    const missTo = !isValidCoord(item.latTo, item.lonTo)
     if (!missFrom && !missTo) return false
     return !!(item.from || item.to || item.place || item.geocodeQuery)
   }
-  if (item.lat != null && item.lon != null) return false
+  if (isValidCoord(item.lat, item.lon)) return false
   return !!(item.place || item.geocodeQuery || item.title || item.city)
 }
 
@@ -258,12 +268,14 @@ export async function enrichItem(item: TripItem): Promise<TripItem> {
   }
 
   if (item.type === 'flight' || item.type === 'train' || item.type === 'bus' || item.type === 'ferry') {
-    const from = resolveEndpoint(item.from) || (item.lat != null && item.lon != null
-      ? { lat: item.lat, lon: item.lon }
-      : null)
-    const to = resolveEndpoint(item.to) || (item.latTo != null && item.lonTo != null
-      ? { lat: item.latTo, lon: item.lonTo }
-      : null)
+    const from =
+      resolveEndpoint(item.from) ||
+      (isValidCoord(item.lat, item.lon) ? { lat: item.lat!, lon: item.lon! } : null)
+    const to =
+      resolveEndpoint(item.to) ||
+      (isValidCoord(item.latTo, item.lonTo)
+        ? { lat: item.latTo!, lon: item.lonTo! }
+        : null)
 
     if (!from && item.from) {
       const g = await geocodePlace(item.from)
@@ -290,14 +302,12 @@ export async function enrichItem(item: TripItem): Promise<TripItem> {
       next.lonTo = to.lon
     }
   } else if (item.type === 'drive') {
-    let from: { lat: number; lon: number } | null =
-      item.lat != null && item.lon != null
-        ? { lat: item.lat, lon: item.lon }
-        : resolveEndpoint(item.from)
-    let to: { lat: number; lon: number } | null =
-      item.latTo != null && item.lonTo != null
-        ? { lat: item.latTo, lon: item.lonTo }
-        : resolveEndpoint(item.to)
+    let from: { lat: number; lon: number } | null = isValidCoord(item.lat, item.lon)
+      ? { lat: item.lat!, lon: item.lon! }
+      : resolveEndpoint(item.from)
+    let to: { lat: number; lon: number } | null = isValidCoord(item.latTo, item.lonTo)
+      ? { lat: item.latTo!, lon: item.lonTo! }
+      : resolveEndpoint(item.to)
 
     if (!from && (item.from || item.place)) {
       from = await geocodePlace(item.from || item.place)
@@ -329,7 +339,7 @@ export async function enrichItem(item: TripItem): Promise<TripItem> {
       }
     }
   } else if (item.type !== 'note') {
-    if (item.lat == null || item.lon == null) {
+    if (!isValidCoord(item.lat, item.lon)) {
       const q = [item.place || item.title, item.city].filter(Boolean).join(', ')
       next.geocodeQuery = q
       const g = await geocodePlace(q)
@@ -348,7 +358,7 @@ export async function enrichItem(item: TripItem): Promise<TripItem> {
       if (wiki) {
         next.wikidata = wiki.id
         next.enrichmentSummary = wiki.summary
-        next.enrichmentImage = wiki.image || ''
+        next.enrichmentImage = safeHttpsUrl(wiki.image || '')
         next.enrichmentSource = 'Wikidata'
       }
     } catch {

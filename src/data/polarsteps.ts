@@ -1,5 +1,6 @@
 import type { TripItem, TripRecord } from '../domain/types'
 import { sortItems } from './db'
+import { isIsoDate, isValidCoord } from './validate'
 
 /**
  * Polarsteps has no public import API today, but GDPR exports use trip.json
@@ -84,21 +85,28 @@ export function toPolarstepsTrip(trip: TripRecord): PolarstepsTripJson {
         end_time: end,
         location: {
           name: stepLocationName(item),
-          lat: item.lat,
-          lon: item.lon,
+          lat: isValidCoord(item.lat, item.lon) ? item.lat : null,
+          lon: isValidCoord(item.lat, item.lon) ? item.lon : null,
         },
         transport: transportFor(item.type),
         type: item.type,
         confirm: item.confirm || undefined,
-        cost: item.cost,
+        cost: item.cost != null && Number.isFinite(item.cost) ? item.cost : null,
         currency: item.currency || trip.meta.homeCurrency,
       }
     })
 
   return {
-    name: trip.meta.name,
-    start_date: toUnix(trip.meta.startDate, '00:00'),
-    end_date: toUnix(trip.meta.endDate || trip.meta.startDate, '23:59'),
+    name: trip.meta.name.trim() || 'Trip',
+    start_date: toUnix(isIsoDate(trip.meta.startDate) ? trip.meta.startDate : '', '00:00'),
+    end_date: toUnix(
+      isIsoDate(trip.meta.endDate)
+        ? trip.meta.endDate
+        : isIsoDate(trip.meta.startDate)
+          ? trip.meta.startDate
+          : '',
+      '23:59',
+    ),
     summary: trip.meta.notes || '',
     all_steps: steps,
     _generator: 'trip-tracker',

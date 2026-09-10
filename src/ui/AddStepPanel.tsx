@@ -6,7 +6,16 @@ import {
 } from '../domain/types'
 import { TYPE_COLORS } from '../domain/types'
 import { createId, sortItems } from '../data/db'
-import { COMMON_CURRENCIES } from '../data/fx'
+import { COMMON_CURRENCIES, normalizeCurrency } from '../data/fx'
+import {
+  isIsoDate,
+  parseNonNegativeNumber,
+  requireIsoDate,
+  sanitizeEndDate,
+  sanitizeTime,
+  todayIso,
+  validateAddStep,
+} from '../data/validate'
 
 export type AddContext = {
   afterId?: string | null
@@ -64,8 +73,11 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
     : null
 
   const defaults = useMemo(() => {
-    const date = after?.date || before?.date || meta.startDate
-    const start = midpointTime(after?.end || after?.start, before?.start)
+    const date = requireIsoDate(
+      after?.date || before?.date || meta.startDate,
+      todayIso(),
+    )
+    const start = sanitizeTime(midpointTime(after?.end || after?.start, before?.start))
     const city = after?.city || before?.city || ''
     return { date, start, city }
   }, [after, before, meta.startDate])
@@ -82,33 +94,55 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
   const [to, setTo] = useState('')
   const [notes, setNotes] = useState('')
   const [cost, setCost] = useState('')
-  const [currency, setCurrency] = useState(meta.homeCurrency || 'EUR')
+  const [currency, setCurrency] = useState(
+    normalizeCurrency(meta.homeCurrency || 'EUR'),
+  )
+  const [errors, setErrors] = useState<Record<string, string>>({})
 
   const isLeg = ['flight', 'train', 'bus', 'ferry', 'drive'].includes(type)
   const isHotel = type === 'hotel'
 
   function submit(e: React.FormEvent) {
     e.preventDefault()
-    if (!title.trim() || !date) return
+    const check = validateAddStep({
+      type,
+      title,
+      date,
+      endDate,
+      start,
+      end,
+      place,
+      from,
+      to,
+      cost,
+      isLeg,
+      isHotel,
+    })
+    if (!check.ok) {
+      setErrors(check.errors)
+      return
+    }
+    setErrors({})
+
+    const safeDate = requireIsoDate(date, defaults.date)
+    const safeEnd = isHotel || isLeg ? sanitizeEndDate(safeDate, endDate) : ''
+    const costNum = parseNonNegativeNumber(cost)
+
     const item: TripItem = {
       id: createId(type[0]?.toUpperCase() ?? 'X'),
       type,
       title: title.trim(),
       place: place.trim(),
       city: city.trim(),
-      date,
-      endDate: isHotel || isLeg ? endDate : '',
-      start,
-      end,
+      date: safeDate,
+      endDate: safeEnd,
+      start: sanitizeTime(start),
+      end: sanitizeTime(end),
       from: isLeg ? from.trim() : '',
       to: isLeg ? to.trim() : '',
       confirm: '',
-      cost: (() => {
-        if (cost.trim() === '') return null
-        const n = Number(cost)
-        return Number.isFinite(n) ? n : null
-      })(),
-      currency: currency.trim() || meta.homeCurrency,
+      cost: costNum,
+      currency: normalizeCurrency(currency || meta.homeCurrency),
       status: 'planned',
       notes: notes.trim(),
       url: '',
@@ -130,10 +164,16 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
     onCreate(item)
   }
 
+  const fieldErr = (key: string) =>
+    errors[key] ? (
+      <span className="mt-1 block text-[10px] font-medium text-rose-600">{errors[key]}</span>
+    ) : null
+
   return (
     <form
       className="flex h-full min-h-0 flex-col text-stone-800"
       onSubmit={submit}
+      noValidate
     >
       <div className="flex items-start justify-between gap-2 pb-2">
         <div>
@@ -178,59 +218,68 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
 
         <div className="rounded-2xl border border-stone-200 bg-white p-3 shadow-sm">
           <label className="block text-xs font-medium text-stone-500">
-            Name
+            Name *
             <input
-              className={inputCls}
+              className={`${inputCls} ${errors.title ? 'border-rose-400' : ''}`}
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) => {
+                setTitle(e.target.value)
+                setErrors((er) => ({ ...er, title: '' }))
+              }}
               placeholder={isLeg ? 'TGV to Marseille' : 'Louvre morning'}
-              required
               autoFocus
             />
-            <span className="mt-1 block text-[10px] font-normal text-stone-400">
-              Short label for the timeline (not the map address).
-            </span>
+            {fieldErr('title')}
           </label>
 
           <div className="mt-3 grid grid-cols-2 gap-2">
             <label className="block text-xs font-medium text-stone-500">
-              Date
+              Date *
               <input
-                className={inputCls}
+                className={`${inputCls} ${errors.date ? 'border-rose-400' : ''}`}
                 type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                required
+                value={isIsoDate(date) ? date : ''}
+                onChange={(e) => {
+                  setDate(e.target.value)
+                  setErrors((er) => ({ ...er, date: '' }))
+                }}
               />
+              {fieldErr('date')}
             </label>
             <label className="block text-xs font-medium text-stone-500">
               Time
               <input
-                className={inputCls}
+                className={`${inputCls} ${errors.start ? 'border-rose-400' : ''}`}
                 value={start}
                 onChange={(e) => setStart(e.target.value)}
+                onBlur={() => setStart(sanitizeTime(start))}
                 placeholder="HH:MM"
               />
+              {fieldErr('start')}
             </label>
             {(isHotel || isLeg) && (
               <>
                 <label className="block text-xs font-medium text-stone-500">
                   End date
                   <input
-                    className={inputCls}
+                    className={`${inputCls} ${errors.endDate ? 'border-rose-400' : ''}`}
                     type="date"
                     value={endDate}
+                    min={date || undefined}
                     onChange={(e) => setEndDate(e.target.value)}
                   />
+                  {fieldErr('endDate')}
                 </label>
                 <label className="block text-xs font-medium text-stone-500">
                   End time
                   <input
-                    className={inputCls}
+                    className={`${inputCls} ${errors.end ? 'border-rose-400' : ''}`}
                     value={end}
                     onChange={(e) => setEnd(e.target.value)}
+                    onBlur={() => setEnd(sanitizeTime(end))}
                     placeholder="HH:MM"
                   />
+                  {fieldErr('end')}
                 </label>
               </>
             )}
@@ -262,11 +311,15 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
               <label className="block text-xs font-medium text-stone-500">
                 From
                 <input
-                  className={inputCls}
+                  className={`${inputCls} ${errors.from ? 'border-rose-400' : ''}`}
                   value={from}
-                  onChange={(e) => setFrom(e.target.value)}
+                  onChange={(e) => {
+                    setFrom(e.target.value)
+                    setErrors((er) => ({ ...er, from: '' }))
+                  }}
                   placeholder="CDG or address / Maps link"
                 />
+                {fieldErr('from')}
               </label>
               <label className="block text-xs font-medium text-stone-500">
                 To
@@ -284,14 +337,18 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
             <label className="block text-xs font-medium text-stone-500">
               Price
               <input
-                className={inputCls}
+                className={`${inputCls} ${errors.cost ? 'border-rose-400' : ''}`}
                 type="number"
                 step="any"
                 min="0"
                 value={cost}
-                onChange={(e) => setCost(e.target.value)}
+                onChange={(e) => {
+                  setCost(e.target.value)
+                  setErrors((er) => ({ ...er, cost: '' }))
+                }}
                 placeholder="0"
               />
+              {fieldErr('cost')}
             </label>
             <label className="block text-xs font-medium text-stone-500">
               Currency
@@ -321,9 +378,8 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
         </div>
 
         <p className="text-[11px] leading-relaxed text-stone-500">
-          You don’t need lat/lon. Paste a normal address or a Google Maps link into{' '}
-          <strong>Address or place</strong> (or From/To for trips) — we look it up and drop a pin.
-          Drive/walk paths draw once both ends have locations.
+          Required: name + date. Paste an address or Maps link for the map pin. Drive/walk paths
+          need locations on both ends.
         </p>
       </div>
 
@@ -341,10 +397,6 @@ const inputCls =
   'mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-900 outline-none focus:border-orange-400 focus:bg-white'
 
 function currencyChoices(home: string) {
-  const set = new Set<string>([...COMMON_CURRENCIES, (home || 'EUR').toUpperCase()])
-  if (set.has('NIS')) {
-    set.delete('NIS')
-    set.add('ILS')
-  }
+  const set = new Set<string>([...COMMON_CURRENCIES, normalizeCurrency(home || 'EUR')])
   return [...set]
 }

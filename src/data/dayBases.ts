@@ -1,6 +1,7 @@
 import type { TripItem, TripMeta } from '../domain/types'
 import { dayIndex } from './analytics'
 import { createId, sortItems } from './db'
+import { isIsoDate, requireIsoDate } from './validate'
 
 const ARRIVAL_TYPES = new Set(['flight', 'train', 'bus', 'ferry', 'drive', 'hotel'])
 
@@ -56,11 +57,14 @@ function emptyBase(day: string, dayNum: number, currency: string): TripItem {
 }
 
 function enumerateDays(start: string, end: string): string[] {
-  if (!start || !end || start > end) return []
+  if (!isIsoDate(start) || !isIsoDate(end) || start > end) return []
   const out: string[] = []
   const cur = new Date(start + 'T12:00:00')
   const last = new Date(end + 'T12:00:00')
-  while (cur <= last) {
+  if (Number.isNaN(cur.getTime()) || Number.isNaN(last.getTime())) return []
+  // Cap runaway ranges (bad Excel / corrupted meta)
+  const maxDays = 400
+  while (cur <= last && out.length < maxDays) {
     out.push(cur.toISOString().slice(0, 10))
     cur.setDate(cur.getDate() + 1)
   }
@@ -92,12 +96,12 @@ export function ensureDayStartBases(
 ): TripItem[] {
   const sorted = sortItems(items)
   const days = new Set<string>()
-  if (meta.startDate && meta.endDate) {
+  if (isIsoDate(meta.startDate) && isIsoDate(meta.endDate)) {
     for (const day of enumerateDays(meta.startDate, meta.endDate)) days.add(day)
   }
   for (const item of sorted) {
-    if (item.date) days.add(item.date)
-    if (item.endDate) days.add(item.endDate)
+    if (isIsoDate(item.date)) days.add(item.date)
+    if (isIsoDate(item.endDate)) days.add(item.endDate)
   }
 
   const extras: TripItem[] = []
@@ -142,11 +146,16 @@ export function pruneEmptyDays(
   items: TripItem[],
 ): { meta: TripMeta; items: TripItem[] } {
   let nextItems = sortItems(items)
-  const start = meta.startDate || nextItems[0]?.date || new Date().toISOString().slice(0, 10)
+  const start = requireIsoDate(
+    meta.startDate || nextItems.find((i) => isIsoDate(i.date))?.date,
+  )
 
-  const itemDays = nextItems.flatMap((i) => [i.date, i.endDate].filter(Boolean) as string[])
+  const itemDays = nextItems.flatMap((i) =>
+    [i.date, i.endDate].filter((d): d is string => isIsoDate(d)),
+  )
   const roughEnd =
-    [meta.endDate, ...itemDays].filter(Boolean).sort().at(-1) || start
+    [meta.endDate, ...itemDays].filter((d): d is string => isIsoDate(d)).sort().at(-1) ||
+    start
 
   const days = enumerateDays(start, roughEnd)
   const lastReal =

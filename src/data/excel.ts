@@ -10,6 +10,10 @@ import {
   type TripRecord,
 } from '../domain/types'
 import { createId, nowIso, sortItems } from './db'
+import { normalizeCurrency } from './fx'
+import { MAX_SCHEDULE_ROWS } from './security'
+import { parseLat, parseLon, parseNonNegativeNumber, sanitizeEndDate } from './validate'
+import { sanitizeTripItem, sanitizeTripMeta } from '../domain/types'
 
 const HEADER_ALIASES: Record<string, string> = {
   id: 'id',
@@ -60,13 +64,6 @@ function parseTags(value: unknown): string[] {
     .filter(Boolean)
 }
 
-function parseNumber(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') return null
-  if (typeof value === 'number') return value
-  const n = Number(String(value).replace(',', '.'))
-  return Number.isFinite(n) ? n : null
-}
-
 function excelDateToIso(value: unknown): string {
   if (value === null || value === undefined || value === '') return ''
   if (typeof value === 'number') {
@@ -77,15 +74,19 @@ function excelDateToIso(value: unknown): string {
     return `${parsed.y}-${m}-${d}`
   }
   const s = String(value).trim()
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const dt = new Date(s + 'T12:00:00')
+    if (!Number.isNaN(dt.getTime()) && dt.toISOString().slice(0, 10) === s) return s
+    return ''
+  }
   const dt = new Date(s)
   if (!Number.isNaN(dt.getTime())) return dt.toISOString().slice(0, 10)
-  return s
+  return ''
 }
 
 function excelTimeToHm(value: unknown): string {
   if (value === null || value === undefined || value === '') return ''
-  if (typeof value === 'number') {
+  if (typeof value === 'number' && Number.isFinite(value)) {
     const totalMinutes = Math.round(value * 24 * 60)
     const hh = String(Math.floor(totalMinutes / 60) % 24).padStart(2, '0')
     const mm = String(totalMinutes % 60).padStart(2, '0')
@@ -93,8 +94,13 @@ function excelTimeToHm(value: unknown): string {
   }
   const s = String(value).trim()
   const m = s.match(/^(\d{1,2}):(\d{2})/)
-  if (m) return `${m[1].padStart(2, '0')}:${m[2]}`
-  return s
+  if (m) {
+    const h = Number(m[1])
+    const min = Number(m[2])
+    if (h > 23 || min > 59) return ''
+    return `${m[1].padStart(2, '0')}:${m[2]}`
+  }
+  return ''
 }
 
 function asType(value: unknown): ItemType {
@@ -134,11 +140,16 @@ export function parseTripWorkbook(data: ArrayBuffer): {
     }
   }
 
+  const startDate =
+    excelDateToIso(metaMap.start_date) || new Date().toISOString().slice(0, 10)
+  let endDate = excelDateToIso(metaMap.end_date) || startDate
+  if (endDate < startDate) endDate = startDate
+
   const meta: TripMeta = {
-    name: metaMap.name || 'Imported trip',
-    startDate: excelDateToIso(metaMap.start_date) || new Date().toISOString().slice(0, 10),
-    endDate: excelDateToIso(metaMap.end_date) || metaMap.start_date || '',
-    homeCurrency: metaMap.home_currency || 'EUR',
+    name: (metaMap.name || 'Imported trip').trim() || 'Imported trip',
+    startDate,
+    endDate,
+    homeCurrency: normalizeCurrency(metaMap.home_currency || 'EUR'),
     timezoneNote: metaMap.timezone_note || 'All times are local',
     travelers: metaMap.travelers || '',
     notes: metaMap.notes || '',
@@ -147,6 +158,10 @@ export function parseTripWorkbook(data: ArrayBuffer): {
   const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(scheduleSheet, {
     defval: '',
   })
+  if (rawRows.length > MAX_SCHEDULE_ROWS) {
+    throw new Error('Schedule too large')
+  }
+
   const items: TripItem[] = []
 
   for (const raw of rawRows) {
@@ -159,42 +174,55 @@ export function parseTripWorkbook(data: ArrayBuffer): {
     const date = excelDateToIso(row.date)
     if (!title && !date) continue
 
-    items.push({
-      id: String(row.id || '').trim() || createId('X'),
-      type: asType(row.type),
-      title: title || 'Untitled',
-      place: String(row.place ?? ''),
-      city: String(row.city ?? ''),
-      date: date || meta.startDate,
-      endDate: excelDateToIso(row.end_date),
-      start: excelTimeToHm(row.start),
-      end: excelTimeToHm(row.end),
-      from: String(row.from ?? ''),
-      to: String(row.to ?? ''),
-      confirm: String(row.confirm ?? ''),
-      cost: parseNumber(row.cost),
-      currency: String(row.currency ?? ''),
-      status: asStatus(row.status),
-      notes: String(row.notes ?? ''),
-      url: String(row.url ?? ''),
-      tags: parseTags(row.tags),
-      lat: parseNumber(row.lat),
-      lon: parseNumber(row.lon),
-      latTo: parseNumber(row.lat_to),
-      lonTo: parseNumber(row.lon_to),
-      wikidata: String(row.wikidata ?? ''),
-      osmId: String(row.osm_id ?? ''),
-      geocodeQuery: String(row.geocode_query ?? ''),
-      updatedAt: String(row.updated_at ?? ''),
-      enrichmentSummary: '',
-      enrichmentImage: '',
-      enrichmentSource: '',
-      routeCoords: [],
-      source: 'excel',
-    })
+    const rowDate = date || meta.startDate
+    const rowEnd = sanitizeEndDate(rowDate, excelDateToIso(row.end_date))
+    const cost = parseNonNegativeNumber(row.cost)
+
+    try {
+      items.push(
+        sanitizeTripItem({
+          id: String(row.id || '').trim() || createId('X'),
+          type: asType(row.type),
+          title: title || 'Untitled',
+          place: String(row.place ?? ''),
+          city: String(row.city ?? ''),
+          date: rowDate,
+          endDate: rowEnd,
+          start: excelTimeToHm(row.start),
+          end: excelTimeToHm(row.end),
+          from: String(row.from ?? ''),
+          to: String(row.to ?? ''),
+          confirm: String(row.confirm ?? ''),
+          cost,
+          currency: normalizeCurrency(String(row.currency ?? meta.homeCurrency)),
+          status: asStatus(row.status),
+          notes: String(row.notes ?? ''),
+          url: String(row.url ?? ''),
+          tags: parseTags(row.tags),
+          lat: parseLat(row.lat),
+          lon: parseLon(row.lon),
+          latTo: parseLat(row.lat_to),
+          lonTo: parseLon(row.lon_to),
+          wikidata: String(row.wikidata ?? ''),
+          osmId: String(row.osm_id ?? ''),
+          geocodeQuery: String(row.geocode_query ?? ''),
+          updatedAt: String(row.updated_at ?? ''),
+          enrichmentSummary: '',
+          enrichmentImage: '',
+          enrichmentSource: '',
+          routeCoords: [],
+          source: 'excel',
+        }),
+      )
+    } catch {
+      // skip invalid rows (allowlist)
+    }
   }
 
-  return { meta, items: sortItems(items) }
+  return {
+    meta: sanitizeTripMeta(meta),
+    items: sortItems(items),
+  }
 }
 
 function itemToRow(item: TripItem): Record<string, string | number | null> {

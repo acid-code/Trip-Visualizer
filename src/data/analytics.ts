@@ -1,13 +1,17 @@
 import type { TripItem, TripMeta } from '../domain/types'
 import { TYPE_COLORS } from '../domain/types'
 import { convertAmount, normalizeCurrency, type FxRates } from './fx'
+import { isIsoDate } from './validate'
 
 export function nightsPerCity(items: TripItem[]): { city: string; nights: number }[] {
   const map = new Map<string, number>()
   for (const item of items) {
-    if (item.type !== 'hotel' || !item.city || !item.date || !item.endDate) continue
+    if (item.type !== 'hotel' || !item.city || !isIsoDate(item.date) || !isIsoDate(item.endDate)) {
+      continue
+    }
     const start = new Date(item.date + 'T00:00:00')
     const end = new Date(item.endDate + 'T00:00:00')
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue
     const nights = Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000))
     map.set(item.city, (map.get(item.city) ?? 0) + nights)
   }
@@ -40,7 +44,7 @@ export function spendSummary(
   let skipped = 0
 
   for (const item of items) {
-    if (item.cost == null || Number.isNaN(item.cost) || item.status === 'cancelled') continue
+    if (item.cost == null || !Number.isFinite(item.cost) || item.status === 'cancelled') continue
     if (item.tags?.includes('placeholder')) continue
 
     const cur = normalizeCurrency(item.currency, homeCurrency)
@@ -74,7 +78,7 @@ export function spendSummary(
 export function costsByType(items: TripItem[], homeCurrency: string) {
   const map = new Map<string, number>()
   for (const item of items) {
-    if (item.cost == null || item.status === 'cancelled') continue
+    if (item.cost == null || !Number.isFinite(item.cost) || item.status === 'cancelled') continue
     if (item.tags?.includes('placeholder')) continue
     map.set(item.type, (map.get(item.type) ?? 0) + item.cost)
   }
@@ -103,19 +107,20 @@ export function typeMix(items: TripItem[]) {
 
 export function tripDays(meta: TripMeta, items: TripItem[]): string[] {
   const dates = new Set<string>()
-  if (meta.startDate) dates.add(meta.startDate)
-  if (meta.endDate) dates.add(meta.endDate)
+  if (isIsoDate(meta.startDate)) dates.add(meta.startDate)
+  if (isIsoDate(meta.endDate)) dates.add(meta.endDate)
   for (const item of items) {
-    if (item.date) dates.add(item.date)
-    if (item.endDate) dates.add(item.endDate)
+    if (isIsoDate(item.date)) dates.add(item.date)
+    if (isIsoDate(item.endDate)) dates.add(item.endDate)
   }
   return [...dates].sort()
 }
 
 export function dayIndex(meta: TripMeta, date: string): number {
-  if (!meta.startDate || !date) return 0
+  if (!isIsoDate(meta.startDate) || !isIsoDate(date)) return 0
   const a = new Date(meta.startDate + 'T00:00:00').getTime()
   const b = new Date(date + 'T00:00:00').getTime()
+  if (Number.isNaN(a) || Number.isNaN(b)) return 0
   return Math.round((b - a) / 86400000) + 1
 }
 
@@ -145,7 +150,7 @@ export function stepOrderMap(
 
 export function totalCost(items: TripItem[]): number {
   return items.reduce((sum, i) => {
-    if (i.cost == null || i.status === 'cancelled') return sum
+    if (i.cost == null || !Number.isFinite(i.cost) || i.status === 'cancelled') return sum
     if (i.tags?.includes('placeholder')) return sum
     return sum + i.cost
   }, 0)

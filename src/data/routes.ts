@@ -1,6 +1,7 @@
 import type { TripItem } from '../domain/types'
 import { sortItems } from './db'
 import { getCachedRoute, routeCacheKey, setCachedRoute } from './routeCache'
+import { isValidCoord } from './validate'
 
 const OSRM_DRIVE = 'https://router.project-osrm.org/route/v1/driving'
 const OSRM_FOOT = 'https://router.project-osrm.org/route/v1/foot'
@@ -17,7 +18,7 @@ export type RouteConnector = {
 }
 
 function pointOf(item: TripItem): { lat: number; lon: number } | null {
-  if (item.lat != null && item.lon != null) return { lat: item.lat, lon: item.lon }
+  if (isValidCoord(item.lat, item.lon)) return { lat: item.lat!, lon: item.lon! }
   return null
 }
 
@@ -33,11 +34,11 @@ function anchorForDaySequence(
     item.type === 'ferry' ||
     item.type === 'drive'
   ) {
-    if (role === 'arrive' && item.latTo != null && item.lonTo != null) {
-      return { lat: item.latTo, lon: item.lonTo }
+    if (role === 'arrive' && isValidCoord(item.latTo, item.lonTo)) {
+      return { lat: item.latTo!, lon: item.lonTo! }
     }
-    if (role === 'depart' && item.lat != null && item.lon != null) {
-      return { lat: item.lat, lon: item.lon }
+    if (role === 'depart' && isValidCoord(item.lat, item.lon)) {
+      return { lat: item.lat!, lon: item.lon! }
     }
   }
   return pointOf(item)
@@ -81,10 +82,8 @@ export async function hydrateDriveRoutes(
     (i) =>
       i.type === 'drive' &&
       i.status !== 'cancelled' &&
-      i.lat != null &&
-      i.lon != null &&
-      i.latTo != null &&
-      i.lonTo != null &&
+      isValidCoord(i.lat, i.lon) &&
+      isValidCoord(i.latTo, i.lonTo) &&
       (!i.routeCoords || i.routeCoords.length < 2),
   )
   if (!drives.length) return items

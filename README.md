@@ -73,6 +73,18 @@ Optional later: set Cesium ion / Google keys in the app’s **Data** panel (stor
 
 **Note:** IndexedDB is per browser/device. Deploying does not sync trips across phones unless you export/import Excel (or add your own sync later).
 
+## Security (OWASP WSTG–aligned)
+
+This is a **local-first SPA** (no multi-user API). Controls that apply:
+
+| Control | How it’s handled |
+| --- | --- |
+| **WSTG-INPV** | Zod allowlist schemas on trip meta/items; Excel rows sanitized; size/row caps; https-only media URLs |
+| **WSTG-ATHN/ATHZ** | No shared backend — data stays in the browser’s IndexedDB (no IDOR across users) |
+| **WSTG-CRYP** | No hardcoded API keys; optional Maps/Ion tokens are password-masked and stored locally only |
+| **WSTG-ERRH** | Generic UI errors; detailed logs only in local dev (secrets redacted) |
+| **WSTG-CONF** | Vercel headers: CSP, HSTS, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy, Permissions-Policy |
+
 ## Stack
 
 - Vite + React 19 + TypeScript + Tailwind 4

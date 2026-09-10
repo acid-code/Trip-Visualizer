@@ -34,6 +34,21 @@ import type { MapStack } from './globe/viewer'
 import { EXAMPLE_TRIP_ID } from './data/examples/france-south-loop'
 import { downloadPolarstepsJson } from './data/polarsteps'
 import { ensureDayStartBases, deleteStepAndPrune } from './data/dayBases'
+import { normalizeCurrency } from './data/fx'
+import {
+  isIsoDate,
+  isValidCoord,
+  requireIsoDate,
+  sanitizeMetaDates,
+  todayIso,
+} from './data/validate'
+import {
+  logClientError,
+  MAX_IMPORT_BYTES,
+  publicErrorMessage,
+  sanitizeSecretInput,
+} from './data/security'
+import { sanitizeTripRecord } from './domain/types'
 
 type NavTab = 'timeline' | 'charts' | 'settings'
 type LowerMode = 'none' | 'detail' | 'insert'
@@ -99,34 +114,55 @@ export default function App() {
   }
 
   async function onImportFile(file: File) {
-    const buf = await file.arrayBuffer()
-    const { meta, items } = parseTripWorkbook(buf)
-    const withBases = ensureDayStartBases(meta, items)
-    setStatus(`Imported “${meta.name}” · looking up places on the map…`)
-    const pinned = await pinTripItemsOnMap(withBases, (done, total) => {
-      setStatus(`Pinning places ${done}/${total}…`)
-    })
-    const pinnedCount = pinned.filter(
-      (item, i) =>
-        (item.lat != null && item.lon != null && withBases[i]?.lat == null) ||
-        (item.latTo != null && withBases[i]?.latTo == null),
-    ).length
-    const trip: TripRecord = {
-      id: createId('TRIP'),
-      meta,
-      items: pinned,
-      isExample: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+    try {
+      if (file.size > MAX_IMPORT_BYTES) {
+        setStatus('Import failed — file is too large (max 5 MB)')
+        return
+      }
+      const buf = await file.arrayBuffer()
+      const { meta, items } = parseTripWorkbook(buf)
+      const dates = sanitizeMetaDates(meta.startDate, meta.endDate)
+      const safeMeta = {
+        ...meta,
+        name: meta.name.trim() || 'Imported trip',
+        ...dates,
+      }
+      const withBases = ensureDayStartBases(safeMeta, items)
+      setStatus(`Imported “${safeMeta.name}” · looking up places on the map…`)
+      const pinned = await pinTripItemsOnMap(withBases, (done, total) => {
+        setStatus(`Pinning places ${done}/${total}…`)
+      })
+      const pinnedCount = pinned.filter(
+        (item, i) =>
+          (isValidCoord(item.lat, item.lon) && !isValidCoord(withBases[i]?.lat, withBases[i]?.lon)) ||
+          (isValidCoord(item.latTo, item.lonTo) &&
+            !isValidCoord(withBases[i]?.latTo, withBases[i]?.lonTo)),
+      ).length
+      const trip = sanitizeTripRecord({
+        id: createId('TRIP'),
+        meta: safeMeta,
+        items: pinned,
+        isExample: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+      await saveTrip(trip)
+      await refresh()
+      setActiveId(trip.id)
+      setStatus(
+        pinnedCount > 0
+          ? `Imported “${safeMeta.name}” · ${pinnedCount} place${pinnedCount === 1 ? '' : 's'} pinned on the map`
+          : `Imported “${safeMeta.name}”`,
+      )
+    } catch (err) {
+      logClientError('import', err)
+      setStatus(
+        publicErrorMessage(
+          err,
+          'Import failed — use a Trip Tracker Excel with a Schedule sheet',
+        ),
+      )
     }
-    await saveTrip(trip)
-    await refresh()
-    setActiveId(trip.id)
-    setStatus(
-      pinnedCount > 0
-        ? `Imported “${meta.name}” · ${pinnedCount} place${pinnedCount === 1 ? '' : 's'} pinned on the map`
-        : `Imported “${meta.name}”`,
-    )
   }
 
   async function onExport() {
@@ -276,15 +312,19 @@ export default function App() {
 
   async function addDay() {
     if (!active) return
-    const base = active.meta.endDate || active.meta.startDate
+    const base = requireIsoDate(
+      active.meta.endDate || active.meta.startDate,
+      todayIso(),
+    )
     const d = new Date(base + 'T12:00:00')
+    if (Number.isNaN(d.getTime())) {
+      setStatus('Could not add day — fix the trip start/end dates in Data')
+      return
+    }
     d.setDate(d.getDate() + 1)
     const nextEnd = d.toISOString().slice(0, 10)
-    const meta = {
-      ...active.meta,
-      endDate: nextEnd,
-      startDate: active.meta.startDate || nextEnd,
-    }
+    const dates = sanitizeMetaDates(active.meta.startDate || base, nextEnd)
+    const meta = { ...active.meta, ...dates }
     const items = ensureDayStartBases(meta, active.items)
     await persist({ ...active, meta, items })
     setDayFilter(nextEnd)
@@ -322,10 +362,9 @@ export default function App() {
       setLowerMode('detail')
       setDetailExpanded(true)
       setPanelOpen(true)
-      const onMap =
-        pinned.lat != null && pinned.lon != null
-          ? ' · on the map'
-          : ' · no pin yet (check the address)'
+      const onMap = isValidCoord(pinned.lat, pinned.lon)
+        ? ' · on the map'
+        : ' · no pin yet (check the address)'
       setStatus(`Added “${pinned.title}”${onMap}`)
       await buildRoutes(next)
     })()
@@ -485,7 +524,7 @@ export default function App() {
                     onHomeCurrencyChange={(code) =>
                       void updateActive((t) => ({
                         ...t,
-                        meta: { ...t.meta, homeCurrency: code },
+                        meta: { ...t.meta, homeCurrency: normalizeCurrency(code) },
                       }))
                     }
                   />
@@ -780,23 +819,32 @@ function DataPanel({
           Google Maps key (optional, for photoreal 3D)
           <input
             className="mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm text-stone-800"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
             value={googleKey}
-            onChange={(e) => setGoogleKey(e.target.value)}
+            onChange={(e) => setGoogleKey(sanitizeSecretInput(e.target.value))}
             onBlur={() => void setSetting('googleMapsKey', googleKey)}
-            placeholder="AIza…"
+            placeholder="Paste key…"
           />
+          <span className="mt-1 block text-[10px] text-stone-400">
+            Stored only in this browser’s IndexedDB — never committed or sent to our servers.
+          </span>
         </label>
         <label className="mt-3 block text-xs text-stone-500">
           Cesium ion token (optional terrain elevation)
           <input
             className="mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm text-stone-800"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
             value={ionToken}
-            onChange={(e) => setIonToken(e.target.value)}
+            onChange={(e) => setIonToken(sanitizeSecretInput(e.target.value))}
             onBlur={() => void setSetting('cesiumIonToken', ionToken)}
-            placeholder="eyJ…"
+            placeholder="Paste token…"
           />
           <span className="mt-1 block text-[10px] text-stone-400">
-            Free at cesium.com/ion — adds real terrain height to the globe.
+            Free at cesium.com/ion — stored locally in this browser only.
           </span>
         </label>
       </div>
@@ -809,12 +857,20 @@ function DataPanel({
           <input
             className="mb-2 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5"
             value={active.meta.name}
-            onChange={(e) =>
+            onChange={(e) => {
+              const name = e.target.value
               void updateActive((t) => ({
                 ...t,
-                meta: { ...t.meta, name: e.target.value },
+                meta: { ...t.meta, name },
               }))
-            }
+            }}
+            onBlur={(e) => {
+              const name = e.target.value.trim() || 'Untitled trip'
+              void updateActive((t) => ({
+                ...t,
+                meta: { ...t.meta, name },
+              }))
+            }}
           />
           <div className="mb-2 grid grid-cols-2 gap-2">
             <label className="block text-xs text-stone-500">
@@ -822,13 +878,16 @@ function DataPanel({
               <input
                 className="mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm"
                 type="date"
-                value={active.meta.startDate}
-                onChange={(e) =>
+                value={isIsoDate(active.meta.startDate) ? active.meta.startDate : ''}
+                required
+                onChange={(e) => {
+                  if (!e.target.value) return
+                  const dates = sanitizeMetaDates(e.target.value, active.meta.endDate)
                   void updateActive((t) => ({
                     ...t,
-                    meta: { ...t.meta, startDate: e.target.value },
+                    meta: { ...t.meta, ...dates },
                   }))
-                }
+                }}
               />
             </label>
             <label className="block text-xs text-stone-500">
@@ -836,13 +895,19 @@ function DataPanel({
               <input
                 className="mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm"
                 type="date"
-                value={active.meta.endDate}
-                onChange={(e) =>
+                value={isIsoDate(active.meta.endDate) ? active.meta.endDate : ''}
+                min={
+                  isIsoDate(active.meta.startDate) ? active.meta.startDate : undefined
+                }
+                required
+                onChange={(e) => {
+                  if (!e.target.value) return
+                  const dates = sanitizeMetaDates(active.meta.startDate, e.target.value)
                   void updateActive((t) => ({
                     ...t,
-                    meta: { ...t.meta, endDate: e.target.value },
+                    meta: { ...t.meta, ...dates },
                   }))
-                }
+                }}
               />
             </label>
           </div>
@@ -857,7 +922,10 @@ function DataPanel({
               onChange={(e) =>
                 void updateActive((t) => ({
                   ...t,
-                  meta: { ...t.meta, homeCurrency: e.target.value },
+                  meta: {
+                    ...t.meta,
+                    homeCurrency: normalizeCurrency(e.target.value),
+                  },
                 }))
               }
             >

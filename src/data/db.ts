@@ -1,5 +1,14 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
-import type { TripItem, TripMeta, TripRecord } from '../domain/types'
+import {
+  sanitizeTripRecord,
+  type TripItem,
+  type TripMeta,
+  type TripRecord,
+} from '../domain/types'
+import {
+  isAllowedSettingKey,
+  sanitizeSecretInput,
+} from './security'
 import {
   EXAMPLE_TRIP_ID,
   exampleItems,
@@ -34,30 +43,56 @@ function db() {
 }
 
 export function createId(prefix = 'T'): string {
-  return `${prefix}${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+  const bytes = new Uint8Array(6)
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes)
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  const rand = [...bytes]
+    .map((b) => b.toString(36).padStart(2, '0'))
+    .join('')
+    .slice(0, 8)
+    .toUpperCase()
+  return `${prefix}${rand}`
 }
 
 export function nowIso(): string {
   return new Date().toISOString()
 }
 
+export async function getTrip(id: string): Promise<TripRecord | undefined> {
+  const database = await db()
+  const row = await database.get('trips', id)
+  if (!row) return undefined
+  try {
+    return sanitizeTripRecord(row)
+  } catch {
+    return undefined
+  }
+}
+
 export async function listTrips(): Promise<TripRecord[]> {
   const database = await db()
   const all = await database.getAll('trips')
-  return all.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-}
-
-export async function getTrip(id: string): Promise<TripRecord | undefined> {
-  const database = await db()
-  return database.get('trips', id)
+  const safe: TripRecord[] = []
+  for (const row of all) {
+    try {
+      safe.push(sanitizeTripRecord(row))
+    } catch {
+      // skip corrupt records
+    }
+  }
+  return safe.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
 export async function saveTrip(trip: TripRecord): Promise<void> {
   const database = await db()
-  await database.put('trips', {
+  const safe = sanitizeTripRecord({
     ...trip,
     updatedAt: nowIso(),
   })
+  await database.put('trips', safe)
 }
 
 export async function deleteTrip(id: string): Promise<void> {
@@ -131,14 +166,24 @@ export async function createBlankTrip(): Promise<TripRecord> {
 }
 
 export async function getSetting(key: string): Promise<string | undefined> {
+  if (!isAllowedSettingKey(key)) return undefined
   const database = await db()
   const row = await database.get('settings', key)
   return row?.value
 }
 
 export async function setSetting(key: string, value: string): Promise<void> {
+  if (!isAllowedSettingKey(key)) return
   const database = await db()
-  await database.put('settings', { key, value })
+  let stored: string
+  if (key === 'googleMapsKey' || key === 'cesiumIonToken') {
+    stored = sanitizeSecretInput(value)
+  } else if (key === 'mapStack') {
+    stored = ['esri', 'osm', 'google3d'].includes(value) ? value : 'esri'
+  } else {
+    stored = String(value ?? '').slice(0, 2048)
+  }
+  await database.put('settings', { key, value: stored })
 }
 
 export function sortItems(items: TripItem[]): TripItem[] {

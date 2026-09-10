@@ -2,6 +2,17 @@ import type { TripItem } from '../domain/types'
 import { ITEM_STATUSES, ITEM_TYPES, TYPE_COLORS } from '../domain/types'
 import { pinItemOnMap } from '../data/enrichment'
 import { COMMON_CURRENCIES, normalizeCurrency } from '../data/fx'
+import { safeHttpsUrl } from '../data/security'
+import {
+  isIsoDate,
+  parseLat,
+  parseLon,
+  parseNonNegativeNumber,
+  requireIsoDate,
+  sanitizeEndDate,
+  sanitizeTime,
+  sanitizeTitle,
+} from '../data/validate'
 
 type Props = {
   item: TripItem | null
@@ -19,7 +30,25 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
       [key]: value,
       source: item.source === 'example' ? 'example' : 'app',
     }
-    // Filling in a day-base placeholder clears the empty marker
+
+    if (key === 'title') {
+      next.title = sanitizeTitle(String(value), item.title || 'Untitled')
+    }
+    if (key === 'date') {
+      const d = requireIsoDate(String(value), item.date)
+      next.date = d
+      next.endDate = sanitizeEndDate(d, next.endDate || '')
+    }
+    if (key === 'endDate') {
+      next.endDate = sanitizeEndDate(next.date, String(value ?? ''))
+    }
+    if (key === 'start' || key === 'end') {
+      next[key] = sanitizeTime(String(value ?? '')) as TripItem[typeof key]
+    }
+    if (key === 'currency') {
+      next.currency = normalizeCurrency(String(value ?? 'EUR'))
+    }
+
     if (
       next.tags?.includes('placeholder') &&
       (key === 'title' || key === 'place' || key === 'city' || key === 'type' || key === 'lat')
@@ -28,12 +57,24 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
         (typeof value === 'string' && value.trim() && value !== item.title) ||
         (key === 'type' && value !== 'hotel') ||
         (key === 'lat' && value != null)
-      if (meaningful || (key === 'place' && String(value).trim()) || (key === 'city' && String(value).trim())) {
+      if (
+        meaningful ||
+        (key === 'place' && String(value).trim()) ||
+        (key === 'city' && String(value).trim())
+      ) {
         next.tags = next.tags.filter((t) => t !== 'placeholder')
       }
     }
     onChange(next)
   }
+
+  const canPin = Boolean(
+    item.place?.trim() ||
+      item.from?.trim() ||
+      item.to?.trim() ||
+      item.geocodeQuery?.trim() ||
+      (item.city?.trim() && item.title?.trim()),
+  )
 
   return (
     <div className="space-y-3">
@@ -60,20 +101,31 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
         </button>
       </div>
 
-      {item.enrichmentImage ? (
+      {safeHttpsUrl(item.enrichmentImage) ? (
         <img
-          src={item.enrichmentImage}
+          src={safeHttpsUrl(item.enrichmentImage)}
           alt=""
+          referrerPolicy="no-referrer"
           className="h-36 w-full rounded-lg object-cover"
         />
       ) : null}
 
       <div className="grid grid-cols-2 gap-2">
-        <Field label="Title">
-          <input className={inputCls} value={item.title} onChange={(e) => set('title', e.target.value)} />
+        <Field label="Title *">
+          <input
+            className={inputCls}
+            value={item.title}
+            required
+            onChange={(e) => set('title', e.target.value)}
+            onBlur={(e) => set('title', sanitizeTitle(e.target.value, item.title))}
+          />
         </Field>
         <Field label="Type">
-          <select className={inputCls} value={item.type} onChange={(e) => set('type', e.target.value as TripItem['type'])}>
+          <select
+            className={inputCls}
+            value={item.type}
+            onChange={(e) => set('type', e.target.value as TripItem['type'])}
+          >
             {ITEM_TYPES.map((t) => (
               <option key={t} value={t}>
                 {t}
@@ -81,35 +133,82 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             ))}
           </select>
         </Field>
-        <Field label="Date">
-          <input className={inputCls} type="date" value={item.date} onChange={(e) => set('date', e.target.value)} />
+        <Field label="Date *">
+          <input
+            className={inputCls}
+            type="date"
+            value={isIsoDate(item.date) ? item.date : ''}
+            required
+            onChange={(e) => {
+              if (!e.target.value) return
+              set('date', e.target.value)
+            }}
+          />
         </Field>
         <Field label="End date">
-          <input className={inputCls} type="date" value={item.endDate || ''} onChange={(e) => set('endDate', e.target.value)} />
+          <input
+            className={inputCls}
+            type="date"
+            value={item.endDate && isIsoDate(item.endDate) ? item.endDate : ''}
+            min={isIsoDate(item.date) ? item.date : undefined}
+            onChange={(e) => set('endDate', e.target.value)}
+          />
         </Field>
         <Field label="Start">
-          <input className={inputCls} value={item.start} onChange={(e) => set('start', e.target.value)} placeholder="HH:MM" />
+          <input
+            className={inputCls}
+            value={item.start}
+            onChange={(e) => set('start', e.target.value)}
+            onBlur={(e) => set('start', sanitizeTime(e.target.value))}
+            placeholder="HH:MM"
+          />
         </Field>
         <Field label="End">
-          <input className={inputCls} value={item.end} onChange={(e) => set('end', e.target.value)} placeholder="HH:MM" />
+          <input
+            className={inputCls}
+            value={item.end}
+            onChange={(e) => set('end', e.target.value)}
+            onBlur={(e) => set('end', sanitizeTime(e.target.value))}
+            placeholder="HH:MM"
+          />
         </Field>
         <Field label="Address / Maps paste">
-          <input className={inputCls} value={item.place} onChange={(e) => set('place', e.target.value)} />
+          <input
+            className={inputCls}
+            value={item.place}
+            onChange={(e) => set('place', e.target.value)}
+          />
         </Field>
         <Field label="City">
-          <input className={inputCls} value={item.city} onChange={(e) => set('city', e.target.value)} />
+          <input
+            className={inputCls}
+            value={item.city}
+            onChange={(e) => set('city', e.target.value)}
+          />
         </Field>
         <Field label="From">
-          <input className={inputCls} value={item.from} onChange={(e) => set('from', e.target.value)} />
+          <input
+            className={inputCls}
+            value={item.from}
+            onChange={(e) => set('from', e.target.value)}
+          />
         </Field>
         <Field label="To">
           <input className={inputCls} value={item.to} onChange={(e) => set('to', e.target.value)} />
         </Field>
         <Field label="Confirm">
-          <input className={inputCls} value={item.confirm} onChange={(e) => set('confirm', e.target.value)} />
+          <input
+            className={inputCls}
+            value={item.confirm}
+            onChange={(e) => set('confirm', e.target.value)}
+          />
         </Field>
         <Field label="Status">
-          <select className={inputCls} value={item.status} onChange={(e) => set('status', e.target.value as TripItem['status'])}>
+          <select
+            className={inputCls}
+            value={item.status}
+            onChange={(e) => set('status', e.target.value as TripItem['status'])}
+          >
             {ITEM_STATUSES.map((s) => (
               <option key={s} value={s}>
                 {s}
@@ -122,8 +221,9 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             className={inputCls}
             type="number"
             step="any"
+            min="0"
             value={item.cost ?? ''}
-            onChange={(e) => set('cost', e.target.value === '' ? null : Number(e.target.value))}
+            onChange={(e) => set('cost', parseNonNegativeNumber(e.target.value))}
           />
         </Field>
         <Field label="Currency">
@@ -144,8 +244,10 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             className={inputCls}
             type="number"
             step="any"
+            min={-90}
+            max={90}
             value={item.lat ?? ''}
-            onChange={(e) => set('lat', e.target.value === '' ? null : Number(e.target.value))}
+            onChange={(e) => set('lat', parseLat(e.target.value))}
           />
         </Field>
         <Field label="Lon">
@@ -153,8 +255,10 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             className={inputCls}
             type="number"
             step="any"
+            min={-180}
+            max={180}
             value={item.lon ?? ''}
-            onChange={(e) => set('lon', e.target.value === '' ? null : Number(e.target.value))}
+            onChange={(e) => set('lon', parseLon(e.target.value))}
           />
         </Field>
       </div>
@@ -163,7 +267,8 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
       </p>
       <button
         type="button"
-        className="w-full rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-medium text-orange-900"
+        disabled={!canPin}
+        className="w-full rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-medium text-orange-900 disabled:cursor-not-allowed disabled:opacity-50"
         onClick={() => {
           void (async () => {
             const pinned = await pinItemOnMap(item)
@@ -183,7 +288,9 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
       <div className="flex gap-2">
         <button
           className="rounded-lg bg-rose-600/90 px-3 py-2 text-sm text-white"
-          onClick={() => onDelete(item.id)}
+          onClick={() => {
+            if (window.confirm(`Delete “${item.title}”?`)) onDelete(item.id)
+          }}
         >
           Delete
         </button>
@@ -216,7 +323,6 @@ const inputCls =
 
 function currencyChoices(current?: string) {
   const set = new Set<string>([...COMMON_CURRENCIES])
-  const n = normalizeCurrency(current || 'EUR')
-  set.add(n)
+  set.add(normalizeCurrency(current || 'EUR'))
   return [...set]
 }

@@ -117,6 +117,7 @@ export function convertAmount(
   toRaw: string,
   rates: FxRates,
 ): number | null {
+  if (!Number.isFinite(amount)) return null
   const from = normalizeCurrency(fromRaw)
   const to = normalizeCurrency(toRaw)
   if (from === to) return amount
@@ -127,5 +128,6 @@ export function convertAmount(
 
   // amount_from → EUR → to
   const inEur = amount / fromRate
-  return inEur * toRate
+  const out = inEur * toRate
+  return Number.isFinite(out) ? out : null
 }
