@@ -205,6 +205,7 @@ export function GlobeView({
     let pressTimer: ReturnType<typeof setTimeout> | null = null
     let pressStart: { x: number; y: number } | null = null
     let longPressFired = false
+    let pressMoved = false
 
     const clearPress = () => {
       if (pressTimer) clearTimeout(pressTimer)
@@ -275,13 +276,14 @@ export function GlobeView({
 
       handler.setInputAction((movement: { position: Cartesian2 }) => {
         longPressFired = false
+        pressMoved = false
         pressStart = { x: movement.position.x, y: movement.position.y }
         if (pressTimer) clearTimeout(pressTimer)
         pressTimer = setTimeout(() => {
           pressTimer = null
           const v = viewerRef.current
           const start = pressStart
-          if (!v || !start) return
+          if (!v || !start || pressMoved) return
           const pos = pickScreenLonLat(v, start.x, start.y)
           if (!pos) return
           longPressFired = true
@@ -302,7 +304,10 @@ export function GlobeView({
         if (!pressStart) return
         const dx = movement.endPosition.x - pressStart.x
         const dy = movement.endPosition.y - pressStart.y
-        if (dx * dx + dy * dy > MOVE_CANCEL_PX * MOVE_CANCEL_PX) clearPress()
+        if (dx * dx + dy * dy > MOVE_CANCEL_PX * MOVE_CANCEL_PX) {
+          pressMoved = true
+          clearPress()
+        }
       }, ScreenSpaceEventType.MOUSE_MOVE)
 
       handler.setInputAction(() => clearPress(), ScreenSpaceEventType.LEFT_UP)
@@ -310,6 +315,11 @@ export function GlobeView({
       handler.setInputAction((movement: { position: Cartesian2 }) => {
         if (longPressFired) {
           longPressFired = false
+          return
+        }
+        // Pan / slide — don't treat as a tap (keeps temp pin, no select)
+        if (pressMoved) {
+          pressMoved = false
           return
         }
         const entity = preferMapEntity(viewer!, movement.position)

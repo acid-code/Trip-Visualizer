@@ -1128,6 +1128,7 @@ export default function App() {
             // Keep Explore open on empty-map short press; close via tongues, step pin, X, or search
             if (exploreOpen) return
             setPanelOpen(false)
+            if (tempPin) clearTempPin()
           }}
           onLongPress={(pos) => {
             setPanelOpen(false)
