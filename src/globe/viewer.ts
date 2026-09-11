@@ -6,9 +6,10 @@ import {
   Cesium3DTileset,
   Color,
   DistanceDisplayCondition,
+  EllipsoidTerrainProvider,
   HeightReference,
   HorizontalOrigin,
-  Ion,
+  ImageryLayer,
   KeyboardEventModifier,
   LabelStyle,
   NearFarScalar,
@@ -16,7 +17,6 @@ import {
   UrlTemplateImageryProvider,
   VerticalOrigin,
   Viewer,
-  createWorldTerrainAsync,
   Math as CesiumMath,
   BoundingSphere,
   HeadingPitchRange,
@@ -38,12 +38,30 @@ export type MapStack = 'esri' | 'osm' | 'google3d'
 
 let googleTileset: Cesium3DTileset | null = null
 
+function osmLayer(): ImageryLayer {
+  return new ImageryLayer(
+    new OpenStreetMapImageryProvider({
+      url: 'https://tile.openstreetmap.org/',
+    }),
+  )
+}
+
+function esriLayer(): ImageryLayer {
+  return new ImageryLayer(
+    new UrlTemplateImageryProvider({
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      maximumLevel: 19,
+      credit: 'Esri / Maxar / Earthstar Geographics',
+    }),
+  )
+}
+
 export async function createTripViewer(
   container: HTMLElement,
-  opts?: { ionToken?: string },
+  _opts?: { ionToken?: string },
 ): Promise<Viewer> {
-  if (opts?.ionToken) Ion.defaultAccessToken = opts.ionToken
-
+  // Use Cesium’s normal baseLayer path (NOT baseLayer:false + removeAll).
+  // That combo was leaving a black void with only entity points visible.
   const viewer = new Viewer(container, {
     animation: false,
     timeline: false,
@@ -55,31 +73,34 @@ export async function createTripViewer(
     fullscreenButton: false,
     infoBox: false,
     selectionIndicator: true,
-    baseLayer: false,
-    // Keep previously visited tiles longer so revisiting areas feels instant
+    terrainProvider: new EllipsoidTerrainProvider(),
+    baseLayer: esriLayer(),
     requestRenderMode: false,
   })
 
-  // Larger imagery tile cache → faster when panning back to known areas
-  viewer.scene.globe.tileCacheSize = 2000
-  viewer.scene.globe.loadingDescendantLimit = 40
-  viewer.scene.globe.preloadSiblings = true
-  viewer.scene.globe.preloadAncestors = true
-  viewer.scene.fog.enabled = false
+  viewer.scene.globe.show = true
+  viewer.scene.globe.enableLighting = false
   viewer.scene.globe.depthTestAgainstTerrain = false
+  viewer.scene.fog.enabled = false
+  viewer.scene.globe.tileCacheSize = 2000
   viewer.camera.percentageChanged = 0.08
 
   configureTouchCameraControls(viewer)
 
-  await applyMapStack(viewer, 'esri')
+  // Known-good starting view (France / W Europe) before trip overview flies
+  viewer.camera.setView({
+    destination: Cartesian3.fromDegrees(2.5, 46.5, 1_800_000),
+  })
 
-  if (opts?.ionToken) {
+  // Resize after layout — 0×0 canvas at construct time also looks “black”
+  requestAnimationFrame(() => {
     try {
-      viewer.terrainProvider = await createWorldTerrainAsync()
+      viewer.resize()
+      viewer.scene.requestRender()
     } catch {
-      // keep ellipsoid
+      /* ignore */
     }
-  }
+  })
 
   return viewer
 }
@@ -152,21 +173,23 @@ export async function applyMapStack(
   stack: MapStack,
   googleKey?: string,
 ) {
-  viewer.imageryLayers.removeAll()
-
   if (googleTileset) {
-    viewer.scene.primitives.remove(googleTileset)
+    try {
+      viewer.scene.primitives.remove(googleTileset)
+    } catch {
+      /* ignore */
+    }
     googleTileset = null
   }
 
-  if (stack === 'osm') {
-    viewer.scene.globe.show = true
-    viewer.imageryLayers.addImageryProvider(
-      new OpenStreetMapImageryProvider({
-        url: 'https://tile.openstreetmap.org/',
-      }),
-    )
-    return
+  viewer.scene.globe.show = true
+
+  const next = stack === 'osm' ? osmLayer() : esriLayer()
+
+  // Swap without leaving zero layers (removeAll → black frame)
+  viewer.imageryLayers.add(next)
+  while (viewer.imageryLayers.length > 1) {
+    viewer.imageryLayers.remove(viewer.imageryLayers.get(0), true)
   }
 
   if (stack === 'google3d' && googleKey) {
@@ -175,32 +198,15 @@ export async function applyMapStack(
         `https://tile.googleapis.com/v1/3dtiles/root.json?key=${encodeURIComponent(googleKey)}`,
       )
       viewer.scene.primitives.add(googleTileset)
-      viewer.scene.globe.show = false
-      return
     } catch (err) {
       logClientError('google3d', err)
     }
   }
-
-  viewer.scene.globe.show = true
-  viewer.imageryLayers.addImageryProvider(
-    new UrlTemplateImageryProvider({
-      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      maximumLevel: 19,
-      credit: 'Esri / Maxar / Earthstar Geographics',
-    }),
-  )
 }
 
-/** Call when the user adds/changes a Cesium ion token for world terrain elevation. */
-export async function applyIonTerrain(viewer: Viewer, ionToken: string) {
-  if (!ionToken) return
-  Ion.defaultAccessToken = ionToken
-  try {
-    viewer.terrainProvider = await createWorldTerrainAsync()
-  } catch (err) {
-    logClientError('ion-terrain', err)
-  }
+/** Ion world terrain — intentionally no-op while diagnosing black-globe issues. */
+export async function applyIonTerrain(_viewer: Viewer, _ionToken: string) {
+  // Re-enable later: Ion.defaultAccessToken + createWorldTerrainAsync
 }
 
 export function clearTripEntities(viewer: Viewer) {
@@ -231,6 +237,14 @@ function midpointLonLat(
   return { lon, lat }
 }
 
+/** Midpoint along a [lat, lon] polyline (for overlay icons on routes). */
+export function routeMidpoint(
+  coords: [number, number][],
+): { lat: number; lon: number } | null {
+  const mid = midpointLonLat(coords)
+  return mid ? { lat: mid.lat, lon: mid.lon } : null
+}
+
 const SURFACE_H = 1.5
 
 function addSeqLabel(
@@ -255,7 +269,7 @@ function addSeqLabel(
       style: LabelStyle.FILL_AND_OUTLINE,
       verticalOrigin: VerticalOrigin.CENTER,
       horizontalOrigin: HorizontalOrigin.CENTER,
-      heightReference: HeightReference.CLAMP_TO_GROUND,
+      heightReference: HeightReference.NONE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
       showBackground: true,
       backgroundColor: color.withAlpha(0.9),
@@ -291,7 +305,7 @@ function addBillboard(
       color: opts.color,
       outlineColor: Color.WHITE,
       outlineWidth: selected ? 3 : 2,
-      heightReference: HeightReference.CLAMP_TO_GROUND,
+      heightReference: HeightReference.NONE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
       scaleByDistance: new NearFarScalar(5e3, 1.35, 2.5e6, 0.55),
     },
@@ -305,7 +319,7 @@ function addBillboard(
       verticalOrigin: VerticalOrigin.BOTTOM,
       horizontalOrigin: HorizontalOrigin.CENTER,
       pixelOffset: new Cartesian2(0, -14),
-      heightReference: HeightReference.CLAMP_TO_GROUND,
+      heightReference: HeightReference.NONE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
       showBackground: true,
       backgroundColor: Color.fromCssColorString('#fffaf3ee'),
@@ -602,6 +616,243 @@ function flyToLonLat(viewer: Viewer, lon: number, lat: number, range = 420) {
     duration: 0.85,
     offset: new HeadingPitchRange(0, CesiumMath.toRadians(-30), range),
   })
+}
+
+export function flyToCoords(viewer: Viewer, lon: number, lat: number, range = 420) {
+  flyToLonLat(viewer, lon, lat, range)
+}
+
+/** Frame an entire drive/walk/transit path so the whole route is visible and centered. */
+export function flyToRouteCoords(viewer: Viewer, coords: [number, number][]) {
+  if (coords.length < 2) {
+    const only = coords[0]
+    if (only) flyToLonLat(viewer, only[1], only[0], 600)
+    return
+  }
+  const pts = coords.map(([lat, lon]) => Cartesian3.fromDegrees(lon, lat, 0))
+  const sphere = BoundingSphere.fromPoints(pts)
+  const range = Math.min(
+    Math.max(sphere.radius * 2.6, 900),
+    MAX_CAMERA_HEIGHT_M * 0.9,
+  )
+  viewer.camera.flyToBoundingSphere(sphere, {
+    duration: 1.15,
+    offset: new HeadingPitchRange(0, CesiumMath.toRadians(-38), range),
+  })
+}
+
+/** Lon/lat under a canvas CSS pixel (client coords relative to canvas). */
+export function pickScreenLonLat(
+  viewer: Viewer,
+  canvasX: number,
+  canvasY: number,
+): { lon: number; lat: number } | null {
+  const cartesian = viewer.camera.pickEllipsoid(
+    new Cartesian2(canvasX, canvasY),
+    viewer.scene.globe.ellipsoid,
+  )
+  if (!cartesian) return null
+  const carto = Cartographic.fromCartesian(cartesian)
+  const lat = CesiumMath.toDegrees(carto.latitude)
+  const lon = CesiumMath.toDegrees(carto.longitude)
+  if (!isValidCoord(lat, lon)) return null
+  return { lat, lon }
+}
+
+/** @deprecated use pickScreenLonLat — kept for call sites mid-refactor */
+export function pickCanvasCenterLonLat(
+  viewer: Viewer,
+): { lon: number; lat: number } | null {
+  const canvas = viewer.scene.canvas
+  return pickScreenLonLat(viewer, canvas.clientWidth / 2, canvas.clientHeight / 2)
+}
+
+export function clearTempEntities(viewer: Viewer) {
+  const remove = viewer.entities.values.filter((e) => String(e.id).startsWith('temp:'))
+  for (const e of remove) viewer.entities.remove(e)
+}
+
+function clearSelectedPathEntities(viewer: Viewer) {
+  const remove = viewer.entities.values.filter((e) => String(e.id).startsWith('sel:path'))
+  for (const e of remove) viewer.entities.remove(e)
+}
+
+/**
+ * Yellow glow along the chosen drive/walk path, with bright dots at start & end.
+ * Uses `sel:path*` ids so temp-pin sync does not wipe it.
+ */
+export function syncSelectedPathHighlight(
+  viewer: Viewer,
+  coords: [number, number][] | null,
+) {
+  clearSelectedPathEntities(viewer)
+  if (!coords || coords.length < 2) return
+
+  const glow = Color.fromCssColorString('#facc15')
+  const tip = Color.fromCssColorString('#fde68a')
+
+  viewer.entities.add({
+    id: 'sel:path:line',
+    polyline: {
+      positions: coords.map(([lat, lon]) =>
+        Cartesian3.fromDegrees(lon, lat, SURFACE_H + 0.5),
+      ),
+      width: 8,
+      clampToGround: false,
+      material: new PolylineGlowMaterialProperty({
+        glowPower: 0.35,
+        color: glow.withAlpha(0.95),
+      }),
+    },
+  })
+
+  const start = coords[0]!
+  const end = coords[coords.length - 1]!
+  for (const [key, pt] of [
+    ['start', start],
+    ['end', end],
+  ] as const) {
+    viewer.entities.add({
+      id: `sel:path:${key}`,
+      position: Cartesian3.fromDegrees(pt[1], pt[0], SURFACE_H + 0.5),
+      point: {
+        pixelSize: 14,
+        color: tip,
+        outlineColor: glow,
+        outlineWidth: 3,
+        heightReference: HeightReference.NONE,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    })
+  }
+}
+
+export type TempPinDraw = {
+  lat: number
+  lon: number
+  label?: string
+  loading?: boolean
+}
+
+export type TempNearbyDraw = {
+  itemId: string
+  title: string
+  distKm: number
+  coords: [number, number][]
+}
+
+const NEARBY_LINK_COLORS = ['#f97316', '#06b6d4', '#a78bfa', '#34d399', '#f43f5e']
+
+/** Preview pin + colored “closeness” walks (ids use temp: prefix). */
+export function syncTempPinEntities(
+  viewer: Viewer,
+  pin: TempPinDraw | null,
+  nearby: TempNearbyDraw[] = [],
+) {
+  clearTempEntities(viewer)
+  if (!pin || !isValidCoord(pin.lat, pin.lon)) return
+
+  const accent = Color.fromCssColorString('#f97316')
+  const label = pin.loading
+    ? 'Looking up…'
+    : pin.label?.trim() || 'New pin'
+
+  viewer.entities.add({
+    id: 'temp:pin',
+    name: label,
+    position: Cartesian3.fromDegrees(pin.lon, pin.lat, 0),
+    point: {
+      pixelSize: 18,
+      color: accent,
+      outlineColor: Color.WHITE,
+      outlineWidth: 3,
+      heightReference: HeightReference.NONE,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      scaleByDistance: new NearFarScalar(5e3, 1.4, 2.5e6, 0.6),
+    },
+    label: {
+      text: label,
+      font: '600 13px "DM Sans", Segoe UI, sans-serif',
+      fillColor: Color.fromCssColorString('#1c1917'),
+      outlineColor: Color.WHITE,
+      outlineWidth: 3,
+      style: LabelStyle.FILL_AND_OUTLINE,
+      verticalOrigin: VerticalOrigin.BOTTOM,
+      horizontalOrigin: HorizontalOrigin.CENTER,
+      pixelOffset: new Cartesian2(0, -16),
+      heightReference: HeightReference.NONE,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      showBackground: true,
+      backgroundColor: Color.fromCssColorString('#fff7edee'),
+      backgroundPadding: new Cartesian2(8, 5),
+      distanceDisplayCondition: new DistanceDisplayCondition(0.0, 4.5e5),
+    },
+  })
+
+  nearby.forEach((link, idx) => {
+    if (!link.coords || link.coords.length < 2) return
+    const css = NEARBY_LINK_COLORS[idx % NEARBY_LINK_COLORS.length]!
+    const color = Color.fromCssColorString(css)
+    const distLabel =
+      link.distKm < 1
+        ? `${Math.round(link.distKm * 1000)} m`
+        : `${link.distKm.toFixed(1)} km`
+    const shortTitle =
+      link.title.length > 22 ? `${link.title.slice(0, 20)}…` : link.title
+    const roadLabel = `${distLabel} → ${shortTitle}`
+
+    viewer.entities.add({
+      id: `temp:link:${idx}`,
+      name: roadLabel,
+      polyline: {
+        positions: link.coords.map(([lat, lon]) =>
+          Cartesian3.fromDegrees(lon, lat, SURFACE_H),
+        ),
+        width: 4,
+        clampToGround: false,
+        material: new ColorMaterialProperty(color.withAlpha(0.9)),
+      },
+    })
+    const mid = midpointLonLat(link.coords)
+    if (mid) {
+      viewer.entities.add({
+        id: `temp:link:${idx}:label`,
+        position: Cartesian3.fromDegrees(mid.lon, mid.lat, SURFACE_H),
+        label: {
+          text: roadLabel,
+          font: '700 11px "DM Sans", Segoe UI, sans-serif',
+          fillColor: Color.WHITE,
+          outlineColor: Color.fromCssColorString('#1c1917'),
+          outlineWidth: 3,
+          style: LabelStyle.FILL_AND_OUTLINE,
+          verticalOrigin: VerticalOrigin.CENTER,
+          horizontalOrigin: HorizontalOrigin.CENTER,
+          heightReference: HeightReference.NONE,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          showBackground: true,
+          backgroundColor: color.withAlpha(0.92),
+          backgroundPadding: new Cartesian2(7, 4),
+          distanceDisplayCondition: new DistanceDisplayCondition(0.0, 5e5),
+        },
+      })
+    }
+  })
+}
+
+/** Project a lon/lat to canvas CSS pixels (for HTML walk button). */
+export function lonLatToCanvasCss(
+  viewer: Viewer,
+  lon: number,
+  lat: number,
+): { x: number; y: number } | null {
+  const pos = Cartesian3.fromDegrees(lon, lat, 0)
+  const windowPos = new Cartesian2()
+  const ok = viewer.scene.cartesianToCanvasCoordinates(pos, windowPos)
+  if (!ok) return null
+  const canvas = viewer.scene.canvas
+  const scaleX = canvas.clientWidth / Math.max(1, canvas.width)
+  const scaleY = canvas.clientHeight / Math.max(1, canvas.height)
+  return { x: windowPos.x * scaleX, y: windowPos.y * scaleY }
 }
 
 export function flyToItem(

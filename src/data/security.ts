@@ -11,6 +11,7 @@ export const ALLOWED_SETTING_KEYS = [
   'googleMapsKey',
   'cesiumIonToken',
   'mapStack',
+  'walkApp',
 ] as const
 
 export type AllowedSettingKey = (typeof ALLOWED_SETTING_KEYS)[number]

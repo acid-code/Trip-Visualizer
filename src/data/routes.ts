@@ -288,7 +288,7 @@ function firstStepAfterMorningHotel(
   )
 }
 
-function distKm(
+export function distKm(
   a: { lat: number; lon: number },
   b: { lat: number; lon: number },
 ): number {
@@ -300,4 +300,143 @@ function distKm(
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2
   return 2 * R * Math.asin(Math.sqrt(x))
+}
+
+/** Sum of great-circle segments along a [lat, lon] polyline. */
+export function pathLengthKm(coords: [number, number][]): number {
+  let total = 0
+  for (let i = 1; i < coords.length; i++) {
+    const a = coords[i - 1]!
+    const b = coords[i]!
+    total += distKm({ lat: a[0], lon: a[1] }, { lat: b[0], lon: b[1] })
+  }
+  return total
+}
+
+/** Rough walking ETA at ~5 km/h from path length (null if too short / empty). */
+export function estimateWalkMinutes(coords: [number, number][]): number | null {
+  if (coords.length < 2) return null
+  const km = pathLengthKm(coords)
+  if (!(km > 0.02)) return null
+  return Math.max(1, Math.round((km / 5) * 60))
+}
+
+/** Rough driving ETA at ~45 km/h mixed roads (null if too short / empty). */
+export function estimateDriveMinutes(coords: [number, number][]): number | null {
+  if (coords.length < 2) return null
+  const km = pathLengthKm(coords)
+  if (!(km > 0.05)) return null
+  return Math.max(1, Math.round((km / 45) * 60))
+}
+
+export type NearbyStepLink = {
+  itemId: string
+  title: string
+  date: string
+  distKm: number
+  lat: number
+  lon: number
+  coords: [number, number][]
+}
+
+/**
+ * Foot paths from an origin to the nearest trip pins (within maxKm).
+ * Used for temp-pin “closeness” previews on the globe.
+ */
+export async function nearbyWalkLinks(
+  origin: { lat: number; lon: number },
+  items: TripItem[],
+  opts?: { maxKm?: number; limit?: number },
+): Promise<NearbyStepLink[]> {
+  const maxKm = opts?.maxKm ?? 3
+  const limit = opts?.limit ?? 4
+
+  const candidates: Array<{
+    itemId: string
+    title: string
+    date: string
+    distKm: number
+    lat: number
+    lon: number
+  }> = []
+
+  for (const item of items) {
+    if (item.status === 'cancelled' || item.type === 'note') continue
+    if (isPlaceholderBase(item)) continue
+
+    const points: Array<{ lat: number; lon: number; label: string }> = []
+    if (isValidCoord(item.lat, item.lon)) {
+      points.push({
+        lat: item.lat!,
+        lon: item.lon!,
+        label: item.title || item.place || 'Step',
+      })
+    }
+    if (isValidCoord(item.latTo, item.lonTo)) {
+      points.push({
+        lat: item.latTo!,
+        lon: item.lonTo!,
+        label: `${item.title || 'Step'} (to)`,
+      })
+    }
+
+    for (const p of points) {
+      const d = distKm(origin, p)
+      if (d < 0.02 || d > maxKm) continue
+      candidates.push({
+        itemId: item.id,
+        title: p.label,
+        date: item.date,
+        distKm: d,
+        lat: p.lat,
+        lon: p.lon,
+      })
+    }
+  }
+
+  candidates.sort((a, b) => a.distKm - b.distKm)
+
+  // One link per step (prefer closer endpoint)
+  const bestByItem = new Map<string, (typeof candidates)[0]>()
+  for (const c of candidates) {
+    if (!bestByItem.has(c.itemId)) bestByItem.set(c.itemId, c)
+  }
+  const top = [...bestByItem.values()].sort((a, b) => a.distKm - b.distKm).slice(0, limit)
+
+  const links: NearbyStepLink[] = []
+  for (const c of top) {
+    const coords = await fetchOsrmRoute(
+      [origin.lat, origin.lon],
+      [c.lat, c.lon],
+      'foot',
+    )
+    links.push({
+      ...c,
+      coords: coords.length >= 2 ? coords : [[origin.lat, origin.lon], [c.lat, c.lon]],
+    })
+  }
+  return links
+}
+
+/** Prefer day filter, else the majority date among nearby pins (≥ half). */
+export function suggestDateFromNearby(
+  dayFilter: string | null | undefined,
+  links: Array<{ date: string }>,
+  fallback: string,
+): string {
+  if (dayFilter && /^\d{4}-\d{2}-\d{2}$/.test(dayFilter)) return dayFilter
+  const dates = links.map((l) => l.date).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+  if (!dates.length) return fallback
+  const counts = new Map<string, number>()
+  for (const d of dates) counts.set(d, (counts.get(d) ?? 0) + 1)
+  let best = dates[0]!
+  let bestN = 0
+  for (const [d, n] of counts) {
+    if (n > bestN) {
+      best = d
+      bestN = n
+    }
+  }
+  if (bestN >= Math.ceil(dates.length / 2)) return best
+  return fallback
 }

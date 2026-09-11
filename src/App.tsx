@@ -9,6 +9,7 @@ import {
   getSetting,
   getTrip,
   listTrips,
+  nowIso,
   saveTrip,
   setSetting,
   sortItems,
@@ -19,17 +20,37 @@ import {
   parseTripWorkbook,
   tripToBlankTemplate,
 } from './data/excel'
-import { enrichTripItems, pinItemOnMap, pinTripItemsOnMap } from './data/enrichment'
+import {
+  enrichTripItems,
+  extractCoordsFromText,
+  locationQueryFromInput,
+  lookupPlace,
+  pinItemOnMap,
+  pinTripItemsOnMap,
+  reverseGeocode,
+  type PlaceLookup,
+} from './data/enrichment'
 import {
   buildWalkingConnectors,
   hydrateDriveRoutes,
+  nearbyWalkLinks,
+  suggestDateFromNearby,
+  type NearbyStepLink,
   type RouteConnector,
 } from './data/routes'
-import { GlobeView } from './ui/GlobeView'
+import {
+  isWalkAppPref,
+  openWalkTarget,
+  type MapsTravelMode,
+  type WalkAppPref,
+  type WalkLinkTarget,
+} from './data/mapsLinks'
+import { GlobeView, type MapSelectPayload } from './ui/GlobeView'
 import { TimelinePanel } from './ui/TimelinePanel'
 import { ChartsPanel } from './ui/ChartsPanel'
 import { ItemDrawer } from './ui/ItemDrawer'
 import { AddStepPanel, type AddContext } from './ui/AddStepPanel'
+import { MapSearchBar } from './ui/MapSearchBar'
 import type { MapStack } from './globe/viewer'
 import { EXAMPLE_TRIP_ID } from './data/examples/france-south-loop'
 import { downloadPolarstepsJson } from './data/polarsteps'
@@ -69,13 +90,36 @@ export default function App() {
   const [mapStack, setMapStack] = useState<MapStack>('esri')
   const [googleKey, setGoogleKey] = useState('')
   const [ionToken, setIonToken] = useState('')
+  const [walkApp, setWalkApp] = useState<WalkAppPref>('maps')
   const [status, setStatus] = useState('')
   const [overviewToken, setOverviewToken] = useState(0)
   const [enrichProgress, setEnrichProgress] = useState<string | null>(null)
   const [connectors, setConnectors] = useState<RouteConnector[]>([])
   const [routesStatus, setRoutesStatus] = useState<string | null>(null)
   const [addContext, setAddContext] = useState<AddContext | null>(null)
+  const [tempPin, setTempPin] = useState<{
+    lat: number
+    lon: number
+    label?: string
+    place?: string
+    address?: string
+    city?: string
+    osmId?: string
+    query?: string
+    loading?: boolean
+  } | null>(null)
+  const [nearbyLinks, setNearbyLinks] = useState<NearbyStepLink[]>([])
+  const [tempFlyToken, setTempFlyToken] = useState(0)
+  const [searchBusy, setSearchBusy] = useState(false)
+  const [mapFocusEndpoint, setMapFocusEndpoint] = useState<'a' | 'b' | null>(null)
+  const [routeWalk, setRouteWalk] = useState<{
+    origin: { lat: number; lon: number }
+    destination: { lat: number; lon: number }
+    travelMode: MapsTravelMode
+    coords: [number, number][]
+  } | null>(null)
   const routesForTripRef = useRef<string | null>(null)
+  const tempPinGenRef = useRef(0)
 
   const active = useMemo(
     () => trips.find((t) => t.id === activeId) ?? null,
@@ -99,7 +143,14 @@ export default function App() {
       await refresh()
       setGoogleKey((await getSetting('googleMapsKey')) ?? '')
       setIonToken((await getSetting('cesiumIonToken')) ?? '')
-      setMapStack(((await getSetting('mapStack')) as MapStack) || 'esri')
+      const savedStack = (await getSetting('mapStack')) as MapStack | undefined
+      setMapStack(
+        savedStack === 'osm' || savedStack === 'esri' || savedStack === 'google3d'
+          ? savedStack
+          : 'esri',
+      )
+      const walkPref = await getSetting('walkApp')
+      setWalkApp(isWalkAppPref(walkPref) ? walkPref : 'maps')
     })()
   }, [refresh])
 
@@ -290,10 +341,13 @@ export default function App() {
   function highlightStep(id: string | null) {
     if (!id) {
       setSelectedId(null)
+      setMapFocusEndpoint(null)
+      setRouteWalk(null)
       setLowerMode((m) => (m === 'detail' ? 'none' : m))
       setDetailExpanded(false)
       return
     }
+    clearTempPin()
     const item = stepById(id)
     if (item && isPlaceholderBase(item)) {
       openFillDayBase(item)
@@ -307,13 +361,155 @@ export default function App() {
     setDetailExpanded(false)
   }
 
-  /** Map pin tap — highlight only (Detail opens from the Steps list). */
-  function selectFromMap(id: string | null) {
-    highlightStep(id)
+  function clearTempPin() {
+    tempPinGenRef.current += 1
+    setTempPin(null)
+    setNearbyLinks([])
+  }
+
+  function applyPlaceToTemp(
+    base: { lat: number; lon: number },
+    place: PlaceLookup | null,
+    query?: string,
+  ) {
+    setTempPin({
+      lat: base.lat,
+      lon: base.lon,
+      label: place?.name || place?.address?.split(',')[0] || 'New pin',
+      place: place?.name || '',
+      address: place?.address || '',
+      city: place?.city || '',
+      osmId: place?.osmId || '',
+      query: query || place?.query || '',
+      loading: false,
+    })
+  }
+
+  async function dropTempPinAt(
+    pos: { lat: number; lon: number },
+    opts?: { query?: string; place?: PlaceLookup | null; fly?: boolean },
+  ) {
+    if (!isValidCoord(pos.lat, pos.lon)) return
+    const gen = ++tempPinGenRef.current
+    setRouteWalk(null)
+    setSelectedId(null)
+    setMapFocusEndpoint(null)
+    setLowerMode((m) => (m === 'detail' ? 'none' : m))
+    setDetailExpanded(false)
+    setTempPin({
+      lat: pos.lat,
+      lon: pos.lon,
+      label: opts?.place?.name || 'New pin',
+      place: opts?.place?.name || '',
+      address: opts?.place?.address || '',
+      city: opts?.place?.city || '',
+      osmId: opts?.place?.osmId || '',
+      query: opts?.query || opts?.place?.query || '',
+      loading: !opts?.place,
+    })
+    setNearbyLinks([])
+    if (opts?.fly !== false) setTempFlyToken((n) => n + 1)
+    setStatus('Pin dropped — hold + to save as a step')
+
+    const items = active?.items ?? []
+    void (async () => {
+      let place = opts?.place ?? null
+      if (!place) {
+        place = await reverseGeocode(pos.lat, pos.lon)
+        if (gen !== tempPinGenRef.current) return
+        applyPlaceToTemp(pos, place, opts?.query)
+      } else {
+        applyPlaceToTemp(pos, place, opts?.query)
+      }
+      const links = await nearbyWalkLinks(pos, items, { maxKm: 3, limit: 4 })
+      if (gen !== tempPinGenRef.current) return
+      setNearbyLinks(links)
+      const n = links.length
+      setStatus(
+        n
+          ? `Pin ready · ${n} nearby within 3 km — press + to add`
+          : 'Pin ready · no steps within 3 km — press + to add',
+      )
+    })()
+  }
+
+  async function searchForPlace(raw: string) {
+    const q = raw.trim()
+    if (!q) return
+    setSearchBusy(true)
+    setStatus('Searching…')
+    try {
+      const pasted = extractCoordsFromText(q)
+      if (pasted) {
+        await dropTempPinAt(pasted, { query: q })
+        return
+      }
+      const query =
+        locationQueryFromInput(q) || (/^https?:\/\//i.test(q) ? '' : q)
+      if (!query) {
+        setStatus('Couldn’t read that link — paste an address or Maps place URL')
+        return
+      }
+      const place = await lookupPlace(query)
+      if (!place) {
+        setStatus('No place found for that search')
+        return
+      }
+      await dropTempPinAt(
+        { lat: place.lat, lon: place.lon },
+        { query, place },
+      )
+    } catch (err) {
+      logClientError('map-search', err)
+      setStatus(publicErrorMessage(err, 'Search failed — try again'))
+    } finally {
+      setSearchBusy(false)
+    }
+  }
+
+  function selectFromMap(payload: MapSelectPayload) {
+    // Map tap always dismisses the side/bottom sheet (Steps, Data, Stats)
+    setPanelOpen(false)
+
+    if (payload.kind === 'route') {
+      clearTempPin()
+      setRouteWalk({
+        origin: payload.origin,
+        destination: payload.destination,
+        travelMode: payload.travelMode,
+        coords: payload.coords,
+      })
+      setMapFocusEndpoint(null)
+      const item = stepById(payload.itemId)
+      if (item && isPlaceholderBase(item)) {
+        openFillDayBase(item)
+        return
+      }
+      setSelectedId(payload.itemId)
+      setAddContext(null)
+      setLowerMode('none')
+      setDetailExpanded(false)
+      return
+    }
+    setRouteWalk(null)
+    setMapFocusEndpoint(payload.endpoint)
+    const item = stepById(payload.itemId)
+    if (item && isPlaceholderBase(item)) {
+      openFillDayBase(item)
+      return
+    }
+    clearTempPin()
+    setSelectedId(payload.itemId)
+    setAddContext(null)
+    setLowerMode('none')
+    setDetailExpanded(false)
   }
 
   /** Second tap on an already-highlighted step — opens Detail (or fill form for placeholders). */
   function selectFromList(id: string) {
+    clearTempPin()
+    setRouteWalk(null)
+    setMapFocusEndpoint(null)
     const item = stepById(id)
     if (item && isPlaceholderBase(item)) {
       openFillDayBase(item)
@@ -416,6 +612,8 @@ export default function App() {
       const nextItems = sortItems([...withoutPlaceholder, pinned])
       const next = { ...active, items: ensureDayStartBases(active.meta, nextItems) }
       await persist(next)
+      clearTempPin()
+      setRouteWalk(null)
       setSelectedId(pinned.id)
       setAddContext(null)
       setNavTab('timeline')
@@ -430,9 +628,84 @@ export default function App() {
     })()
   }
 
+  /** Promote the temp map pin into a real step and open its Detail sheet. */
+  function createStepFromTempPin() {
+    if (!active || !tempPin || !isValidCoord(tempPin.lat, tempPin.lon)) {
+      openInsert(null, null)
+      return
+    }
+    const title =
+      tempPin.place?.trim() ||
+      tempPin.label?.trim() ||
+      tempPin.address?.split(',')[0]?.trim() ||
+      'Map pin'
+    const date = requireIsoDate(
+      suggestDateFromNearby(
+        dayFilter,
+        nearbyLinks,
+        active.meta.startDate || todayIso(),
+      ),
+      todayIso(),
+    )
+    const item: TripItem = {
+      id: createId('S'),
+      type: 'sight',
+      title,
+      place: tempPin.address?.trim() || tempPin.place?.trim() || title,
+      city: tempPin.city?.trim() || '',
+      date,
+      endDate: '',
+      start: '',
+      end: '',
+      from: '',
+      to: '',
+      confirm: '',
+      cost: null,
+      currency: normalizeCurrency(active.meta.homeCurrency || 'EUR'),
+      status: 'planned',
+      notes: '',
+      url: '',
+      tags: [],
+      lat: tempPin.lat,
+      lon: tempPin.lon,
+      latTo: null,
+      lonTo: null,
+      wikidata: '',
+      osmId: tempPin.osmId || '',
+      geocodeQuery: tempPin.query || tempPin.address || title,
+      updatedAt: nowIso(),
+      enrichmentSummary: tempPin.address || '',
+      enrichmentImage: '',
+      enrichmentSource: tempPin.address ? 'nominatim' : '',
+      routeCoords: [],
+      source: 'app',
+    }
+    void (async () => {
+      const nextItems = sortItems([...active.items, item])
+      const next = { ...active, items: ensureDayStartBases(active.meta, nextItems) }
+      await persist(next)
+      clearTempPin()
+      setRouteWalk(null)
+      setMapFocusEndpoint(null)
+      setSelectedId(item.id)
+      setAddContext(null)
+      setNavTab('timeline')
+      setLowerMode('detail')
+      setDetailExpanded(true)
+      setPanelOpen(true)
+      setStatus(`Added “${item.title}” · ${date} · rebuilding paths…`)
+      await buildRoutes(next)
+      setStatus(`Added “${item.title}” · on the map`)
+    })()
+  }
+
   function onTongue(id: NavTab | 'insert') {
     setPanelOpen(true)
     if (id === 'insert') {
+      if (tempPin && isValidCoord(tempPin.lat, tempPin.lon)) {
+        createStepFromTempPin()
+        return
+      }
       openInsert(null, null)
       return
     }
@@ -457,6 +730,55 @@ export default function App() {
     return connectors.filter((c) => c.date === dayFilter)
   }, [connectors, dayFilter])
 
+  const walkTarget = useMemo((): WalkLinkTarget | null => {
+    if (tempPin && isValidCoord(tempPin.lat, tempPin.lon)) {
+      return {
+        kind: 'point',
+        lat: tempPin.lat,
+        lon: tempPin.lon,
+        prefer: walkApp,
+      }
+    }
+    if (routeWalk) {
+      return {
+        kind: 'directions',
+        origin: routeWalk.origin,
+        destination: routeWalk.destination,
+        travelMode: routeWalk.travelMode,
+        coords: routeWalk.coords,
+      }
+    }
+    if (!selected) return null
+    if (
+      mapFocusEndpoint === 'b' &&
+      isValidCoord(selected.latTo, selected.lonTo)
+    ) {
+      return {
+        kind: 'point',
+        lat: selected.latTo!,
+        lon: selected.lonTo!,
+        prefer: walkApp,
+      }
+    }
+    if (isValidCoord(selected.lat, selected.lon)) {
+      return {
+        kind: 'point',
+        lat: selected.lat!,
+        lon: selected.lon!,
+        prefer: walkApp,
+      }
+    }
+    if (isValidCoord(selected.latTo, selected.lonTo)) {
+      return {
+        kind: 'point',
+        lat: selected.latTo!,
+        lon: selected.lonTo!,
+        prefer: walkApp,
+      }
+    }
+    return null
+  }, [tempPin, routeWalk, selected, mapFocusEndpoint, walkApp])
+
   const lowerOpen = lowerMode !== 'none'
   const insertActive = lowerMode === 'insert'
 
@@ -472,11 +794,56 @@ export default function App() {
           googleKey={googleKey || undefined}
           ionToken={ionToken || undefined}
           overviewToken={overviewToken}
+          tempPin={tempPin}
+          nearbyLinks={nearbyLinks}
+          tempFlyToken={tempFlyToken}
+          walkTarget={walkTarget}
+          onOpenWalk={() => {
+            if (walkTarget) openWalkTarget(walkTarget)
+          }}
           onSelect={selectFromMap}
+          onMapPress={() => setPanelOpen(false)}
+          onLongPress={(pos) => {
+            setPanelOpen(false)
+            void dropTempPinAt(pos)
+          }}
         />
       ) : (
         <div className="flex h-full items-center justify-center text-slate-400">Loading…</div>
       )}
+
+      {/* Map search — left of globe; long-press drops a pin under your finger */}
+      <div
+        className={`pointer-events-none absolute z-20 ${
+          isPhone
+            ? 'left-3 top-[max(0.75rem,env(safe-area-inset-top))]'
+            : panelOpen
+              ? 'left-[min(23.5rem,90vw)] top-[max(0.75rem,env(safe-area-inset-top))]'
+              : 'left-14 top-[max(0.75rem,env(safe-area-inset-top))]'
+        }`}
+      >
+        <div className="pointer-events-auto">
+          <MapSearchBar
+            busy={searchBusy}
+            onSearch={(q) => void searchForPlace(q)}
+            onClear={() => {
+              /* keep temp pin; only collapses the bar */
+            }}
+          />
+        </div>
+        {tempPin ? (
+          <p className="pointer-events-none mt-1 max-w-[14rem] rounded-lg bg-black/45 px-2 py-1 text-[10px] text-orange-100 backdrop-blur">
+            Temp pin · press <span className="font-bold">+</span> near Stats to save
+            {nearbyLinks.length
+              ? ` · ${nearbyLinks.length} nearby`
+              : ''}
+          </p>
+        ) : (
+          <p className="pointer-events-none mt-1 max-w-[12rem] text-[10px] text-white/55 drop-shadow">
+            Long-press the map to drop a pin
+          </p>
+        )}
+      </div>
 
       {/* Map-side header — desktop clears left panel; phone uses compact top bar */}
       <header
@@ -610,6 +977,7 @@ export default function App() {
                     mapStack={mapStack}
                     googleKey={googleKey}
                     ionToken={ionToken}
+                    walkApp={walkApp}
                     enrichProgress={enrichProgress}
                     routesStatus={routesStatus}
                     onOpenExample={() => void onOpenExample()}
@@ -633,6 +1001,10 @@ export default function App() {
                     setMapStack={(id) => {
                       setMapStack(id)
                       void setSetting('mapStack', id)
+                    }}
+                    setWalkApp={(pref) => {
+                      setWalkApp(pref)
+                      void setSetting('walkApp', pref)
                     }}
                     setGoogleKey={setGoogleKey}
                     setIonToken={setIonToken}
@@ -663,7 +1035,7 @@ export default function App() {
                 type="button"
                 className={`book-tongue ${activeTongue ? 'book-tongue-on' : ''} ${
                   t.id === 'insert' ? 'book-tongue-plus' : ''
-                }`}
+                } ${t.id === 'insert' && tempPin ? 'ring-2 ring-orange-400 ring-offset-1' : ''}`}
                 onClick={() => {
                   if (
                     panelOpen &&
@@ -676,7 +1048,13 @@ export default function App() {
                   }
                   onTongue(t.id)
                 }}
-                title={t.id === 'insert' ? 'Insert step' : t.label}
+                title={
+                  t.id === 'insert'
+                    ? tempPin
+                      ? 'Save map pin as step'
+                      : 'Insert step'
+                    : t.label
+                }
               >
                 {t.label}
               </button>
@@ -739,6 +1117,7 @@ export default function App() {
                     mapStack={mapStack}
                     googleKey={googleKey}
                     ionToken={ionToken}
+                    walkApp={walkApp}
                     enrichProgress={enrichProgress}
                     routesStatus={routesStatus}
                     onOpenExample={() => void onOpenExample()}
@@ -762,6 +1141,10 @@ export default function App() {
                     setMapStack={(id) => {
                       setMapStack(id)
                       void setSetting('mapStack', id)
+                    }}
+                    setWalkApp={(pref) => {
+                      setWalkApp(pref)
+                      void setSetting('walkApp', pref)
                     }}
                     setGoogleKey={setGoogleKey}
                     setIonToken={setIonToken}
@@ -791,7 +1174,7 @@ export default function App() {
                   type="button"
                   className={`book-tongue-bottom ${activeTongue ? 'book-tongue-on' : ''} ${
                     t.id === 'insert' ? 'book-tongue-bottom-plus' : ''
-                  }`}
+                  } ${t.id === 'insert' && tempPin ? 'ring-2 ring-orange-400' : ''}`}
                   onClick={() => {
                     if (
                       panelOpen &&
@@ -804,7 +1187,13 @@ export default function App() {
                     }
                     onTongue(t.id)
                   }}
-                  title={t.id === 'insert' ? 'Insert step' : t.label}
+                  title={
+                  t.id === 'insert'
+                    ? tempPin
+                      ? 'Save map pin as step'
+                      : 'Insert step'
+                    : t.label
+                }
                 >
                   {t.label}
                 </button>
@@ -900,6 +1289,7 @@ function DataPanel({
   mapStack,
   googleKey,
   ionToken,
+  walkApp,
   enrichProgress,
   routesStatus,
   onOpenExample,
@@ -914,6 +1304,7 @@ function DataPanel({
   onRebuildRoutes,
   onAddDay,
   setMapStack,
+  setWalkApp,
   setGoogleKey,
   setIonToken,
   updateActive,
@@ -922,6 +1313,7 @@ function DataPanel({
   mapStack: MapStack
   googleKey: string
   ionToken: string
+  walkApp: WalkAppPref
   enrichProgress: string | null
   routesStatus: string | null
   onOpenExample: () => void
@@ -936,6 +1328,7 @@ function DataPanel({
   onRebuildRoutes: () => void
   onAddDay: () => void
   setMapStack: (id: MapStack) => void
+  setWalkApp: (pref: WalkAppPref) => void
   setGoogleKey: (v: string) => void
   setIonToken: (v: string) => void
   updateActive: (mutator: (trip: TripRecord) => TripRecord) => Promise<void>
@@ -1007,7 +1400,7 @@ function DataPanel({
         <div className="flex flex-wrap gap-2">
           {(
             [
-              ['esri', 'Esri imagery (free)'],
+              ['esri', 'Esri imagery'],
               ['osm', 'OpenStreetMap'],
               ['google3d', 'Google Photorealistic 3D'],
             ] as const
@@ -1024,6 +1417,34 @@ function DataPanel({
               {label}
             </button>
           ))}
+        </div>
+        <div className="mt-3">
+          <div className="text-xs text-stone-500">🚶 figure opens</div>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {(
+              [
+                ['maps', 'Street View'],
+                ['earth', 'Google Earth'],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className={`rounded-full px-3 py-1 text-xs ${
+                  walkApp === id
+                    ? 'bg-sky-600 text-white'
+                    : 'border border-stone-200 bg-stone-50 text-stone-700'
+                }`}
+                onClick={() => setWalkApp(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-[10px] text-stone-400">
+            Pins &amp; steps → Street View / Earth. Walk paths → walking directions. Drive →
+            driving. Train / ferry / bus → transit.
+          </p>
         </div>
         <label className="mt-3 block text-xs text-stone-500">
           Google Maps key (optional, for photoreal 3D)

@@ -180,6 +180,8 @@ export async function setSetting(key: string, value: string): Promise<void> {
     stored = sanitizeSecretInput(value)
   } else if (key === 'mapStack') {
     stored = ['esri', 'osm', 'google3d'].includes(value) ? value : 'esri'
+  } else if (key === 'walkApp') {
+    stored = value === 'earth' ? 'earth' : 'maps'
   } else {
     stored = String(value ?? '').slice(0, 2048)
   }

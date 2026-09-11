@@ -12,26 +12,155 @@ function asCoord(lat: unknown, lon: unknown): { lat: number; lon: number } | nul
 }
 
 const NOMINATIM = 'https://nominatim.openstreetmap.org/search'
+const NOMINATIM_REVERSE = 'https://nominatim.openstreetmap.org/reverse'
 const WIKIDATA = 'https://www.wikidata.org/w/api.php'
+
+export type PlaceLookup = {
+  lat: number
+  lon: number
+  /** Short place name when available */
+  name: string
+  /** Full display / mailing-style address */
+  address: string
+  city: string
+  osmId: string
+  query: string
+}
+
+type NominatimAddress = {
+  tourism?: string
+  amenity?: string
+  leisure?: string
+  shop?: string
+  building?: string
+  highway?: string
+  road?: string
+  pedestrian?: string
+  neighbourhood?: string
+  suburb?: string
+  city?: string
+  town?: string
+  village?: string
+  municipality?: string
+  county?: string
+  state?: string
+  postcode?: string
+  country?: string
+  house_number?: string
+}
+
+type NominatimHit = {
+  lat?: string
+  lon?: string
+  name?: string
+  display_name?: string
+  osm_type?: string
+  osm_id?: number | string
+  address?: NominatimAddress
+}
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+function cityFromAddress(addr?: NominatimAddress): string {
+  if (!addr) return ''
+  return (
+    addr.city ||
+    addr.town ||
+    addr.village ||
+    addr.municipality ||
+    addr.suburb ||
+    addr.county ||
+    ''
+  )
+}
+
+function nameFromHit(hit: NominatimHit): string {
+  const addr = hit.address
+  const named =
+    hit.name ||
+    addr?.tourism ||
+    addr?.amenity ||
+    addr?.leisure ||
+    addr?.shop ||
+    addr?.building ||
+    ''
+  if (named) return named
+  if (addr?.road || addr?.pedestrian) {
+    const road = addr.road || addr.pedestrian || ''
+    return addr.house_number ? `${road} ${addr.house_number}` : road
+  }
+  const display = hit.display_name || ''
+  return display.split(',')[0]?.trim() || ''
+}
+
+function addressFromHit(hit: NominatimHit): string {
+  return (hit.display_name || '').trim()
+}
+
+function osmIdFromHit(hit: NominatimHit): string {
+  if (hit.osm_id == null) return ''
+  const t = hit.osm_type ? `${hit.osm_type}/` : ''
+  return `${t}${hit.osm_id}`
+}
+
+function placeFromHit(hit: NominatimHit, query = ''): PlaceLookup | null {
+  const coord = asCoord(hit.lat, hit.lon)
+  if (!coord) return null
+  return {
+    lat: coord.lat,
+    lon: coord.lon,
+    name: nameFromHit(hit),
+    address: addressFromHit(hit),
+    city: cityFromAddress(hit.address),
+    osmId: osmIdFromHit(hit),
+    query,
+  }
+}
+
 export async function geocodePlace(query: string): Promise<{ lat: number; lon: number } | null> {
+  const full = await lookupPlace(query)
+  return full ? { lat: full.lat, lon: full.lon } : null
+}
+
+/** Forward geocode with name / address details (Nominatim). */
+export async function lookupPlace(query: string): Promise<PlaceLookup | null> {
   const q = query.trim().slice(0, MAX_GEOCODE_QUERY_LEN)
   if (!q) return null
   const url = new URL(NOMINATIM)
   url.searchParams.set('q', q)
   url.searchParams.set('format', 'json')
+  url.searchParams.set('addressdetails', '1')
   url.searchParams.set('limit', '1')
   const res = await fetch(url.toString(), {
     headers: { Accept: 'application/json' },
   })
   if (!res.ok) return null
-  const data = (await res.json()) as Array<{ lat: string; lon: string }>
+  const data = (await res.json()) as NominatimHit[]
   if (!data[0]) return null
-  return asCoord(data[0].lat, data[0].lon)
+  return placeFromHit(data[0], q)
+}
+
+/** Reverse geocode a map pin into name + address. */
+export async function reverseGeocode(
+  lat: number,
+  lon: number,
+): Promise<PlaceLookup | null> {
+  if (!isValidCoord(lat, lon)) return null
+  const url = new URL(NOMINATIM_REVERSE)
+  url.searchParams.set('lat', String(lat))
+  url.searchParams.set('lon', String(lon))
+  url.searchParams.set('format', 'json')
+  url.searchParams.set('addressdetails', '1')
+  url.searchParams.set('zoom', '18')
+  const res = await fetch(url.toString(), {
+    headers: { Accept: 'application/json' },
+  })
+  if (!res.ok) return null
+  const hit = (await res.json()) as NominatimHit & { error?: string }
+  if (hit.error) return null
+  return placeFromHit(hit, `${lat.toFixed(5)},${lon.toFixed(5)}`)
 }
 
 /** Pull lat/lon out of a pasted Google Maps link, coords, or leave null to geocode text. */
