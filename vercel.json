@@ -2,14 +2,19 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "framework": "vite",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
+  "rewrites": [
+    {
+      "source": "/((?!manifest\\.webmanifest|sw\\.js|workbox-.*\\.js|registerSW\\.js|assets/|cesium/).*)",
+      "destination": "/index.html"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://vercel.com; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; worker-src 'self' blob:; child-src 'self' blob:; manifest-src 'self' https://vercel.com; connect-src 'self' https://vercel.com https://*.vercel.com https://nominatim.openstreetmap.org https://www.wikidata.org https://commons.wikimedia.org https://router.project-osrm.org https://api.frankfurter.app https://tile.openstreetmap.org https://server.arcgisonline.com https://services.arcgisonline.com https://tile.googleapis.com https://api.cesium.com https://ion.cesium.com https://assets.ion.cesium.com https://*.cesium.com; media-src 'self' blob:; upgrade-insecure-requests"
+          "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://vercel.com; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; worker-src 'self' blob:; child-src 'self' blob:; manifest-src 'self'; connect-src 'self' https://vercel.com https://*.vercel.com https://nominatim.openstreetmap.org https://www.wikidata.org https://commons.wikimedia.org https://upload.wikimedia.org https://overpass-api.de https://*.overpass-api.de https://overpass.kumi.systems https://router.project-osrm.org https://api.frankfurter.app https://tile.openstreetmap.org https://server.arcgisonline.com https://services.arcgisonline.com https://tile.googleapis.com https://maps.googleapis.com https://api.cesium.com https://ion.cesium.com https://assets.ion.cesium.com https://*.cesium.com; media-src 'self' blob:; upgrade-insecure-requests"
         },
         { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" },
         { "key": "X-Frame-Options", "value": "DENY" },
@@ -20,6 +25,13 @@
           "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
         },
         { "key": "X-DNS-Prefetch-Control", "value": "off" }
+      ]
+    },
+    {
+      "source": "/manifest.webmanifest",
+      "headers": [
+        { "key": "Content-Type", "value": "application/manifest+json; charset=utf-8" },
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
       ]
     },
     {
