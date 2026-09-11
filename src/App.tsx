@@ -1128,6 +1128,9 @@ export default function App() {
             // Keep Explore open on empty-map short press; close via tongues, step pin, X, or search
             if (exploreOpen) return
             setPanelOpen(false)
+          }}
+          onMapDoubleTap={() => {
+            if (exploreOpen) return
             if (tempPin) clearTempPin()
           }}
           onLongPress={(pos) => {
@@ -1160,7 +1163,7 @@ export default function App() {
         </div>
         {tempPin ? (
           <p className="pointer-events-none mt-1 max-w-[14rem] rounded-lg bg-black/45 px-2 py-1 text-[10px] text-orange-100 backdrop-blur">
-            Temp pin · press <span className="font-bold">+</span> near Stats to save
+            Temp pin · double-tap map to clear · <span className="font-bold">+</span> to save
             {nearbyLinks.length
               ? ` · ${nearbyLinks.length} nearby`
               : ''}

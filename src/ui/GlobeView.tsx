@@ -69,6 +69,8 @@ type Props = {
   onLongPress: (pos: { lat: number; lon: number }) => void
   /** Any map tap (pin, road, or empty) — e.g. dismiss Data sheet */
   onMapPress?: () => void
+  /** Second quick tap on empty map — e.g. clear temp pin */
+  onMapDoubleTap?: () => void
   overviewToken?: number
   /** When this changes (e.g. active trip id), frame the first step for opening */
   tripFocusId?: string | null
@@ -90,7 +92,13 @@ type Props = {
 }
 
 const LONG_PRESS_MS = 520
-const MOVE_CANCEL_PX = 12
+/** Finger jitter cancel for long-press only (phones wobble more than 12px). */
+const LONG_PRESS_CANCEL_PX = 28
+/** Real pan — ignore the click that fires after a drag. */
+const TAP_PAN_PX = 52
+/** Second tap within this window clears a temp pin. */
+const DOUBLE_TAP_MS = 420
+const DOUBLE_TAP_PX = 56
 
 /**
  * Cesium host stays an empty div. Walk button is a sibling overlay updated
@@ -107,6 +115,7 @@ export function GlobeView({
   onSelect,
   onLongPress,
   onMapPress,
+  onMapDoubleTap,
   overviewToken,
   tempPin = null,
   nearbyLinks = [],
@@ -134,6 +143,7 @@ export function GlobeView({
   const onSelectRef = useRef(onSelect)
   const onLongPressRef = useRef(onLongPress)
   const onMapPressRef = useRef(onMapPress)
+  const onMapDoubleTapRef = useRef(onMapDoubleTap)
   const walkTargetRef = useRef(walkTarget)
   const onOpenWalkRef = useRef(onOpenWalk)
   const onOpenExploreRef = useRef(onOpenExplore)
@@ -156,6 +166,7 @@ export function GlobeView({
   onSelectRef.current = onSelect
   onLongPressRef.current = onLongPress
   onMapPressRef.current = onMapPress
+  onMapDoubleTapRef.current = onMapDoubleTap
   walkTargetRef.current = walkTarget
   onOpenWalkRef.current = onOpenWalk
   onOpenExploreRef.current = onOpenExplore
@@ -205,12 +216,13 @@ export function GlobeView({
     let pressTimer: ReturnType<typeof setTimeout> | null = null
     let pressStart: { x: number; y: number } | null = null
     let longPressFired = false
-    let pressMoved = false
+    let pressPanned = false
+    let lastEmptyTapAt = 0
+    let lastEmptyTap: { x: number; y: number } | null = null
 
-    const clearPress = () => {
+    const clearPressTimer = () => {
       if (pressTimer) clearTimeout(pressTimer)
       pressTimer = null
-      pressStart = null
     }
 
     const syncWalkButton = () => {
@@ -276,14 +288,14 @@ export function GlobeView({
 
       handler.setInputAction((movement: { position: Cartesian2 }) => {
         longPressFired = false
-        pressMoved = false
+        pressPanned = false
         pressStart = { x: movement.position.x, y: movement.position.y }
-        if (pressTimer) clearTimeout(pressTimer)
+        clearPressTimer()
         pressTimer = setTimeout(() => {
           pressTimer = null
           const v = viewerRef.current
           const start = pressStart
-          if (!v || !start || pressMoved) return
+          if (!v || !start || pressPanned) return
           const pos = pickScreenLonLat(v, start.x, start.y)
           if (!pos) return
           longPressFired = true
@@ -304,22 +316,31 @@ export function GlobeView({
         if (!pressStart) return
         const dx = movement.endPosition.x - pressStart.x
         const dy = movement.endPosition.y - pressStart.y
-        if (dx * dx + dy * dy > MOVE_CANCEL_PX * MOVE_CANCEL_PX) {
-          pressMoved = true
-          clearPress()
+        const d2 = dx * dx + dy * dy
+        // Small wobble: cancel long-press only (still count as a tap)
+        if (d2 > LONG_PRESS_CANCEL_PX * LONG_PRESS_CANCEL_PX) {
+          clearPressTimer()
+        }
+        // Larger move: real pan — ignore the click Cesium fires on finger-up
+        if (d2 > TAP_PAN_PX * TAP_PAN_PX) {
+          pressPanned = true
+          pressStart = null
+          clearPressTimer()
         }
       }, ScreenSpaceEventType.MOUSE_MOVE)
 
-      handler.setInputAction(() => clearPress(), ScreenSpaceEventType.LEFT_UP)
+      handler.setInputAction(() => {
+        clearPressTimer()
+      }, ScreenSpaceEventType.LEFT_UP)
 
       handler.setInputAction((movement: { position: Cartesian2 }) => {
         if (longPressFired) {
           longPressFired = false
           return
         }
-        // Pan / slide — don't treat as a tap (keeps temp pin, no select)
-        if (pressMoved) {
-          pressMoved = false
+        // Pan / slide — don't treat as a tap
+        if (pressPanned) {
+          pressPanned = false
           return
         }
         const entity = preferMapEntity(viewer!, movement.position)
@@ -340,6 +361,8 @@ export function GlobeView({
         onMapPressRef.current?.()
 
         if (entity && typeof entity.id === 'string' && entity.id.startsWith('trip:')) {
+          lastEmptyTapAt = 0
+          lastEmptyTap = null
           const entityId = String(entity.id)
           const desc =
             typeof entity.description === 'string'
@@ -446,6 +469,23 @@ export function GlobeView({
           })
           return
         }
+
+        // Empty map — double-tap clears temp pin (single tap is too easy to confuse with a pan)
+        const now = performance.now()
+        const prev = lastEmptyTap
+        if (
+          prev &&
+          now - lastEmptyTapAt < DOUBLE_TAP_MS &&
+          (movement.position.x - prev.x) ** 2 + (movement.position.y - prev.y) ** 2 <
+            DOUBLE_TAP_PX * DOUBLE_TAP_PX
+        ) {
+          lastEmptyTapAt = 0
+          lastEmptyTap = null
+          onMapDoubleTapRef.current?.()
+        } else {
+          lastEmptyTapAt = now
+          lastEmptyTap = { x: movement.position.x, y: movement.position.y }
+        }
         viewer!.selectedEntity = undefined
       }, ScreenSpaceEventType.LEFT_CLICK)
 
@@ -474,7 +514,7 @@ export function GlobeView({
 
     return () => {
       cancelled = true
-      clearPress()
+      clearPressTimer()
       ro?.disconnect()
       try {
         removeCam?.()
