@@ -12,6 +12,8 @@ export const ALLOWED_SETTING_KEYS = [
   'cesiumIonToken',
   'mapStack',
   'walkApp',
+  /** JSON string[] of feature-guide tip ids the user has already seen */
+  'featureGuideSeen',
 ] as const
 
 export type AllowedSettingKey = (typeof ALLOWED_SETTING_KEYS)[number]

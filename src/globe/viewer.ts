@@ -1030,6 +1030,72 @@ export function flyToItem(
   }
 }
 
+/** First real mappable step in schedule order (skips notes / empty placeholders). */
+export function firstOpenableStep(items: TripItem[]): TripItem | null {
+  const sorted = [...items].sort((a, b) => {
+    const d = a.date.localeCompare(b.date)
+    if (d !== 0) return d
+    const sa = a.start || '99:99'
+    const sb = b.start || '99:99'
+    return sa.localeCompare(sb)
+  })
+  for (const item of sorted) {
+    if (item.status === 'cancelled' || item.type === 'note') continue
+    if (item.tags?.includes('placeholder') && !isValidCoord(item.lat, item.lon)) continue
+    if (isValidCoord(item.lat, item.lon) || isValidCoord(item.latTo, item.lonTo)) {
+      return item
+    }
+  }
+  return null
+}
+
+/**
+ * App-start / trip-open framing: center the first step without pin-select zoom.
+ * Flights (and other A→B legs) frame the whole route on desktop; hotels get a city-scale view.
+ * On phone (`originOnly`), the first flight opens on leg A only — full arcs are too long.
+ */
+export function flyToOpeningItem(
+  viewer: Viewer,
+  item: TripItem,
+  opts?: { originOnly?: boolean },
+) {
+  if (
+    opts?.originOnly &&
+    item.type === 'flight' &&
+    isValidCoord(item.lat, item.lon)
+  ) {
+    flyToLonLat(viewer, item.lon!, item.lat!, 32000)
+    return
+  }
+
+  if (isValidCoord(item.lat, item.lon) && isValidCoord(item.latTo, item.lonTo)) {
+    const sphere = BoundingSphere.fromPoints([
+      Cartesian3.fromDegrees(item.lon!, item.lat!, 0),
+      Cartesian3.fromDegrees(item.lonTo!, item.latTo!, 0),
+    ])
+    viewer.camera.flyToBoundingSphere(sphere, {
+      duration: 1.5,
+      offset: new HeadingPitchRange(
+        0,
+        CesiumMath.toRadians(-35),
+        Math.max(sphere.radius * 2.2, 1500),
+      ),
+    })
+    return
+  }
+
+  if (isValidCoord(item.lat, item.lon)) {
+    // City / area — closer than full-trip overview, looser than selecting a pin (~380–450)
+    const range = item.type === 'hotel' ? 18000 : 14000
+    flyToLonLat(viewer, item.lon!, item.lat!, range)
+    return
+  }
+
+  if (isValidCoord(item.latTo, item.lonTo)) {
+    flyToLonLat(viewer, item.lonTo!, item.latTo!, 14000)
+  }
+}
+
 export function flyToTripOverview(viewer: Viewer, items: TripItem[]) {
   const pts: Cartesian3[] = []
   for (const item of items) {

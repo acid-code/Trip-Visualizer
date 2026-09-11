@@ -182,6 +182,9 @@ export async function setSetting(key: string, value: string): Promise<void> {
     stored = ['esri', 'osm', 'google3d'].includes(value) ? value : 'esri'
   } else if (key === 'walkApp') {
     stored = value === 'earth' ? 'earth' : 'maps'
+  } else if (key === 'featureGuideSeen') {
+    // Tip ids JSON — keep room for many future tips
+    stored = String(value ?? '').slice(0, 8192)
   } else {
     stored = String(value ?? '').slice(0, 2048)
   }

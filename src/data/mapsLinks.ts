@@ -38,26 +38,61 @@ export function mapsPlaceUrl(point: { lat: number; lon: number }): string {
 export function mapsPlaceSearchUrl(
   name: string,
   point: { lat: number; lon: number },
-  address?: string,
+  addressOrOpts?:
+    | string
+    | {
+        address?: string
+        category?: string
+        cuisine?: string
+      },
 ): string {
-  const q = [name.trim(), address?.trim(), `${point.lat},${point.lon}`]
-    .filter(Boolean)
-    .join(', ')
-  const u = new URL('https://www.google.com/maps/search/')
-  u.searchParams.set('api', '1')
-  u.searchParams.set('query', q)
-  return u.toString()
+  const opts =
+    typeof addressOrOpts === 'string'
+      ? { address: addressOrOpts }
+      : addressOrOpts ?? {}
+
+  const parts: string[] = []
+  const title = name.trim()
+  if (title) parts.push(title)
+
+  // Disambiguate famous names (e.g. "Taj Mahal" restaurant vs the monument)
+  const cat = opts.category || ''
+  if (cat === 'food' || cat === 'drink') {
+    const cuisine = opts.cuisine?.replace(/[;,|/]+/g, ' ').trim()
+    if (cuisine && !title.toLowerCase().includes(cuisine.toLowerCase())) {
+      parts.push(cuisine.split(/\s+/)[0]!)
+    }
+    const kind = cat === 'drink' ? 'bar' : 'restaurant'
+    if (!new RegExp(`\\b${kind}\\b`, 'i').test(title)) parts.push(kind)
+  } else if (cat === 'sights' || cat === 'nature') {
+    // keep name + address; location bias does the rest
+  }
+
+  const address = opts.address?.trim()
+  if (address) parts.push(address)
+
+  const query = parts.join(' ').replace(/\s+/g, ' ').trim() || `${point.lat},${point.lon}`
+  const lat = Number(point.lat.toFixed(6))
+  const lon = Number(point.lon.toFixed(6))
+  // Path search + @viewport biases results to this pin (api=1 query+coords often ignores place)
+  return `https://www.google.com/maps/search/${encodeURIComponent(query)}/@${lat},${lon},17z`
 }
 
-/** Google search for a place menu (no API — opens Search, which often shows Maps menu/order). */
+/** Open Maps centered on the pin looking for this place’s menu (no GPS `near=`). */
 export function googleMenuSearchUrl(
   name: string,
   point: { lat: number; lon: number },
+  opts?: { address?: string; category?: string; cuisine?: string },
 ): string {
-  const u = new URL('https://www.google.com/search')
-  u.searchParams.set('q', `${name.trim()} menu`)
-  u.searchParams.set('near', `${point.lat},${point.lon}`)
-  return u.toString()
+  // `near=lat,lon` is ignored by Google Search (uses the user’s GPS). Put location in
+  // the query and open Maps with the same @lat,lon viewport as reviews.
+  const title = name.trim()
+  const label = /\bmenu\b/i.test(title) ? title : `${title} menu`
+  return mapsPlaceSearchUrl(label, point, {
+    address: opts?.address,
+    category: opts?.category ?? 'food',
+    cuisine: opts?.cuisine,
+  })
 }
 
 /** Open Google Maps “Things to do” centered on a spot (not the user’s GPS). */

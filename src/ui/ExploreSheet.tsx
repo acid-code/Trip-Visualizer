@@ -7,7 +7,6 @@ import {
   type ExploreSort,
 } from '../data/explore'
 import {
-  googleMenuSearchUrl,
   mapsNearbyExploreUrl,
   mapsPlaceSearchUrl,
   openExternalUrl,
@@ -222,40 +221,10 @@ export function ExploreSheet({
               </button>
             </div>
             <div className="space-y-2.5 px-4 py-3">
-              {detail.images[0] ? (
-                <img
-                  src={detail.images[0]}
-                  alt=""
-                  className="h-28 w-full rounded-2xl object-cover"
-                />
-              ) : (
-                <div className="flex h-20 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-100 to-orange-100 text-2xl">
-                  📍
-                </div>
-              )}
-              <div className="flex flex-wrap gap-2 text-xs text-stone-600">
-                <span className="rounded-full bg-stone-100 px-2 py-0.5 tabular-nums">
-                  {formatKm(detail.distKm)}
-                </span>
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-2 py-0.5 text-amber-800">
-                  <span aria-hidden className="text-[10px]">
-                    ★
-                  </span>
-                  {detail.rating != null ? detail.rating : '—'}
-                  <span className="text-[9px] text-stone-400">(OSM)</span>
-                </span>
-              </div>
-              {detail.summary ? (
-                <p className="text-sm leading-relaxed text-stone-700">{detail.summary}</p>
-              ) : null}
-              {detail.address ? (
-                <p className="text-xs text-stone-500">{detail.address}</p>
-              ) : null}
-              {detail.cuisine ? (
-                <p className="text-xs text-stone-500">Cuisine: {detail.cuisine}</p>
-              ) : null}
-              {detail.openingHours ? (
-                <p className="text-xs text-stone-500">Hours: {detail.openingHours}</p>
+              <DetailMedia place={detail} />
+
+              {detail.images.length !== 1 ? (
+                <DetailMeta place={detail} />
               ) : null}
 
               <div className="flex flex-wrap gap-2">
@@ -264,24 +233,26 @@ export function ExploreSheet({
                   className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 shadow-sm"
                   onClick={() =>
                     openExternalUrl(
-                      mapsPlaceSearchUrl(detail.name, detail, detail.address),
+                      mapsPlaceSearchUrl(detail.name, detail, {
+                        address: detail.address,
+                        category: detail.category,
+                        cuisine: detail.cuisine,
+                      }),
                     )
                   }
                 >
                   Google Maps · reviews
                 </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 shadow-sm"
-                  onClick={() => {
-                    const url =
-                      detail.menuUrl ||
-                      googleMenuSearchUrl(detail.name, detail)
-                    openExternalUrl(url)
-                  }}
-                >
-                  {detail.menuUrl ? 'Menu' : 'Find menu'}
-                </button>
+                {detail.menuUrl &&
+                (detail.category === 'food' || detail.category === 'drink') ? (
+                  <button
+                    type="button"
+                    className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 shadow-sm"
+                    onClick={() => openExternalUrl(detail.menuUrl)}
+                  >
+                    Menu
+                  </button>
+                ) : null}
                 {detail.website ? (
                   <button
                     type="button"
@@ -303,6 +274,94 @@ export function ExploreSheet({
             </div>
           </div>
         </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** Fixed-height photo strip: fit full image height; extra photos fill width, else info sits beside. */
+function DetailMedia({ place }: { place: ExplorePlace }) {
+  const images = place.images.filter(Boolean)
+  const single = images.length <= 1
+
+  if (!images.length) {
+    return (
+      <div className="flex h-24 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-100 to-orange-100 text-2xl">
+        📍
+      </div>
+    )
+  }
+
+  return (
+    <div className={`flex gap-3 ${single ? 'items-stretch' : 'flex-col'}`}>
+      <div
+        className={`flex h-36 gap-1.5 overflow-x-auto rounded-2xl bg-stone-100/80 p-1 [scrollbar-width:thin] ${
+          single ? 'w-[min(48%,12rem)] shrink-0' : 'w-full'
+        }`}
+      >
+        {images.map((src) => (
+          <img
+            key={src}
+            src={src}
+            alt=""
+            className="h-full w-auto max-w-none shrink-0 rounded-xl object-contain"
+            draggable={false}
+          />
+        ))}
+      </div>
+      {single ? (
+        <div className="min-w-0 flex-1">
+          <DetailMeta place={place} compact />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function DetailMeta({
+  place,
+  compact = false,
+}: {
+  place: ExplorePlace
+  compact?: boolean
+}) {
+  return (
+    <div className={compact ? 'flex h-full flex-col gap-1.5' : 'space-y-2'}>
+      <div className="flex flex-wrap gap-1.5 text-xs text-stone-600">
+        <span className="rounded-full bg-stone-100 px-2 py-0.5 tabular-nums">
+          {formatKm(place.distKm)}
+        </span>
+        <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-2 py-0.5 text-amber-800">
+          <span aria-hidden className="text-[10px]">
+            ★
+          </span>
+          {place.rating != null ? place.rating : '—'}
+          <span className="text-[9px] text-stone-400">(OSM)</span>
+        </span>
+      </div>
+      {place.summary ? (
+        <p
+          className={`leading-relaxed text-stone-700 ${
+            compact ? 'line-clamp-5 text-xs' : 'text-sm'
+          }`}
+        >
+          {place.summary}
+        </p>
+      ) : null}
+      {place.address ? (
+        <p className={`text-stone-500 ${compact ? 'line-clamp-2 text-[11px]' : 'text-xs'}`}>
+          {place.address}
+        </p>
+      ) : null}
+      {place.cuisine ? (
+        <p className={`text-stone-500 ${compact ? 'text-[11px]' : 'text-xs'}`}>
+          Cuisine: {place.cuisine}
+        </p>
+      ) : null}
+      {place.openingHours ? (
+        <p className={`text-stone-500 ${compact ? 'line-clamp-2 text-[11px]' : 'text-xs'}`}>
+          Hours: {place.openingHours}
+        </p>
       ) : null}
     </div>
   )

@@ -52,12 +52,21 @@ import { ItemDrawer } from './ui/ItemDrawer'
 import { AddStepPanel, type AddContext } from './ui/AddStepPanel'
 import { MapSearchBar } from './ui/MapSearchBar'
 import { ExploreSheet } from './ui/ExploreSheet'
+import { FeatureGuide } from './ui/FeatureGuide'
 import {
   explorePlaceToItemType,
   fetchNearbyExplore,
   type ExplorePlace,
 } from './data/explore'
+import {
+  FEATURE_TIPS,
+  parseSeenTipIds,
+  serializeSeenTipIds,
+  unseenFeatureTips,
+  type FeatureTip,
+} from './data/featureGuide'
 import type { MapStack } from './globe/viewer'
+import { firstOpenableStep } from './globe/viewer'
 import { EXAMPLE_TRIP_ID } from './data/examples/france-south-loop'
 import { downloadPolarstepsJson } from './data/polarsteps'
 import { ensureDayStartBases, deleteStepAndPrune, isPlaceholderBase, itemTouchesDay } from './data/dayBases'
@@ -152,6 +161,10 @@ export default function App() {
   const [exploreDetail, setExploreDetail] = useState<ExplorePlace | null>(null)
   const [exploreFlyToken, setExploreFlyToken] = useState(0)
   const [exploreReturnToken, setExploreReturnToken] = useState(0)
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [guideTips, setGuideTips] = useState<FeatureTip[]>([])
+  const [seenTipIds, setSeenTipIds] = useState<Set<string>>(() => new Set())
+  const guideAutoShownRef = useRef(false)
   const routesForTripRef = useRef<string | null>(null)
   const tempPinGenRef = useRef(0)
   const exploreAbortRef = useRef<AbortController | null>(null)
@@ -170,7 +183,15 @@ export default function App() {
     await ensureExampleTrip()
     const all = await listTrips()
     setTrips(all)
-    setActiveId((prev) => prev ?? all.find((t) => t.isExample)?.id ?? all[0]?.id ?? null)
+    // Prefer the latest personal / WIP trip; fall back to the example
+    setActiveId(
+      (prev) =>
+        prev ??
+        all.find((t) => !t.isExample)?.id ??
+        all.find((t) => t.isExample)?.id ??
+        all[0]?.id ??
+        null,
+    )
   }, [])
 
   useEffect(() => {
@@ -186,8 +207,50 @@ export default function App() {
       )
       const walkPref = await getSetting('walkApp')
       setWalkApp(isWalkAppPref(walkPref) ? walkPref : 'maps')
+      const seen = parseSeenTipIds(await getSetting('featureGuideSeen'))
+      setSeenTipIds(seen)
+      const unseen = unseenFeatureTips(seen)
+      if (unseen.length && !guideAutoShownRef.current) {
+        guideAutoShownRef.current = true
+        setGuideTips(unseen)
+        setGuideOpen(true)
+      }
     })()
   }, [refresh])
+
+  async function markTipsSeen(ids: string[]) {
+    if (!ids.length) return
+    setSeenTipIds((prev) => {
+      const next = new Set(prev)
+      for (const id of ids) next.add(id)
+      void setSetting('featureGuideSeen', serializeSeenTipIds(next))
+      return next
+    })
+  }
+
+  function openFeatureGuide(opts?: { all?: boolean }) {
+    const tips = opts?.all ? FEATURE_TIPS : unseenFeatureTips(seenTipIds)
+    const deck = tips.length ? tips : FEATURE_TIPS
+    setGuideTips(deck)
+    setGuideOpen(true)
+  }
+
+  // When a trip becomes active, highlight its first step (camera uses opening framing)
+  useEffect(() => {
+    if (!activeId || !active) return
+    const first = firstOpenableStep(active.items)
+    setSelectedId(first?.id ?? null)
+    // Phone + first flight: focus departure pin (leg A), not the whole arc
+    setMapFocusEndpoint(
+      isPhone && first?.type === 'flight' && isValidCoord(first.lat, first.lon)
+        ? 'a'
+        : null,
+    )
+    setRouteWalk(null)
+    setLowerMode('none')
+    setDetailExpanded(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when switching trips
+  }, [activeId])
 
   async function persist(next: TripRecord) {
     const items = ensureDayStartBases(next.meta, next.items)
@@ -1037,6 +1100,8 @@ export default function App() {
           googleKey={googleKey || undefined}
           ionToken={ionToken || undefined}
           overviewToken={overviewToken}
+          tripFocusId={activeId}
+          openingOriginOnly={isPhone}
           tempPin={tempPin}
           nearbyLinks={nearbyLinks}
           tempFlyToken={tempFlyToken}
@@ -1145,6 +1210,14 @@ export default function App() {
               onClick={() => setOverviewToken((n) => n + 1)}
             >
               Overview
+            </button>
+            <button
+              type="button"
+              className="rounded-full bg-orange-500/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-orange-400"
+              title="Feature tips"
+              onClick={() => openFeatureGuide({ all: true })}
+            >
+              Tips
             </button>
           </div>
           {status ? <p className="text-right text-xs text-emerald-300">{status}</p> : null}
@@ -1277,6 +1350,7 @@ export default function App() {
                       void buildRoutes(active)
                     }}
                     onAddDay={() => void addDay()}
+                    onShowTips={() => openFeatureGuide({ all: true })}
                     setMapStack={(id) => {
                       setMapStack(id)
                       void setSetting('mapStack', id)
@@ -1444,6 +1518,7 @@ export default function App() {
                       void buildRoutes(active)
                     }}
                     onAddDay={() => void addDay()}
+                    onShowTips={() => openFeatureGuide({ all: true })}
                     setMapStack={(id) => {
                       setMapStack(id)
                       void setSetting('mapStack', id)
@@ -1586,6 +1661,13 @@ export default function App() {
           </div>
         </section>
       ) : null}
+
+      <FeatureGuide
+        open={guideOpen}
+        tips={guideTips}
+        onClose={() => setGuideOpen(false)}
+        onMarkSeen={(ids) => void markTipsSeen(ids)}
+      />
     </div>
   )
 }
@@ -1609,6 +1691,7 @@ function DataPanel({
   onEnrich,
   onRebuildRoutes,
   onAddDay,
+  onShowTips,
   setMapStack,
   setWalkApp,
   setGoogleKey,
@@ -1633,6 +1716,7 @@ function DataPanel({
   onEnrich: () => void
   onRebuildRoutes: () => void
   onAddDay: () => void
+  onShowTips: () => void
   setMapStack: (id: MapStack) => void
   setWalkApp: (pref: WalkAppPref) => void
   setGoogleKey: (v: string) => void
@@ -1641,6 +1725,19 @@ function DataPanel({
 }) {
   return (
     <>
+      <div className="rounded-2xl border border-sky-200 bg-sky-50/80 p-3">
+        <div className="text-xs font-semibold uppercase tracking-wide text-sky-700">
+          Feature tips
+        </div>
+        <p className="mt-1 text-xs text-stone-600">
+          Short illustrated walkthrough for friends and family. New tips only appear once —
+          reopen anytime from here or the Tips button.
+        </p>
+        <button type="button" className={`${btnPrimary} mt-2`} onClick={onShowTips}>
+          Show tips
+        </button>
+      </div>
+
       <ActionRow>
         <button className={btnPrimary} onClick={onOpenExample}>
           Open example trip

@@ -18,8 +18,10 @@ import {
   createTripViewer,
   flyToCoords,
   flyToItem,
+  flyToOpeningItem,
   flyToRouteCoords,
   flyToTripOverview,
+  firstOpenableStep,
   lonLatToCanvasCss,
   parseTripEndpoint,
   parseTripItemId,
@@ -68,6 +70,10 @@ type Props = {
   /** Any map tap (pin, road, or empty) — e.g. dismiss Data sheet */
   onMapPress?: () => void
   overviewToken?: number
+  /** When this changes (e.g. active trip id), frame the first step for opening */
+  tripFocusId?: string | null
+  /** Phone: open flights on departure (leg A) instead of the full arc */
+  openingOriginOnly?: boolean
   tempPin?: TempPinDraw | null
   nearbyLinks?: NearbyStepLink[]
   tempFlyToken?: number
@@ -113,6 +119,8 @@ export function GlobeView({
   exploreFocusId = null,
   exploreFlyToken = 0,
   exploreReturnToken = 0,
+  tripFocusId = null,
+  openingOriginOnly = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const walkOverlayRef = useRef<HTMLDivElement>(null)
@@ -133,6 +141,13 @@ export function GlobeView({
   const pathActionReadyRef = useRef(true)
   const [pathActionReady, setPathActionReady] = useState(true)
   const routeFlyGenRef = useRef(0)
+  const openedTripFocusRef = useRef<string | null>(null)
+  /** Opening selection of this step skips pin-zoom once (city/flight frame already applied). */
+  const openingStepIdRef = useRef<string | null>(null)
+  const tripFocusIdRef = useRef(tripFocusId)
+  tripFocusIdRef.current = tripFocusId
+  const openingOriginOnlyRef = useRef(openingOriginOnly)
+  openingOriginOnlyRef.current = openingOriginOnly
 
   itemsRef.current = items
   connectorsRef.current = connectors
@@ -434,7 +449,15 @@ export function GlobeView({
       requestAnimationFrame(() => {
         if (cancelled || !viewerRef.current) return
         viewerRef.current.resize()
-        flyToTripOverview(viewerRef.current, itemsRef.current)
+        const focusId = tripFocusIdRef.current
+        const first = firstOpenableStep(itemsRef.current)
+        if (focusId && first && openedTripFocusRef.current !== focusId) {
+          openedTripFocusRef.current = focusId
+          openingStepIdRef.current = first.id
+          flyToOpeningItem(viewerRef.current, first, {
+            originOnly: openingOriginOnlyRef.current,
+          })
+        }
         syncWalkButton()
       })
     })()
@@ -547,9 +570,25 @@ export function GlobeView({
     /* ion terrain skipped */
   }, [ionToken])
 
+  // Open each trip on its first step (city / flight framing — not pin-select zoom)
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!viewer || !tripFocusId) return
+    if (openedTripFocusRef.current === tripFocusId) return
+    const first = firstOpenableStep(items)
+    if (!first) return
+    openedTripFocusRef.current = tripFocusId
+    openingStepIdRef.current = first.id
+    flyToOpeningItem(viewer, first, { originOnly: openingOriginOnly })
+  }, [tripFocusId, items, openingOriginOnly])
+
   useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer || !selectedId) return
+    if (openingStepIdRef.current && selectedId === openingStepIdRef.current) {
+      openingStepIdRef.current = null
+      return
+    }
     // Path taps frame the whole route themselves — don't zoom to the destination pin
     if (walkTarget?.kind === 'directions' || walkTarget?.kind === 'flights') return
     const item = itemsRef.current.find((i) => i.id === selectedId)

@@ -1,8 +1,7 @@
-/** Nearby Explore places via Overpass (OSM) + optional Wikidata photos — no API key. */
+/** Nearby Explore places via Overpass (OSM) + Wikimedia / Wikipedia photos — no API key. */
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type { ItemType } from '../domain/types'
-import { fetchWikidataSummary } from './enrichment'
 import { distKm } from './routes'
 import { clampText, logClientError, safeHttpsUrl } from './security'
 import { isValidCoord } from './validate'
@@ -103,8 +102,9 @@ function cacheDb() {
 }
 
 function cacheKey(lat: number, lon: number, radiusM: number): string {
+  // v4: only place-linked photos/summaries (no geo/name guesswork)
   // ~1 km cells so nearby pins share the same explore cache
-  return `${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}`
+  return `v4:${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}`
 }
 
 async function getCached(key: string): Promise<ExplorePlace[] | null> {
@@ -180,6 +180,40 @@ function commonsFileUrl(file: string): string {
   )
 }
 
+function pushImage(list: string[], raw: string | undefined | null) {
+  if (!raw) return
+  const t = raw.trim()
+  if (!t) return
+  let url = ''
+  if (/^https?:\/\//i.test(t)) {
+    url = safeHttpsUrl(t)
+  } else if (/^File:/i.test(t) || /\.(jpe?g|png|gif|webp|svg)$/i.test(t)) {
+    url = commonsFileUrl(t)
+  } else if (!/^Category:/i.test(t) && t.includes('.')) {
+    url = commonsFileUrl(t)
+  }
+  if (url && !list.includes(url)) list.push(url)
+}
+
+/** Collect direct image URLs already on the OSM object. */
+function imagesFromTags(tags: Record<string, string>): string[] {
+  const images: string[] = []
+  pushImage(images, tags.image)
+  for (const [key, value] of Object.entries(tags)) {
+    if (/^image:\d+$/i.test(key)) pushImage(images, value)
+  }
+  const wc = tags.wikimedia_commons || ''
+  if (wc && !/^Category:/i.test(wc)) pushImage(images, wc)
+  // Some POIs store a Wikimedia page URL in `image` already handled above
+  return images.slice(0, 6)
+}
+
+function commonsCategoryTitle(tags: Record<string, string>): string {
+  const wc = tags.wikimedia_commons || ''
+  if (/^Category:/i.test(wc)) return wc
+  return ''
+}
+
 function addressFromTags(tags: Record<string, string>): string {
   const parts = [
     [tags['addr:housenumber'], tags['addr:street']].filter(Boolean).join(' '),
@@ -200,16 +234,6 @@ function elementToPlace(
   const name = clampText(tags.name || tags['name:en'] || tags.brand || '', 120)
   if (!name) return null
 
-  const images: string[] = []
-  if (tags.image) {
-    const u = safeHttpsUrl(tags.image)
-    if (u) images.push(u)
-  }
-  if (tags.wikimedia_commons) {
-    const u = commonsFileUrl(tags.wikimedia_commons)
-    if (u && !images.includes(u)) images.push(u)
-  }
-
   const osmId = `${el.type}/${el.id}`
   return {
     id: `osm:${osmId}`,
@@ -220,7 +244,7 @@ function elementToPlace(
     osmType: el.type,
     osmId,
     wikidata: clampText(tags.wikidata || '', 32),
-    images,
+    images: imagesFromTags(tags),
     summary: '',
     distKm: distKm(anchor, { lat: lat!, lon: lon! }),
     rating: parseStars(tags),
@@ -280,32 +304,181 @@ async function queryOverpass(query: string, signal?: AbortSignal): Promise<Overp
   throw lastErr instanceof Error ? lastErr : new Error('Overpass failed')
 }
 
+type WikiEntityLite = {
+  id: string
+  summary: string
+  images: string[]
+}
+
+/** Batch-fetch Wikidata P18 images (up to several files per entity). */
+async function fetchWikidataImagesBatch(
+  ids: string[],
+  signal?: AbortSignal,
+): Promise<Map<string, WikiEntityLite>> {
+  const out = new Map<string, WikiEntityLite>()
+  const clean = [...new Set(ids.map((id) => id.toUpperCase()).filter((id) => /^Q\d+$/.test(id)))]
+  for (let i = 0; i < clean.length; i += 20) {
+    if (signal?.aborted) break
+    const chunk = clean.slice(i, i + 20)
+    try {
+      const url = new URL('https://www.wikidata.org/w/api.php')
+      url.searchParams.set('action', 'wbgetentities')
+      url.searchParams.set('format', 'json')
+      url.searchParams.set('origin', '*')
+      url.searchParams.set('props', 'labels|descriptions|claims')
+      url.searchParams.set('languages', 'en')
+      url.searchParams.set('ids', chunk.join('|'))
+      const res = await fetch(url.toString(), { signal })
+      if (!res.ok) continue
+      const json = (await res.json()) as {
+        entities?: Record<
+          string,
+          {
+            id: string
+            labels?: { en?: { value: string } }
+            descriptions?: { en?: { value: string } }
+            claims?: {
+              P18?: Array<{ mainsnak?: { datavalue?: { value?: string } } }>
+            }
+          }
+        >
+      }
+      for (const entity of Object.values(json.entities ?? {})) {
+        if (!entity?.id || entity.id.startsWith('-')) continue
+        const images: string[] = []
+        for (const claim of entity.claims?.P18 ?? []) {
+          const file = claim.mainsnak?.datavalue?.value
+          if (file) pushImage(images, `File:${file}`)
+        }
+        out.set(entity.id, {
+          id: entity.id,
+          summary: entity.descriptions?.en?.value || entity.labels?.en?.value || '',
+          images: images.slice(0, 5),
+        })
+      }
+    } catch (err) {
+      if (signal?.aborted) throw err
+    }
+  }
+  return out
+}
+
+async function fetchCommonsCategoryImages(
+  categoryTitle: string,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  try {
+    const url = new URL('https://commons.wikimedia.org/w/api.php')
+    url.searchParams.set('action', 'query')
+    url.searchParams.set('format', 'json')
+    url.searchParams.set('origin', '*')
+    url.searchParams.set('generator', 'categorymembers')
+    url.searchParams.set('gcmtitle', categoryTitle)
+    url.searchParams.set('gcmtype', 'file')
+    url.searchParams.set('gcmlimit', '4')
+    url.searchParams.set('prop', 'imageinfo')
+    url.searchParams.set('iiprop', 'url')
+    url.searchParams.set('iiurlwidth', '640')
+    const res = await fetch(url.toString(), { signal })
+    if (!res.ok) return []
+    const json = (await res.json()) as {
+      query?: {
+        pages?: Record<
+          string,
+          { imageinfo?: Array<{ thumburl?: string; url?: string }> }
+        >
+      }
+    }
+    const images: string[] = []
+    for (const page of Object.values(json.query?.pages ?? {})) {
+      const info = page.imageinfo?.[0]
+      pushImage(images, info?.thumburl || info?.url)
+    }
+    return images
+  } catch {
+    return []
+  }
+}
+
+function normalizeName(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function namesLooselyMatch(a: string, b: string): boolean {
+  const na = normalizeName(a)
+  const nb = normalizeName(b)
+  if (!na || !nb) return false
+  if (na === nb) return true
+  if (na.includes(nb) || nb.includes(na)) return true
+  const wa = new Set(na.split(' ').filter((w) => w.length > 2))
+  const wb = nb.split(' ').filter((w) => w.length > 2)
+  if (!wa.size || !wb.length) return false
+  const hit = wb.filter((w) => wa.has(w)).length
+  return hit >= Math.min(2, wb.length)
+}
+
+function mergeImages(existing: string[], extra: string[], max = 6): string[] {
+  const out = [...existing]
+  for (const u of extra) {
+    if (u && !out.includes(u)) out.push(u)
+    if (out.length >= max) break
+  }
+  return out
+}
+
+/**
+ * Enrich only with media clearly tied to the place:
+ * OSM image / File tags, Commons categories that name-match the place, Wikidata P18.
+ * Never invent nearby Wikipedia / name-search photos or copy their summaries.
+ */
 async function enrichImages(
   places: ExplorePlace[],
   signal?: AbortSignal,
 ): Promise<ExplorePlace[]> {
-  const need = places.filter((p) => p.wikidata && p.images.length === 0).slice(0, 18)
   const out = places.map((p) => ({ ...p, images: [...p.images] }))
-  for (const place of need) {
+
+  // 1) Commons categories tagged on OSM — only when the category looks like this place
+  const withCat = out
+    .map((p, idx) => ({ p, idx, cat: commonsCategoryTitle(p.tags) }))
+    .filter(
+      (x) =>
+        x.cat &&
+        x.p.images.length < 2 &&
+        namesLooselyMatch(x.cat.replace(/^Category:/i, ''), x.p.name),
+    )
+    .slice(0, 12)
+  for (const row of withCat) {
     if (signal?.aborted) break
-    try {
-      const wiki = await fetchWikidataSummary(place.wikidata)
-      if (!wiki) continue
-      const idx = out.findIndex((p) => p.id === place.id)
-      if (idx < 0) continue
-      const cur = out[idx]!
-      const image = wiki.image ? safeHttpsUrl(wiki.image) : ''
-      out[idx] = {
-        ...cur,
-        summary: cur.summary || clampText(wiki.summary, 400),
-        wikidata: cur.wikidata || wiki.id,
-        images: image ? [image, ...cur.images] : cur.images,
+    const imgs = await fetchCommonsCategoryImages(row.cat, signal)
+    if (imgs.length) {
+      out[row.idx] = {
+        ...out[row.idx]!,
+        images: mergeImages(out[row.idx]!.images, imgs.slice(0, 3)),
       }
-      await new Promise((r) => setTimeout(r, 120))
-    } catch {
-      /* skip */
     }
   }
+
+  // 2) Batch Wikidata P18 + short description for places that have their own Q-id
+  const wikiIds = out.map((p) => p.wikidata).filter(Boolean)
+  const wikiMap = await fetchWikidataImagesBatch(wikiIds, signal)
+  for (let i = 0; i < out.length; i++) {
+    const cur = out[i]!
+    if (!cur.wikidata) continue
+    const wiki = wikiMap.get(cur.wikidata.toUpperCase())
+    if (!wiki) continue
+    out[i] = {
+      ...cur,
+      summary: cur.summary || clampText(wiki.summary, 400),
+      images: mergeImages(cur.images, wiki.images),
+    }
+  }
+
   return out
 }
 
