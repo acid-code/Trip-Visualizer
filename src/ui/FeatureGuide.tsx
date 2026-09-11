@@ -112,7 +112,7 @@ function TipFrame({ visual }: { visual: FeatureTipVisual }) {
           <>
             <Finger className="absolute left-[42%] top-[48%]" />
             <Pin className="absolute left-[48%] top-[38%]" color="#fb923c" pulse />
-            <Caption>Hold…</Caption>
+            <Caption>Hold · double-tap clears</Caption>
           </>
         ) : null}
 

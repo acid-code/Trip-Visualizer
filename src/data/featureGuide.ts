@@ -26,7 +26,7 @@ export const FEATURE_TIPS: FeatureTip[] = [
   {
     id: 'long-press-pin',
     title: 'Drop a pin',
-    body: 'Long-press anywhere on the globe to plant a temporary pin. Hold still — a short buzz means it’s dropped.',
+    body: 'Long-press anywhere on the globe to plant a temporary pin. Hold still — a short buzz means it’s dropped. Double-tap empty map to remove it.',
     visual: 'long-press',
   },
   {
@@ -62,8 +62,14 @@ export const FEATURE_TIPS: FeatureTip[] = [
   {
     id: 'save-with-plus',
     title: 'Save with +',
-    body: 'After dropping a pin, press the + tongue to turn it into a real step on that day. Nearby steps within 3 km help suggest the date.',
+    body: 'After dropping a pin, press the + tongue to turn it into a real step on that day. Nearby steps within 3 km help suggest the date. Double-tap the map if you want to clear the temp pin instead.',
     visual: 'plus-save',
+  },
+  {
+    id: 'clear-temp-pin',
+    title: 'Clear a temp pin',
+    body: 'Double-tap empty space on the map to remove a temporary pin. Sliding the globe won’t clear it — only a quick double-tap.',
+    visual: 'long-press',
   },
   {
     id: 'overview-camera',
