@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+/** Preview deploys behind Vercel SSO break /manifest.webmanifest (CORS) — skip PWA there. */
+const disablePwa = process.env.VERCEL_ENV === 'preview'
+
 export default defineConfig({
   plugins: [
     react(),
@@ -33,6 +36,7 @@ export default defineConfig({
       ],
     }),
     VitePWA({
+      disable: disablePwa,
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
       manifest: {
@@ -77,5 +81,22 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    proxy: {
+      // Local Explore: same-origin /api/overpass → public Overpass (avoids browser CORS)
+      '/api/overpass': {
+        target: 'https://overpass-api.de',
+        changeOrigin: true,
+        rewrite: () => '/api/interpreter',
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.setHeader(
+              'User-Agent',
+              'trip-worker/0.1 (personal offline-first trip journal)',
+            )
+            proxyReq.setHeader('Accept', 'application/json')
+          })
+        },
+      },
+    },
   },
 })

@@ -32,10 +32,8 @@ export type ExplorePlace = {
 
 export type ExploreSort = 'distance' | 'name' | 'rating'
 
-const OVERPASS_ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-]
+/** Same-origin proxy on Vercel (and Vite dev) — avoids browser CORS / 406. */
+const OVERPASS_PROXY = '/api/overpass'
 
 const DEFAULT_RADIUS_M = 1500
 const DEFAULT_LIMIT = 40
@@ -277,31 +275,30 @@ out center tags;
 }
 
 async function queryOverpass(query: string, signal?: AbortSignal): Promise<OverpassElement[]> {
-  let lastErr: unknown
-  for (const endpoint of OVERPASS_ENDPOINTS) {
-    try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-          Accept: 'application/json',
-        },
-        body: `data=${encodeURIComponent(query)}`,
-        signal,
-      })
-      if (!res.ok) {
-        lastErr = new Error(`Overpass ${res.status}`)
-        continue
-      }
-      const json = (await res.json()) as { elements?: OverpassElement[] }
-      return json.elements ?? []
-    } catch (err) {
-      if (signal?.aborted) throw err
-      lastErr = err
+  // Same-origin /api/overpass (Vercel function or Vite proxy) — public Overpass blocks browsers
+  try {
+    const res = await fetch(OVERPASS_PROXY, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        Accept: 'application/json',
+      },
+      body: `data=${encodeURIComponent(query)}`,
+      signal,
+    })
+    if (!res.ok) {
+      throw new Error(`Overpass ${res.status}`)
     }
+    const json = (await res.json()) as { elements?: OverpassElement[]; error?: string }
+    if (json.error && !json.elements) {
+      throw new Error(json.error)
+    }
+    return json.elements ?? []
+  } catch (err) {
+    if (signal?.aborted) throw err
+    logClientError('explore-overpass', err)
+    throw err instanceof Error ? err : new Error('Overpass failed')
   }
-  logClientError('explore-overpass', lastErr)
-  throw lastErr instanceof Error ? lastErr : new Error('Overpass failed')
 }
 
 type WikiEntityLite = {
