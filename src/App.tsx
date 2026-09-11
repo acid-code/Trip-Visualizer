@@ -112,12 +112,25 @@ export default function App() {
   const [tempFlyToken, setTempFlyToken] = useState(0)
   const [searchBusy, setSearchBusy] = useState(false)
   const [mapFocusEndpoint, setMapFocusEndpoint] = useState<'a' | 'b' | null>(null)
-  const [routeWalk, setRouteWalk] = useState<{
-    origin: { lat: number; lon: number }
-    destination: { lat: number; lon: number }
-    travelMode: MapsTravelMode
-    coords: [number, number][]
-  } | null>(null)
+  const [routeWalk, setRouteWalk] = useState<
+    | {
+        kind: 'route'
+        origin: { lat: number; lon: number }
+        destination: { lat: number; lon: number }
+        travelMode: MapsTravelMode
+        coords: [number, number][]
+      }
+    | {
+        kind: 'flights'
+        from: string
+        to: string
+        date: string
+        origin: { lat: number; lon: number }
+        destination: { lat: number; lon: number }
+        coords: [number, number][]
+      }
+    | null
+  >(null)
   const routesForTripRef = useRef<string | null>(null)
   const tempPinGenRef = useRef(0)
 
@@ -471,9 +484,29 @@ export default function App() {
     // Map tap always dismisses the side/bottom sheet (Steps, Data, Stats)
     setPanelOpen(false)
 
+    if (payload.kind === 'flight') {
+      clearTempPin()
+      setRouteWalk({
+        kind: 'flights',
+        from: payload.from,
+        to: payload.to,
+        date: payload.date,
+        origin: payload.origin,
+        destination: payload.destination,
+        coords: payload.coords,
+      })
+      setMapFocusEndpoint(null)
+      setSelectedId(payload.itemId)
+      setAddContext(null)
+      setLowerMode('none')
+      setDetailExpanded(false)
+      return
+    }
+
     if (payload.kind === 'route') {
       clearTempPin()
       setRouteWalk({
+        kind: 'route',
         origin: payload.origin,
         destination: payload.destination,
         travelMode: payload.travelMode,
@@ -739,7 +772,18 @@ export default function App() {
         prefer: walkApp,
       }
     }
-    if (routeWalk) {
+    if (routeWalk?.kind === 'flights') {
+      return {
+        kind: 'flights',
+        from: routeWalk.from,
+        to: routeWalk.to,
+        date: routeWalk.date,
+        origin: routeWalk.origin,
+        destination: routeWalk.destination,
+        coords: routeWalk.coords,
+      }
+    }
+    if (routeWalk?.kind === 'route') {
       return {
         kind: 'directions',
         origin: routeWalk.origin,
@@ -799,7 +843,7 @@ export default function App() {
           tempFlyToken={tempFlyToken}
           walkTarget={walkTarget}
           onOpenWalk={() => {
-            if (walkTarget) openWalkTarget(walkTarget)
+            if (walkTarget) void openWalkTarget(walkTarget, googleKey || undefined)
           }}
           onSelect={selectFromMap}
           onMapPress={() => setPanelOpen(false)}
@@ -1442,8 +1486,8 @@ function DataPanel({
             ))}
           </div>
           <p className="mt-1 text-[10px] text-stone-400">
-            Pins &amp; steps → Street View / Earth. Walk paths → walking directions. Drive →
-            driving. Train / ferry / bus → transit.
+            Pins → Street View / Earth (with a Maps key: nearest pano, or Maps if none). Walk /
+            drive / transit paths → directions. Flight paths → Google Flights (✈️), not driving.
           </p>
         </div>
         <label className="mt-3 block text-xs text-stone-500">

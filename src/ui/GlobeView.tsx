@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
@@ -40,6 +40,16 @@ export type MapSelectPayload =
       origin: { lat: number; lon: number }
       destination: { lat: number; lon: number }
       travelMode: MapsTravelMode
+      coords: [number, number][]
+    }
+  | {
+      kind: 'flight'
+      itemId: string
+      from: string
+      to: string
+      date: string
+      origin: { lat: number; lon: number }
+      destination: { lat: number; lon: number }
       coords: [number, number][]
     }
 
@@ -102,6 +112,9 @@ export function GlobeView({
   const onMapPressRef = useRef(onMapPress)
   const walkTargetRef = useRef(walkTarget)
   const onOpenWalkRef = useRef(onOpenWalk)
+  const pathActionReadyRef = useRef(true)
+  const [pathActionReady, setPathActionReady] = useState(true)
+  const routeFlyGenRef = useRef(0)
 
   itemsRef.current = items
   connectorsRef.current = connectors
@@ -112,6 +125,37 @@ export function GlobeView({
   onMapPressRef.current = onMapPress
   walkTargetRef.current = walkTarget
   onOpenWalkRef.current = onOpenWalk
+  pathActionReadyRef.current = pathActionReady
+
+  const revealPathAction = (gen: number) => {
+    if (gen !== routeFlyGenRef.current) return
+    setPathActionReady(true)
+    // Position after paint once the button is shown
+    requestAnimationFrame(() => {
+      const overlay = walkOverlayRef.current
+      const v = viewerRef.current
+      const target = walkTargetRef.current
+      if (!overlay || !v || !target) return
+      if (target.kind !== 'directions' && target.kind !== 'flights') return
+      const point = walkAnchorPoint(target)
+      if (!point) return
+      const p = lonLatToCanvasCss(v, point.lon, point.lat)
+      if (!p) return
+      overlay.style.display = 'flex'
+      overlay.style.left = `${p.x}px`
+      overlay.style.top = `${p.y}px`
+    })
+  }
+
+  const beginRouteFly = (coords: [number, number][]) => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    const gen = ++routeFlyGenRef.current
+    setPathActionReady(false)
+    flyToRouteCoords(viewer, coords, () => revealPathAction(gen))
+  }
+  const beginRouteFlyRef = useRef(beginRouteFly)
+  beginRouteFlyRef.current = beginRouteFly
 
   useEffect(() => {
     let cancelled = false
@@ -139,6 +183,14 @@ export function GlobeView({
       const target = walkTargetRef.current
       if (!overlay || !v) return
       if (!target) {
+        overlay.style.display = 'none'
+        return
+      }
+      // Path actions wait until the camera finishes framing the route
+      if (
+        (target.kind === 'directions' || target.kind === 'flights') &&
+        !pathActionReadyRef.current
+      ) {
         overlay.style.display = 'none'
         return
       }
@@ -260,6 +312,7 @@ export function GlobeView({
             )
 
           if (isPath) {
+            // Flight arcs are not Maps drives — open Google Flights instead
             const pathCoords = routePathCoords(item, connector)
             const ends = routeEndpoints(item, connector)
             focusedEntityIdRef.current =
@@ -267,8 +320,28 @@ export function GlobeView({
                 ? `trip:${itemId}:b`
                 : `trip:${itemId}`
             viewer!.selectedEntity = entity
+
+            if (item?.type === 'flight') {
+              if (ends && pathCoords && pathCoords.length >= 2) {
+                beginRouteFlyRef.current(pathCoords)
+                onSelectRef.current({
+                  kind: 'flight',
+                  itemId,
+                  from: item.from || item.place || item.title,
+                  to: item.to || item.title,
+                  date: item.date,
+                  origin: ends.origin,
+                  destination: ends.destination,
+                  coords: pathCoords,
+                })
+              } else {
+                viewer!.selectedEntity = undefined
+              }
+              return
+            }
+
             if (ends && pathCoords && pathCoords.length >= 2) {
-              flyToRouteCoords(viewer!, pathCoords)
+              beginRouteFlyRef.current(pathCoords)
               onSelectRef.current({
                 kind: 'route',
                 itemId,
@@ -278,20 +351,18 @@ export function GlobeView({
                 coords: pathCoords,
               })
             } else if (ends) {
-              flyToRouteCoords(viewer!, [
+              const fallback: [number, number][] = [
                 [ends.origin.lat, ends.origin.lon],
                 [ends.destination.lat, ends.destination.lon],
-              ])
+              ]
+              beginRouteFlyRef.current(fallback)
               onSelectRef.current({
                 kind: 'route',
                 itemId,
                 origin: ends.origin,
                 destination: ends.destination,
                 travelMode: travelModeForLeg(item?.type, connector?.mode, entityId),
-                coords: [
-                  [ends.origin.lat, ends.origin.lon],
-                  [ends.destination.lat, ends.destination.lon],
-                ],
+                coords: fallback,
               })
             } else {
               focusEndpointRef.current =
@@ -375,12 +446,19 @@ export function GlobeView({
     const viewer = viewerRef.current
     if (!viewer) return
     const coords =
-      walkTarget?.kind === 'directions' &&
+      (walkTarget?.kind === 'directions' || walkTarget?.kind === 'flights') &&
       walkTarget.coords &&
       walkTarget.coords.length >= 2
         ? walkTarget.coords
         : null
     syncSelectedPathHighlight(viewer, coords)
+  }, [walkTarget])
+
+  useEffect(() => {
+    // Pin / Street View targets show the button immediately
+    if (!walkTarget || walkTarget.kind === 'point') {
+      setPathActionReady(true)
+    }
   }, [walkTarget])
 
   useEffect(() => {
@@ -414,7 +492,7 @@ export function GlobeView({
     const viewer = viewerRef.current
     if (!viewer || !selectedId) return
     // Path taps frame the whole route themselves — don't zoom to the destination pin
-    if (walkTarget?.kind === 'directions') return
+    if (walkTarget?.kind === 'directions' || walkTarget?.kind === 'flights') return
     const item = itemsRef.current.find((i) => i.id === selectedId)
     if (!item) return
     const endpoint = focusEndpointRef.current
@@ -444,6 +522,13 @@ export function GlobeView({
       overlay.style.display = 'none'
       return
     }
+    if (
+      (walkTarget.kind === 'directions' || walkTarget.kind === 'flights') &&
+      !pathActionReady
+    ) {
+      overlay.style.display = 'none'
+      return
+    }
     try {
       const point = walkAnchorPoint(walkTarget)
       if (!point) {
@@ -461,8 +546,9 @@ export function GlobeView({
     } catch {
       overlay.style.display = 'none'
     }
-  }, [walkTarget, selectedId, tempPin])
+  }, [walkTarget, selectedId, tempPin, pathActionReady])
 
+  const isFlight = walkTarget?.kind === 'flights'
   const directionsMode =
     walkTarget?.kind === 'directions' ? walkTarget.travelMode : null
   const etaMins = (() => {
@@ -475,14 +561,16 @@ export function GlobeView({
     }
     return null
   })()
-  const actionIcon =
-    directionsMode === 'driving'
+  const actionIcon = isFlight
+    ? '✈️'
+    : directionsMode === 'driving'
       ? '🚗'
       : directionsMode === 'transit'
         ? '🚌'
         : '🚶'
-  const actionTitle =
-    directionsMode === 'driving'
+  const actionTitle = isFlight
+    ? 'Open Google Flights'
+    : directionsMode === 'driving'
       ? etaMins
         ? `Open driving directions (~${etaMins} min)`
         : 'Open driving directions'
@@ -494,7 +582,7 @@ export function GlobeView({
             : 'Open walking directions'
           : 'Open nearest Street View'
   const actionLift =
-    walkTarget?.kind === 'directions'
+    walkTarget?.kind === 'directions' || walkTarget?.kind === 'flights'
       ? etaMins != null
         ? '-translate-y-[calc(50%+0.55rem)]'
         : '-translate-y-1/2'

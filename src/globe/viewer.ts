@@ -25,6 +25,7 @@ import {
   sampleTerrainMostDetailed,
   Cartographic,
   ConstantProperty,
+  EllipsoidGeodesic,
   Matrix4,
   Transforms,
 } from 'cesium'
@@ -233,8 +234,62 @@ function midpointLonLat(
   coords: [number, number][],
 ): { lon: number; lat: number } | null {
   if (coords.length < 2) return null
-  const [lat, lon] = coords[Math.floor(coords.length / 2)]!
-  return { lon, lat }
+
+  // True mid-distance along the path (not the middle array index — that put
+  // 2-point flight arcs on the destination airport).
+  const segLens: number[] = []
+  let total = 0
+  for (let i = 1; i < coords.length; i++) {
+    const a = coords[i - 1]!
+    const b = coords[i]!
+    try {
+      const geo = new EllipsoidGeodesic(
+        Cartographic.fromDegrees(a[1], a[0]),
+        Cartographic.fromDegrees(b[1], b[0]),
+      )
+      const d = geo.surfaceDistance
+      segLens.push(d)
+      total += d
+    } catch {
+      segLens.push(0)
+    }
+  }
+
+  if (!(total > 0)) {
+    const a = coords[0]!
+    const b = coords[coords.length - 1]!
+    return { lat: (a[0] + b[0]) / 2, lon: (a[1] + b[1]) / 2 }
+  }
+
+  let remain = total / 2
+  for (let i = 1; i < coords.length; i++) {
+    const d = segLens[i - 1]!
+    if (remain <= d || i === coords.length - 1) {
+      const a = coords[i - 1]!
+      const b = coords[i]!
+      const frac = d > 0 ? Math.min(1, Math.max(0, remain / d)) : 0.5
+      try {
+        const geo = new EllipsoidGeodesic(
+          Cartographic.fromDegrees(a[1], a[0]),
+          Cartographic.fromDegrees(b[1], b[0]),
+        )
+        const mid = geo.interpolateUsingFraction(frac)
+        return {
+          lon: CesiumMath.toDegrees(mid.longitude),
+          lat: CesiumMath.toDegrees(mid.latitude),
+        }
+      } catch {
+        return {
+          lat: a[0] + (b[0] - a[0]) * frac,
+          lon: a[1] + (b[1] - a[1]) * frac,
+        }
+      }
+    }
+    remain -= d
+  }
+
+  const last = coords[coords.length - 1]!
+  return { lat: last[0], lon: last[1] }
 }
 
 /** Midpoint along a [lat, lon] polyline (for overlay icons on routes). */
@@ -623,10 +678,15 @@ export function flyToCoords(viewer: Viewer, lon: number, lat: number, range = 42
 }
 
 /** Frame an entire drive/walk/transit path so the whole route is visible and centered. */
-export function flyToRouteCoords(viewer: Viewer, coords: [number, number][]) {
+export function flyToRouteCoords(
+  viewer: Viewer,
+  coords: [number, number][],
+  onComplete?: () => void,
+) {
   if (coords.length < 2) {
     const only = coords[0]
     if (only) flyToLonLat(viewer, only[1], only[0], 600)
+    onComplete?.()
     return
   }
   const pts = coords.map(([lat, lon]) => Cartesian3.fromDegrees(lon, lat, 0))
@@ -638,6 +698,8 @@ export function flyToRouteCoords(viewer: Viewer, coords: [number, number][]) {
   viewer.camera.flyToBoundingSphere(sphere, {
     duration: 1.15,
     offset: new HeadingPitchRange(0, CesiumMath.toRadians(-38), range),
+    complete: onComplete,
+    cancel: onComplete,
   })
 }
 
@@ -678,7 +740,7 @@ function clearSelectedPathEntities(viewer: Viewer) {
 }
 
 /**
- * Yellow glow along the chosen drive/walk path, with bright dots at start & end.
+ * Yellow glow along the chosen drive/walk/flight path, with bright dots at start & end.
  * Uses `sel:path*` ids so temp-pin sync does not wipe it.
  */
 export function syncSelectedPathHighlight(
@@ -690,11 +752,13 @@ export function syncSelectedPathHighlight(
 
   const glow = Color.fromCssColorString('#facc15')
   const tip = Color.fromCssColorString('#fde68a')
+  // Densify 2-point legs (flights) so the glow follows the great-circle like the arc
+  const drawCoords = coords.length === 2 ? densifyGeodesic(coords, 48) : coords
 
   viewer.entities.add({
     id: 'sel:path:line',
     polyline: {
-      positions: coords.map(([lat, lon]) =>
+      positions: drawCoords.map(([lat, lon]) =>
         Cartesian3.fromDegrees(lon, lat, SURFACE_H + 0.5),
       ),
       width: 8,
@@ -703,6 +767,7 @@ export function syncSelectedPathHighlight(
         glowPower: 0.35,
         color: glow.withAlpha(0.95),
       }),
+      arcType: coords.length === 2 ? ArcType.GEODESIC : ArcType.NONE,
     },
   })
 
@@ -724,6 +789,33 @@ export function syncSelectedPathHighlight(
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
     })
+  }
+}
+
+/** Sample points along the great-circle between two [lat, lon] ends. */
+function densifyGeodesic(
+  coords: [number, number][],
+  samples: number,
+): [number, number][] {
+  if (coords.length !== 2) return coords
+  const a = coords[0]!
+  const b = coords[1]!
+  try {
+    const geo = new EllipsoidGeodesic(
+      Cartographic.fromDegrees(a[1], a[0]),
+      Cartographic.fromDegrees(b[1], b[0]),
+    )
+    const out: [number, number][] = []
+    for (let i = 0; i <= samples; i++) {
+      const c = geo.interpolateUsingFraction(i / samples)
+      out.push([
+        CesiumMath.toDegrees(c.latitude),
+        CesiumMath.toDegrees(c.longitude),
+      ])
+    }
+    return out
+  } catch {
+    return coords
   }
 }
 
