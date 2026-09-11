@@ -26,8 +26,10 @@ import {
   pickScreenLonLat,
   routeMidpoint,
   syncSelectedPathHighlight,
+  syncExploreEntities,
   syncTempPinEntities,
   syncTripEntities,
+  type ExplorePinDraw,
   type MapStack,
   type TempPinDraw,
 } from '../globe/viewer'
@@ -71,6 +73,14 @@ type Props = {
   tempFlyToken?: number
   walkTarget?: WalkLinkTarget | null
   onOpenWalk?: () => void
+  onOpenExplore?: () => void
+  /** Short-press on a yellow Explore pin */
+  onExploreSelect?: (placeId: string) => void
+  explorePlaces?: ExplorePinDraw[]
+  exploreFocusId?: string | null
+  exploreFlyToken?: number
+  /** Fly camera back to walk/pin anchor after closing explore detail */
+  exploreReturnToken?: number
 }
 
 const LONG_PRESS_MS = 520
@@ -97,6 +107,12 @@ export function GlobeView({
   tempFlyToken = 0,
   walkTarget = null,
   onOpenWalk,
+  onOpenExplore,
+  onExploreSelect,
+  explorePlaces = [],
+  exploreFocusId = null,
+  exploreFlyToken = 0,
+  exploreReturnToken = 0,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const walkOverlayRef = useRef<HTMLDivElement>(null)
@@ -112,6 +128,8 @@ export function GlobeView({
   const onMapPressRef = useRef(onMapPress)
   const walkTargetRef = useRef(walkTarget)
   const onOpenWalkRef = useRef(onOpenWalk)
+  const onOpenExploreRef = useRef(onOpenExplore)
+  const onExploreSelectRef = useRef(onExploreSelect)
   const pathActionReadyRef = useRef(true)
   const [pathActionReady, setPathActionReady] = useState(true)
   const routeFlyGenRef = useRef(0)
@@ -125,6 +143,8 @@ export function GlobeView({
   onMapPressRef.current = onMapPress
   walkTargetRef.current = walkTarget
   onOpenWalkRef.current = onOpenWalk
+  onOpenExploreRef.current = onOpenExplore
+  onExploreSelectRef.current = onExploreSelect
   pathActionReadyRef.current = pathActionReady
 
   const revealPathAction = (gen: number) => {
@@ -277,8 +297,23 @@ export function GlobeView({
           longPressFired = false
           return
         }
+        const entity = preferMapEntity(viewer!, movement.position)
+
+        // Yellow Explore pin — select that place (same as tapping a card)
+        if (entity && typeof entity.id === 'string' && String(entity.id).startsWith('explore:')) {
+          viewer!.selectedEntity = entity
+          const desc =
+            typeof entity.description === 'string'
+              ? entity.description
+              : entity.description?.getValue?.()
+          const placeId = typeof desc === 'string' && desc ? desc : String(entity.id).replace(/^explore:/, '')
+          if (placeId) onExploreSelectRef.current?.(placeId)
+          return
+        }
+
+        // Empty map / trip pick — notify after we know it isn't an explore pin
         onMapPressRef.current?.()
-        const entity = preferTripEntity(viewer!, movement.position)
+
         if (entity && typeof entity.id === 'string' && entity.id.startsWith('trip:')) {
           const entityId = String(entity.id)
           const desc =
@@ -445,6 +480,30 @@ export function GlobeView({
   useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return
+    syncExploreEntities(viewer, explorePlaces, exploreFocusId)
+  }, [explorePlaces, exploreFocusId])
+
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!viewer || !exploreFlyToken || !exploreFocusId) return
+    const place = explorePlaces.find((p) => p.id === exploreFocusId)
+    if (!place || !isValidCoord(place.lat, place.lon)) return
+    flyToCoords(viewer, place.lon, place.lat, 420)
+  }, [exploreFlyToken, exploreFocusId, explorePlaces])
+
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!viewer || !exploreReturnToken) return
+    const target = walkTargetRef.current
+    if (!target) return
+    const point = walkAnchorPoint(target)
+    if (!point) return
+    flyToCoords(viewer, point.lon, point.lat, 420)
+  }, [exploreReturnToken])
+
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!viewer) return
     const coords =
       (walkTarget?.kind === 'directions' || walkTarget?.kind === 'flights') &&
       walkTarget.coords &&
@@ -601,17 +660,32 @@ export function GlobeView({
               ~{etaMins} min
             </span>
           ) : null}
-          <button
-            type="button"
-            className="pointer-events-auto flex h-[24px] w-[24px] items-center justify-center rounded-full border border-white/85 bg-sky-500/95 text-[12px] leading-none shadow-md"
-            title={actionTitle}
-            onClick={(e) => {
-              e.stopPropagation()
-              onOpenWalkRef.current?.()
-            }}
-          >
-            {actionIcon}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              className="pointer-events-auto flex h-[24px] w-[24px] items-center justify-center rounded-full border border-white/85 bg-sky-500/95 text-[12px] leading-none shadow-md"
+              title={actionTitle}
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenWalkRef.current?.()
+              }}
+            >
+              {actionIcon}
+            </button>
+            {walkTarget?.kind === 'point' ? (
+              <button
+                type="button"
+                className="pointer-events-auto flex h-[24px] w-[24px] items-center justify-center rounded-full border border-amber-200/90 bg-amber-400 text-[12px] leading-none text-amber-950 shadow-md"
+                title="Explore nearby"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpenExploreRef.current?.()
+                }}
+              >
+                ★
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
     </>
@@ -664,16 +738,18 @@ function routeEndpoints(
   }
 }
 
-function preferTripEntity(viewer: Viewer, position: Cartesian2): Entity | null {
+function preferMapEntity(viewer: Viewer, position: Cartesian2): Entity | null {
   const drilled = viewer.scene.drillPick(position, 16)
-  // Topmost trip entity wins — do NOT skip roads to prefer pins underneath
-  // (that made walk-path taps open Street View instead of walking directions).
+  let explore: Entity | null = null
+  let trip: Entity | null = null
   for (const p of drilled) {
     const e = p?.id
     if (e && typeof e === 'object' && typeof (e as Entity).id === 'string') {
       const id = String((e as Entity).id)
-      if (id.startsWith('trip:')) return e as Entity
+      if (id.startsWith('explore:') && !explore) explore = e as Entity
+      if (id.startsWith('trip:') && !trip) trip = e as Entity
     }
   }
-  return null
+  // Prefer Explore pins when present so short-press selects that place
+  return explore ?? trip
 }

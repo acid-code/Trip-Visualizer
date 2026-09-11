@@ -51,6 +51,12 @@ import { ChartsPanel } from './ui/ChartsPanel'
 import { ItemDrawer } from './ui/ItemDrawer'
 import { AddStepPanel, type AddContext } from './ui/AddStepPanel'
 import { MapSearchBar } from './ui/MapSearchBar'
+import { ExploreSheet } from './ui/ExploreSheet'
+import {
+  explorePlaceToItemType,
+  fetchNearbyExplore,
+  type ExplorePlace,
+} from './data/explore'
 import type { MapStack } from './globe/viewer'
 import { EXAMPLE_TRIP_ID } from './data/examples/france-south-loop'
 import { downloadPolarstepsJson } from './data/polarsteps'
@@ -131,8 +137,24 @@ export default function App() {
       }
     | null
   >(null)
+  const [exploreOpen, setExploreOpen] = useState(false)
+  const [exploreAnchor, setExploreAnchor] = useState<{
+    lat: number
+    lon: number
+    label: string
+    date: string
+    stepId?: string
+  } | null>(null)
+  const [explorePlaces, setExplorePlaces] = useState<ExplorePlace[]>([])
+  const [exploreBusy, setExploreBusy] = useState(false)
+  const [exploreError, setExploreError] = useState<string | null>(null)
+  const [exploreFocusId, setExploreFocusId] = useState<string | null>(null)
+  const [exploreDetail, setExploreDetail] = useState<ExplorePlace | null>(null)
+  const [exploreFlyToken, setExploreFlyToken] = useState(0)
+  const [exploreReturnToken, setExploreReturnToken] = useState(0)
   const routesForTripRef = useRef<string | null>(null)
   const tempPinGenRef = useRef(0)
+  const exploreAbortRef = useRef<AbortController | null>(null)
 
   const active = useMemo(
     () => trips.find((t) => t.id === activeId) ?? null,
@@ -403,6 +425,7 @@ export default function App() {
     opts?: { query?: string; place?: PlaceLookup | null; fly?: boolean },
   ) {
     if (!isValidCoord(pos.lat, pos.lon)) return
+    if (exploreOpen) closeExplore()
     const gen = ++tempPinGenRef.current
     setRouteWalk(null)
     setSelectedId(null)
@@ -481,6 +504,8 @@ export default function App() {
   }
 
   function selectFromMap(payload: MapSelectPayload) {
+    // Trip pin / path — leave Explore; empty map taps do not close Explore
+    if (exploreOpen) closeExplore()
     // Map tap always dismisses the side/bottom sheet (Steps, Data, Stats)
     setPanelOpen(false)
 
@@ -732,6 +757,179 @@ export default function App() {
     })()
   }
 
+  function closeExplore() {
+    exploreAbortRef.current?.abort()
+    exploreAbortRef.current = null
+    setExploreOpen(false)
+    setExplorePlaces([])
+    setExploreFocusId(null)
+    setExploreDetail(null)
+    setExploreError(null)
+    setExploreBusy(false)
+    setExploreAnchor(null)
+  }
+
+  function openExploreFromMap() {
+    if (!active) return
+    let lat: number | null = null
+    let lon: number | null = null
+    let label = 'Here'
+    let date = dayFilter || active.meta.startDate || todayIso()
+    let stepId: string | undefined
+
+    if (tempPin && isValidCoord(tempPin.lat, tempPin.lon)) {
+      lat = tempPin.lat
+      lon = tempPin.lon
+      label =
+        tempPin.place?.trim() ||
+        tempPin.label?.trim() ||
+        tempPin.address?.split(',')[0]?.trim() ||
+        'Map pin'
+      date = requireIsoDate(
+        suggestDateFromNearby(dayFilter, nearbyLinks, date),
+        date,
+      )
+    } else if (routeWalk) {
+      // Paths (walk / drive / transit / flight) do not open Explore
+      setStatus('Explore is for pins and steps — not paths')
+      return
+    } else if (
+      selected &&
+      mapFocusEndpoint === 'b' &&
+      isValidCoord(selected.latTo, selected.lonTo)
+    ) {
+      lat = selected.latTo!
+      lon = selected.lonTo!
+      label = selected.title
+      date = selected.date || date
+      stepId = selected.id
+    } else if (selected && isValidCoord(selected.lat, selected.lon)) {
+      lat = selected.lat!
+      lon = selected.lon!
+      label = selected.title
+      date = selected.date || date
+      stepId = selected.id
+    } else if (selected && isValidCoord(selected.latTo, selected.lonTo)) {
+      lat = selected.latTo!
+      lon = selected.lonTo!
+      label = selected.title
+      date = selected.date || date
+      stepId = selected.id
+    }
+
+    if (!isValidCoord(lat, lon)) {
+      setStatus('Select a pin or step to explore nearby')
+      return
+    }
+
+    exploreAbortRef.current?.abort()
+    const ac = new AbortController()
+    exploreAbortRef.current = ac
+    setExploreAnchor({ lat: lat!, lon: lon!, label, date, stepId })
+    setExploreOpen(true)
+    setExploreBusy(true)
+    setExploreError(null)
+    setExplorePlaces([])
+    setExploreFocusId(null)
+    setExploreDetail(null)
+    setLowerMode('none')
+    setDetailExpanded(false)
+    setPanelOpen(true)
+    setNavTab('timeline')
+
+    void (async () => {
+      let showedCache = false
+      try {
+        const places = await fetchNearbyExplore(
+          { lat: lat!, lon: lon! },
+          {
+            signal: ac.signal,
+            onCacheHit: (cached) => {
+              if (ac.signal.aborted) return
+              showedCache = true
+              setExplorePlaces(cached)
+              setExploreBusy(false)
+              setExploreError(null)
+            },
+          },
+        )
+        if (ac.signal.aborted) return
+        setExplorePlaces(places)
+        if (!places.length) setExploreError('No nearby places found')
+        else setExploreError(null)
+      } catch (err) {
+        if (ac.signal.aborted) return
+        logClientError('explore', err)
+        if (!showedCache) {
+          setExploreError(publicErrorMessage(err, 'Could not load nearby places'))
+        }
+      } finally {
+        if (!ac.signal.aborted) setExploreBusy(false)
+      }
+    })()
+  }
+
+  function selectExplorePlace(place: ExplorePlace) {
+    setExploreFocusId(place.id)
+    setExploreDetail(place)
+    setExploreFlyToken((n) => n + 1)
+  }
+
+  function closeExploreDetail() {
+    setExploreDetail(null)
+    setExploreFocusId(null)
+    setExploreReturnToken((n) => n + 1)
+  }
+
+  function addStepFromExplore(place: ExplorePlace) {
+    if (!active || !exploreAnchor) return
+    const date = requireIsoDate(exploreAnchor.date, todayIso())
+    const item: TripItem = {
+      id: createId('S'),
+      type: explorePlaceToItemType(place),
+      title: place.name,
+      place: place.address || place.name,
+      city: '',
+      date,
+      endDate: '',
+      start: '',
+      end: '',
+      from: '',
+      to: '',
+      confirm: '',
+      cost: null,
+      currency: normalizeCurrency(active.meta.homeCurrency || 'EUR'),
+      status: 'planned',
+      notes: place.summary || '',
+      url: place.website || '',
+      tags: place.cuisine ? [place.cuisine] : [],
+      lat: place.lat,
+      lon: place.lon,
+      latTo: null,
+      lonTo: null,
+      wikidata: place.wikidata || '',
+      osmId: place.osmId || '',
+      geocodeQuery: place.name,
+      updatedAt: nowIso(),
+      enrichmentSummary: place.summary || place.address || '',
+      enrichmentImage: place.images[0] || '',
+      enrichmentSource: place.wikidata ? 'Wikidata' : 'OpenStreetMap',
+      routeCoords: [],
+      source: 'app',
+    }
+    void (async () => {
+      const nextItems = sortItems([...active.items, item])
+      const next = { ...active, items: ensureDayStartBases(active.meta, nextItems) }
+      await persist(next)
+      setSelectedId(item.id)
+      setExploreDetail(null)
+      setExploreFocusId(null)
+      setStatus(`Added “${item.title}” · rebuilding paths…`)
+      await buildRoutes(next)
+      setStatus(`Added “${item.title}” from Explore`)
+    })()
+  }
+
   function onTongue(id: NavTab | 'insert') {
     setPanelOpen(true)
     if (id === 'insert') {
@@ -742,6 +940,7 @@ export default function App() {
       openInsert(null, null)
       return
     }
+    if (exploreOpen) closeExplore()
     setNavTab(id)
     if (id !== 'timeline') {
       setLowerMode('none')
@@ -845,8 +1044,26 @@ export default function App() {
           onOpenWalk={() => {
             if (walkTarget) openWalkTarget(walkTarget)
           }}
+          onOpenExplore={() => openExploreFromMap()}
+          onExploreSelect={(placeId) => {
+            const place = explorePlaces.find((p) => p.id === placeId)
+            if (place) selectExplorePlace(place)
+          }}
+          explorePlaces={explorePlaces.map((p) => ({
+            id: p.id,
+            lat: p.lat,
+            lon: p.lon,
+            name: p.name,
+          }))}
+          exploreFocusId={exploreFocusId}
+          exploreFlyToken={exploreFlyToken}
+          exploreReturnToken={exploreReturnToken}
           onSelect={selectFromMap}
-          onMapPress={() => setPanelOpen(false)}
+          onMapPress={() => {
+            // Keep Explore open on empty-map short press; close via tongues, step pin, X, or search
+            if (exploreOpen) return
+            setPanelOpen(false)
+          }}
           onLongPress={(pos) => {
             setPanelOpen(false)
             void dropTempPinAt(pos)
@@ -858,7 +1075,7 @@ export default function App() {
 
       {/* Map search — left of globe; long-press drops a pin under your finger */}
       <div
-        className={`pointer-events-none absolute z-20 ${
+        className={`pointer-events-none absolute z-30 ${
           isPhone
             ? 'left-3 top-[max(0.75rem,env(safe-area-inset-top))]'
             : panelOpen
@@ -889,10 +1106,12 @@ export default function App() {
         )}
       </div>
 
-      {/* Map-side header — desktop clears left panel; phone uses compact top bar */}
+      {/* Map-side header — desktop clears left panel; phone: right-only so search stays tappable */}
       <header
-        className={`pointer-events-none absolute inset-x-0 top-0 z-20 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] ${
-          isPhone ? 'pl-3' : 'pl-[min(24rem,90vw)]'
+        className={`pointer-events-none absolute top-0 z-20 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] ${
+          isPhone
+            ? 'right-0 max-w-[min(18rem,70vw)]'
+            : 'inset-x-0 pl-[min(24rem,90vw)]'
         }`}
       >
         <div className="pointer-events-auto ml-auto flex max-w-md flex-col items-end gap-1">
@@ -958,11 +1177,27 @@ export default function App() {
       {!isPhone ? (
       <aside
         className={`side-shell absolute bottom-0 left-0 top-0 z-30 flex pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.5rem,env(safe-area-inset-left))] ${
-          panelOpen ? 'side-shell-open' : 'side-shell-collapsed'
-        }`}
+          panelOpen || exploreOpen ? 'side-shell-open' : 'side-shell-collapsed'
+        } ${exploreOpen ? 'side-shell-explore' : ''}`}
       >
-        {panelOpen ? (
+        {panelOpen || exploreOpen ? (
           <div className="side-panel flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            {exploreOpen ? (
+              <ExploreSheet
+                open
+                busy={exploreBusy}
+                error={exploreError}
+                places={explorePlaces}
+                selectedId={exploreFocusId}
+                detail={exploreDetail}
+                anchor={exploreAnchor}
+                onClose={closeExplore}
+                onSelect={selectExplorePlace}
+                onCloseDetail={closeExploreDetail}
+                onAddStep={addStepFromExplore}
+              />
+            ) : (
+              <>
             <div className="flex items-center justify-between gap-2 border-b border-stone-200/80 px-3 py-2">
               <div className="text-xs font-semibold uppercase tracking-wide text-stone-400">
                 {navTab === 'timeline' ? 'Steps' : navTab === 'charts' ? 'Stats' : 'Data'}
@@ -1057,6 +1292,8 @@ export default function App() {
                 </div>
               ) : null}
             </div>
+              </>
+            )}
           </div>
         ) : null}
 
@@ -1111,15 +1348,40 @@ export default function App() {
       {/* Phone: map-first — horizontal steps strip + bottom book tongues */}
       {isPhone ? (
         <div className="mobile-dock absolute inset-x-0 bottom-0 z-30 flex flex-col pb-[max(0.25rem,env(safe-area-inset-bottom))]">
-          {panelOpen && lowerMode !== 'insert' ? (
+          {(panelOpen || exploreOpen) && lowerMode !== 'insert' ? (
             <div
-              className={`mobile-panel mx-2 mb-1 overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
-                navTab === 'timeline'
-                  ? 'max-h-[38vh]'
-                  : 'max-h-[52vh]'
+              className={`mobile-panel relative mx-2 mb-1 overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
+                exploreOpen
+                  ? exploreDetail
+                    ? 'max-h-[52vh]'
+                    : 'max-h-[34vh]'
+                  : navTab === 'timeline'
+                    ? 'max-h-[38vh]'
+                    : 'max-h-[52vh]'
               }`}
             >
-              {navTab === 'timeline' && active ? (
+              {exploreOpen ? (
+                <div
+                  className={
+                    exploreDetail ? 'h-[min(52vh,22rem)]' : 'h-[min(34vh,15.5rem)]'
+                  }
+                >
+                  <ExploreSheet
+                    open
+                    busy={exploreBusy}
+                    error={exploreError}
+                    places={explorePlaces}
+                    selectedId={exploreFocusId}
+                    detail={exploreDetail}
+                    anchor={exploreAnchor}
+                    onClose={closeExplore}
+                    onSelect={selectExplorePlace}
+                    onCloseDetail={closeExploreDetail}
+                    onAddStep={addStepFromExplore}
+                    phone
+                  />
+                </div>
+              ) : navTab === 'timeline' && active ? (
                 <div className="px-2 pb-2 pt-2">
                   <TimelinePanel
                     meta={active.meta}
@@ -1139,7 +1401,7 @@ export default function App() {
                 </div>
               ) : null}
 
-              {navTab === 'charts' && active ? (
+              {!exploreOpen && navTab === 'charts' && active ? (
                 <div className="max-h-[52vh] overflow-y-auto overscroll-contain px-2 pb-2 pt-2">
                   <ChartsPanel
                     meta={active.meta}
@@ -1154,7 +1416,7 @@ export default function App() {
                 </div>
               ) : null}
 
-              {navTab === 'settings' ? (
+              {!exploreOpen && navTab === 'settings' ? (
                 <div className="max-h-[52vh] space-y-3 overflow-y-auto overscroll-contain px-3 pb-3 pt-2 text-sm text-stone-800">
                   <DataPanel
                     active={active}

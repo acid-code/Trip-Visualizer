@@ -18,13 +18,19 @@ export function MapSearchBar({ busy, onSearch, onClear }: Props) {
     onSearch(trimmed)
   }
 
+  function openBar(e: React.SyntheticEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    setOpen(true)
+  }
+
   if (!open) {
     return (
       <button
         type="button"
-        className="flex h-9 w-9 items-center justify-center rounded-full border border-white/25 bg-black/45 text-white shadow-lg backdrop-blur hover:bg-black/55"
+        className="flex h-9 w-9 touch-manipulation items-center justify-center rounded-full border border-white/25 bg-black/45 text-white shadow-lg backdrop-blur hover:bg-black/55"
         title="Search place or address"
-        onClick={() => setOpen(true)}
+        onPointerUp={openBar}
       >
         <span className="text-sm" aria-hidden>
           🔍
@@ -35,8 +41,9 @@ export function MapSearchBar({ busy, onSearch, onClear }: Props) {
 
   return (
     <form
-      className="flex max-w-[min(18rem,72vw)] items-center gap-1 rounded-full border border-white/25 bg-black/55 p-1 pl-3 shadow-lg backdrop-blur"
+      className="flex max-w-[min(18rem,72vw)] touch-manipulation items-center gap-1 rounded-full border border-white/25 bg-black/55 p-1 pl-3 shadow-lg backdrop-blur"
       onSubmit={submit}
+      onPointerDown={(e) => e.stopPropagation()}
     >
       <input
         autoFocus

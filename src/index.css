@@ -94,11 +94,19 @@ textarea {
   max-width: 3.25rem;
 }
 
+.side-shell-explore {
+  max-width: min(22.5rem, 88vw);
+}
+
 .side-panel {
   border: 1px solid #f5e6d3;
   border-radius: 1.25rem;
   box-shadow: 0 12px 40px rgba(15, 23, 42, 0.28);
   min-width: 0;
+  width: min(20rem, calc(88vw - 2.75rem));
+}
+
+.side-shell-explore .side-panel {
   width: min(20rem, calc(88vw - 2.75rem));
 }
 

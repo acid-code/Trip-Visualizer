@@ -734,6 +734,48 @@ export function clearTempEntities(viewer: Viewer) {
   for (const e of remove) viewer.entities.remove(e)
 }
 
+function clearExploreEntities(viewer: Viewer) {
+  const remove = viewer.entities.values.filter((e) => String(e.id).startsWith('explore:'))
+  for (const e of remove) viewer.entities.remove(e)
+}
+
+export type ExplorePinDraw = {
+  id: string
+  lat: number
+  lon: number
+  name: string
+}
+
+/** Nearby Explore POI markers (`explore:` prefix). */
+export function syncExploreEntities(
+  viewer: Viewer,
+  places: ExplorePinDraw[],
+  focusedId?: string | null,
+) {
+  clearExploreEntities(viewer)
+  const accent = Color.fromCssColorString('#f59e0b')
+  const focus = Color.fromCssColorString('#facc15')
+  for (const place of places) {
+    if (!isValidCoord(place.lat, place.lon)) continue
+    const selected = focusedId === place.id
+    const sid = sanitizeEntityId(place.id.replace(/^osm:/, ''), 48)
+    viewer.entities.add({
+      id: `explore:${sid}`,
+      name: place.name,
+      position: Cartesian3.fromDegrees(place.lon, place.lat, SURFACE_H),
+      point: {
+        pixelSize: selected ? 16 : 11,
+        color: selected ? focus : accent,
+        outlineColor: Color.WHITE,
+        outlineWidth: selected ? 3 : 2,
+        heightReference: HeightReference.NONE,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      description: place.id,
+    })
+  }
+}
+
 function clearSelectedPathEntities(viewer: Viewer) {
   const remove = viewer.entities.values.filter((e) => String(e.id).startsWith('sel:path'))
   for (const e of remove) viewer.entities.remove(e)
