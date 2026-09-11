@@ -9,8 +9,9 @@ export function isWalkAppPref(v: string | null | undefined): v is WalkAppPref {
 }
 
 /**
- * Open the nearest Street View panorama to a point.
- * Google snaps `viewpoint` to the closest available car imagery.
+ * Open the nearest Street View panorama to a point — no API key needed.
+ * Maps URLs snap `viewpoint` to the closest available car imagery.
+ * https://developers.google.com/maps/documentation/urls/get-started#street-view-action
  */
 export function streetViewUrl(point: { lat: number; lon: number }, panoId?: string): string {
   const u = new URL('https://www.google.com/maps/@')
@@ -21,7 +22,7 @@ export function streetViewUrl(point: { lat: number; lon: number }, panoId?: stri
   return u.toString()
 }
 
-/** Plain Google Maps look-at when no Street View exists nearby. */
+/** Plain Google Maps look-at (when you want the map, not a panorama). */
 export function mapsPlaceUrl(point: { lat: number; lon: number }): string {
   const u = new URL('https://www.google.com/maps/search/')
   u.searchParams.set('api', '1')
@@ -87,49 +88,6 @@ export type WalkLinkTarget =
       coords?: [number, number][]
     }
 
-type StreetViewMeta = {
-  status?: string
-  pano_id?: string
-  location?: { lat: number; lng: number }
-}
-
-/**
- * Find the nearest Street View panorama (widening search), else fall back to Maps.
- * Uses the optional Maps key when present; otherwise opens the classic pano URL.
- */
-export async function resolvePointOpenUrl(
-  point: { lat: number; lon: number },
-  prefer: WalkAppPref,
-  googleKey?: string,
-): Promise<string> {
-  if (prefer === 'earth') return earthLookAtUrl(point)
-  if (!googleKey) return streetViewUrl(point)
-
-  const radii = [50, 150, 400, 1200, 5000]
-  for (const radius of radii) {
-    try {
-      const u = new URL('https://maps.googleapis.com/maps/api/streetview/metadata')
-      u.searchParams.set('location', `${point.lat},${point.lon}`)
-      u.searchParams.set('radius', String(radius))
-      u.searchParams.set('source', 'outdoor')
-      u.searchParams.set('key', googleKey)
-      const res = await fetch(u.toString())
-      if (!res.ok) continue
-      const json = (await res.json()) as StreetViewMeta
-      if (json.status === 'OK' && json.location) {
-        const snapped = { lat: json.location.lat, lon: json.location.lng }
-        return streetViewUrl(snapped, json.pano_id)
-      }
-      if (json.status === 'ZERO_RESULTS') continue
-      // REQUEST_DENIED / OVER_QUERY_LIMIT → stop trying metadata
-      break
-    } catch {
-      break
-    }
-  }
-  return mapsPlaceUrl(point)
-}
-
 /** Pins/temp → Street View (or Earth). Legs → Maps directions. Flights → Google Flights. */
 export function urlForWalkTarget(target: WalkLinkTarget): string {
   if (target.kind === 'flights') {
@@ -139,20 +97,12 @@ export function urlForWalkTarget(target: WalkLinkTarget): string {
     return mapsDirectionsUrl(target.origin, target.destination, target.travelMode)
   }
   if (target.prefer === 'earth') return earthLookAtUrl(target)
+  // Free Maps URL — Google picks the nearest panorama to the viewpoint
   return streetViewUrl(target)
 }
 
-export async function openWalkTarget(
-  target: WalkLinkTarget,
-  googleKey?: string,
-): Promise<void> {
-  let url: string
-  if (target.kind === 'point') {
-    url = await resolvePointOpenUrl(target, target.prefer, googleKey)
-  } else {
-    url = urlForWalkTarget(target)
-  }
-  window.open(url, '_blank', 'noopener,noreferrer')
+export function openWalkTarget(target: WalkLinkTarget): void {
+  window.open(urlForWalkTarget(target), '_blank', 'noopener,noreferrer')
 }
 
 /** Map a trip leg / connector to a Google Maps travel mode (never flights). */

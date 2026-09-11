@@ -843,7 +843,7 @@ export default function App() {
           tempFlyToken={tempFlyToken}
           walkTarget={walkTarget}
           onOpenWalk={() => {
-            if (walkTarget) void openWalkTarget(walkTarget, googleKey || undefined)
+            if (walkTarget) openWalkTarget(walkTarget)
           }}
           onSelect={selectFromMap}
           onMapPress={() => setPanelOpen(false)}
@@ -1486,8 +1486,8 @@ function DataPanel({
             ))}
           </div>
           <p className="mt-1 text-[10px] text-stone-400">
-            Pins → Street View / Earth (with a Maps key: nearest pano, or Maps if none). Walk /
-            drive / transit paths → directions. Flight paths → Google Flights (✈️), not driving.
+            Pins → Street View / Earth (nearest pano, no API key). Walk / drive / transit →
+            directions. Flight paths → Google Flights (✈️).
           </p>
         </div>
         <label className="mt-3 block text-xs text-stone-500">
