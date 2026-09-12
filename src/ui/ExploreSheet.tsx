@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   exploreCategoryLabel,
   filterAndSortExplore,
@@ -54,11 +54,20 @@ export function ExploreSheet({
   const [sort, setSort] = useState<ExploreSort>('distance')
   const [typeOpen, setTypeOpen] = useState(false)
   const [sortOpen, setSortOpen] = useState(false)
+  const scrollerRef = useRef<HTMLDivElement>(null)
+  const scrollLeftRef = useRef(0)
 
   const filtered = useMemo(
     () => filterAndSortExplore(places, typeFilter, sort),
     [places, typeFilter, sort],
   )
+
+  // Keep horizontal position when the list refreshes in the background.
+  useLayoutEffect(() => {
+    const el = scrollerRef.current
+    if (!el) return
+    el.scrollLeft = scrollLeftRef.current
+  }, [filtered])
 
   if (!open) return null
 
@@ -178,9 +187,13 @@ export function ExploreSheet({
         </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+      <div
+        className="min-h-0 flex-1 overflow-hidden px-3 py-2"
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchMove={(e) => e.stopPropagation()}
+      >
         {error ? (
-          <p className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">{error}</p>
+          <p className="mb-2 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">{error}</p>
         ) : null}
         {busy && !places.length ? (
           <p className="py-6 text-center text-sm text-stone-400">Looking around…</p>
@@ -189,7 +202,13 @@ export function ExploreSheet({
           <p className="py-6 text-center text-sm text-stone-400">No places in this filter.</p>
         ) : null}
 
-        <div className="flex gap-2.5 overflow-x-auto pb-1 pt-1 [scrollbar-width:thin]">
+        <div
+          ref={scrollerRef}
+          className="flex h-full gap-2.5 overflow-x-auto overflow-y-hidden overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch] pb-1 pt-1 [scrollbar-width:thin]"
+          onScroll={(e) => {
+            scrollLeftRef.current = e.currentTarget.scrollLeft
+          }}
+        >
           {filtered.map((place) => (
             <ExploreCard
               key={place.id}
@@ -380,51 +399,20 @@ function ExploreCard({
   selected: boolean
   onSelect: () => void
 }) {
-  const [photoIdx, setPhotoIdx] = useState(0)
-  const startX = useRef<number | null>(null)
-  const photos = place.images.length ? place.images : ['']
-
-  useEffect(() => {
-    setPhotoIdx(0)
-  }, [place.id])
-
-  function onPointerDown(e: React.PointerEvent) {
-    startX.current = e.clientX
-  }
-
-  function onPointerUp(e: React.PointerEvent) {
-    if (startX.current == null || photos.length < 2) {
-      startX.current = null
-      return
-    }
-    const dx = e.clientX - startX.current
-    startX.current = null
-    if (Math.abs(dx) < 28) return
-    e.preventDefault()
-    e.stopPropagation()
-    setPhotoIdx((i) => {
-      if (dx < 0) return (i + 1) % photos.length
-      return (i - 1 + photos.length) % photos.length
-    })
-  }
-
-  const photo = photos[photoIdx] || ''
+  // List cards: first photo only — swipe handlers fought the horizontal scroller.
+  const photo = place.images[0] || ''
 
   return (
     <button
       type="button"
       onClick={onSelect}
-      className={`relative h-[7.25rem] w-[7.25rem] shrink-0 overflow-hidden rounded-2xl border-2 text-left shadow-md transition ${
+      className={`relative h-[7.25rem] w-[7.25rem] shrink-0 touch-manipulation overflow-hidden rounded-2xl border-2 text-left shadow-md transition ${
         selected
           ? 'border-amber-400 ring-2 ring-amber-300/70'
           : 'border-white/80 hover:border-amber-200'
       }`}
     >
-      <div
-        className="absolute inset-0 touch-pan-y bg-gradient-to-br from-stone-200 to-amber-100"
-        onPointerDown={onPointerDown}
-        onPointerUp={onPointerUp}
-      >
+      <div className="absolute inset-0 bg-gradient-to-br from-stone-200 to-amber-100">
         {photo ? (
           <img src={photo} alt="" className="h-full w-full object-cover" draggable={false} />
         ) : (
@@ -444,16 +432,6 @@ function ExploreCard({
       <span className="absolute bottom-1.5 left-1.5 right-1.5 line-clamp-2 text-[10px] font-semibold leading-tight text-white drop-shadow">
         {place.name}
       </span>
-      {photos.length > 1 && photo ? (
-        <span className="absolute bottom-1.5 right-1.5 flex gap-0.5">
-          {photos.map((_, i) => (
-            <span
-              key={i}
-              className={`h-1 w-1 rounded-full ${i === photoIdx ? 'bg-white' : 'bg-white/40'}`}
-            />
-          ))}
-        </span>
-      ) : null}
     </button>
   )
 }

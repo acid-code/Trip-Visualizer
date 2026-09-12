@@ -597,10 +597,12 @@ export function syncTripEntities(
 
   for (const connector of connectors) {
     const toOrder = connector.toItemId ? orders.get(connector.toItemId) : undefined
-    const day = toOrder?.day ?? 1
-    const step = connector.sequenceInDay ?? toOrder?.stepInDay ?? 0
-    const badge =
-      day && step ? `${day}.${step}` : stepBadge(toOrder)
+    const fromOrder = connector.fromItemId
+      ? orders.get(connector.fromItemId)
+      : undefined
+    // Match pin numbering (day.step) — never use a global connector index
+    const badge = stepBadge(toOrder ?? fromOrder)
+    const day = toOrder?.day ?? fromOrder?.day ?? 1
     const color = colorForDay(meta, connector.date, day)
     addConnectorRoute(viewer, connector, color, badge)
   }
@@ -661,20 +663,42 @@ export function parseTripEndpoint(entityId: string): 'a' | 'b' | null {
   return null
 }
 
-function flyToLonLat(viewer: Viewer, lon: number, lat: number, range = 420) {
+type FlyPinOpts = {
+  range?: number
+  /** Fraction of range to shift the look target south so the pin sits higher on screen. */
+  raisePin?: number
+  pitchDeg?: number
+}
+
+function flyToLonLat(
+  viewer: Viewer,
+  lon: number,
+  lat: number,
+  rangeOrOpts: number | FlyPinOpts = 420,
+) {
+  const opts: FlyPinOpts =
+    typeof rangeOrOpts === 'number' ? { range: rangeOrOpts } : rangeOrOpts
+  const range = opts.range ?? 420
+  const raise = opts.raisePin ?? 0.42
+  const pitchDeg = opts.pitchDeg ?? -30
   const pin = Cartesian3.fromDegrees(lon, lat, 0)
-  // Look slightly south of the pin so it sits in the upper map (above the Detail sheet)
+  // Look slightly south of the pin so it sits above the Detail / phone dock
   const enu = Transforms.eastNorthUpToFixedFrame(pin)
-  const lookShift = new Cartesian3(0, -Math.max(range * 0.42, 140), 0)
+  const lookShift = new Cartesian3(0, -Math.max(range * raise, 140), 0)
   const lookTarget = Matrix4.multiplyByPoint(enu, lookShift, new Cartesian3())
   viewer.camera.flyToBoundingSphere(new BoundingSphere(lookTarget, 28), {
     duration: 0.85,
-    offset: new HeadingPitchRange(0, CesiumMath.toRadians(-30), range),
+    offset: new HeadingPitchRange(0, CesiumMath.toRadians(pitchDeg), range),
   })
 }
 
-export function flyToCoords(viewer: Viewer, lon: number, lat: number, range = 420) {
-  flyToLonLat(viewer, lon, lat, range)
+export function flyToCoords(
+  viewer: Viewer,
+  lon: number,
+  lat: number,
+  rangeOrOpts: number | FlyPinOpts = 420,
+) {
+  flyToLonLat(viewer, lon, lat, rangeOrOpts)
 }
 
 /** Frame an entire drive/walk/transit path so the whole route is visible and centered. */
@@ -989,19 +1013,43 @@ export function lonLatToCanvasCss(
   return { x: windowPos.x * scaleX, y: windowPos.y * scaleY }
 }
 
+/** Pin-select framing — phone stays farther out and raises the pin above the dock. */
+function pinSelectOpts(
+  itemType: string,
+  framing: 'phone' | 'desktop' = 'desktop',
+): FlyPinOpts {
+  if (framing === 'phone') {
+    return {
+      range: itemType === 'hotel' ? 2200 : 1800,
+      // Mild raise only — keep pin near mid-screen above the dock
+      raisePin: 0.22,
+      // Steeper = more overhead; shallow (~-25) reads as horizon
+      pitchDeg: -58,
+    }
+  }
+  return {
+    range: itemType === 'hotel' ? 380 : 450,
+    raisePin: 0.42,
+    pitchDeg: -38,
+  }
+}
+
 export function flyToItem(
   viewer: Viewer,
   item: TripItem,
   endpoint: 'a' | 'b' | null = null,
+  framing: 'phone' | 'desktop' = 'desktop',
 ) {
+  const opts = pinSelectOpts(item.type, framing)
+
   // Clicked a specific pin — stay on that pin instead of jumping to the whole leg
   if (endpoint === 'b' && isValidCoord(item.latTo, item.lonTo)) {
-    flyToLonLat(viewer, item.lonTo!, item.latTo!)
+    flyToLonLat(viewer, item.lonTo!, item.latTo!, opts)
     return
   }
 
   if (endpoint === 'a' && isValidCoord(item.lat, item.lon)) {
-    flyToLonLat(viewer, item.lon!, item.lat!)
+    flyToLonLat(viewer, item.lon!, item.lat!, opts)
     return
   }
 
@@ -1014,19 +1062,21 @@ export function flyToItem(
       Cartesian3.fromDegrees(item.lon!, item.lat!, 0),
       Cartesian3.fromDegrees(item.lonTo!, item.latTo!, 0),
     ])
+    const pad = framing === 'phone' ? 3.4 : 2.2
+    const minR = framing === 'phone' ? 2800 : 1500
     viewer.camera.flyToBoundingSphere(sphere, {
       duration: 1.2,
       offset: new HeadingPitchRange(
         0,
-        CesiumMath.toRadians(-35),
-        Math.max(sphere.radius * 2.2, 1500),
+        CesiumMath.toRadians(framing === 'phone' ? -55 : -40),
+        Math.max(sphere.radius * pad, minR),
       ),
     })
     return
   }
 
   if (isValidCoord(item.lat, item.lon)) {
-    flyToLonLat(viewer, item.lon!, item.lat!, item.type === 'hotel' ? 380 : 450)
+    flyToLonLat(viewer, item.lon!, item.lat!, opts)
   }
 }
 

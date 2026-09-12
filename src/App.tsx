@@ -397,7 +397,7 @@ export default function App() {
     const withDrives = await hydrateDriveRoutes(trip.items, (done, total) => {
       setRoutesStatus(`Drive paths ${done}/${total}`)
     })
-    setRoutesStatus('Walking links between same-day steps…')
+    setRoutesStatus('Linking same-day walks & returns to hotel…')
     const walks = await buildWalkingConnectors(withDrives, (done, total) => {
       setRoutesStatus(`Walk paths ${done}/${total}`)
     })
@@ -618,8 +618,9 @@ export default function App() {
   function selectFromMap(payload: MapSelectPayload) {
     // Trip pin / path — leave Explore; empty map taps do not close Explore
     if (exploreOpen) closeExplore()
-    // Map tap always dismisses the side/bottom sheet (Steps, Data, Stats)
-    setPanelOpen(false)
+    // Selecting a step should show it in the Steps sheet (esp. on phone)
+    setNavTab('timeline')
+    setPanelOpen(true)
 
     if (payload.kind === 'flight') {
       clearTempPin()
@@ -1159,6 +1160,7 @@ export default function App() {
           overviewToken={overviewToken}
           tripFocusId={activeId}
           openingOriginOnly={isPhone}
+          phoneFraming={isPhone}
           tempPin={tempPin}
           nearbyLinks={nearbyLinks}
           tempFlyToken={tempFlyToken}
@@ -1503,6 +1505,8 @@ export default function App() {
                   className={
                     exploreDetail ? 'h-[min(52vh,22rem)]' : 'h-[min(34vh,15.5rem)]'
                   }
+                  onTouchStart={(e) => e.stopPropagation()}
+                  onTouchMove={(e) => e.stopPropagation()}
                 >
                   <ExploreSheet
                     open

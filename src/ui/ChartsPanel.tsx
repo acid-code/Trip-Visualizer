@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { TripItem, TripMeta } from '../domain/types'
 import { distanceStats, nightsPerCity, spendSummary, typeMix } from '../data/analytics'
@@ -30,10 +30,92 @@ export function ChartsPanel({
     }
   }, [])
 
-  const nights = nightsPerCity(items)
-  const mix = typeMix(items)
-  const dist = distanceStats(items)
-  const spend = rates ? spendSummary(items, meta.homeCurrency, rates) : null
+  const nights = useMemo(() => nightsPerCity(items), [items])
+  const mix = useMemo(() => typeMix(items), [items])
+  const dist = useMemo(() => distanceStats(items), [items])
+  const spend = useMemo(
+    () => (rates ? spendSummary(items, meta.homeCurrency, rates) : null),
+    [rates, items, meta.homeCurrency],
+  )
+
+  const spendOption = useMemo(
+    () => ({
+      backgroundColor: 'transparent',
+      animation: false,
+      tooltip: {
+        trigger: 'item' as const,
+        formatter: (p: { name?: string; value?: number; percent?: number }) =>
+          `${p.name}: ${formatMoney(Number(p.value ?? 0))} (${p.percent}%)`,
+      },
+      series: [
+        {
+          type: 'pie' as const,
+          radius: ['42%', '70%'],
+          data: (spend?.slices ?? []).map((s) => ({
+            name: s.type,
+            value: Math.round(s.value * 100) / 100,
+            itemStyle: { color: s.color },
+          })),
+          label: { color: '#44403c' },
+        },
+      ],
+    }),
+    [spend],
+  )
+
+  const nightsOption = useMemo(
+    () => ({
+      backgroundColor: 'transparent',
+      animation: false,
+      textStyle: { color: '#57534e' },
+      grid: { left: 40, right: 12, top: 20, bottom: 36 },
+      xAxis: {
+        type: 'category' as const,
+        data: nights.map((n) => n.city),
+        axisLabel: { color: '#78716c', rotate: 20 },
+      },
+      yAxis: {
+        type: 'value' as const,
+        minInterval: 1,
+        axisLabel: { color: '#78716c' },
+        splitLine: { lineStyle: { color: '#e7e5e4' } },
+      },
+      series: [
+        {
+          type: 'bar' as const,
+          data: nights.map((n) => n.nights),
+          itemStyle: { color: '#ff6b4a', borderRadius: [6, 6, 0, 0] },
+        },
+      ],
+    }),
+    [nights],
+  )
+
+  const mixOption = useMemo(
+    () => ({
+      backgroundColor: 'transparent',
+      animation: false,
+      grid: { left: 40, right: 12, top: 20, bottom: 36 },
+      xAxis: {
+        type: 'category' as const,
+        data: mix.map((m) => m.type),
+        axisLabel: { color: '#78716c', rotate: 25 },
+      },
+      yAxis: {
+        type: 'value' as const,
+        minInterval: 1,
+        axisLabel: { color: '#78716c' },
+        splitLine: { lineStyle: { color: '#e7e5e4' } },
+      },
+      series: [
+        {
+          type: 'bar' as const,
+          data: mix.map((m) => ({ value: m.count, itemStyle: { color: m.color } })),
+        },
+      ],
+    }),
+    [mix],
+  )
 
   return (
     <div
@@ -97,85 +179,26 @@ export function ChartsPanel({
       ) : null}
 
       <ChartCard title={`Spend by type (${spend?.homeCurrency ?? meta.homeCurrency})`}>
-        <ReactECharts
-          style={{ height: 200 }}
-          option={{
-            backgroundColor: 'transparent',
-            tooltip: {
-              trigger: 'item',
-              formatter: (p: { name?: string; value?: number; percent?: number }) =>
-                `${p.name}: ${formatMoney(Number(p.value ?? 0))} (${p.percent}%)`,
-            },
-            series: [
-              {
-                type: 'pie',
-                radius: ['42%', '70%'],
-                data: (spend?.slices ?? []).map((s) => ({
-                  name: s.type,
-                  value: Math.round(s.value * 100) / 100,
-                  itemStyle: { color: s.color },
-                })),
-                label: { color: '#44403c' },
-              },
-            ],
-          }}
-        />
+        {spend ? (
+          <ReactECharts
+            style={{ height: 200 }}
+            option={spendOption}
+            notMerge
+            lazyUpdate
+          />
+        ) : (
+          <div className="flex h-[200px] items-center justify-center text-xs text-stone-400">
+            Loading rates…
+          </div>
+        )}
       </ChartCard>
 
       <ChartCard title="Nights per city">
-        <ReactECharts
-          style={{ height: 180 }}
-          option={{
-            backgroundColor: 'transparent',
-            textStyle: { color: '#57534e' },
-            grid: { left: 40, right: 12, top: 20, bottom: 36 },
-            xAxis: {
-              type: 'category',
-              data: nights.map((n) => n.city),
-              axisLabel: { color: '#78716c', rotate: 20 },
-            },
-            yAxis: {
-              type: 'value',
-              minInterval: 1,
-              axisLabel: { color: '#78716c' },
-              splitLine: { lineStyle: { color: '#e7e5e4' } },
-            },
-            series: [
-              {
-                type: 'bar',
-                data: nights.map((n) => n.nights),
-                itemStyle: { color: '#ff6b4a', borderRadius: [6, 6, 0, 0] },
-              },
-            ],
-          }}
-        />
+        <ReactECharts style={{ height: 180 }} option={nightsOption} notMerge lazyUpdate />
       </ChartCard>
 
       <ChartCard title="Step mix">
-        <ReactECharts
-          style={{ height: 180 }}
-          option={{
-            backgroundColor: 'transparent',
-            grid: { left: 40, right: 12, top: 20, bottom: 36 },
-            xAxis: {
-              type: 'category',
-              data: mix.map((m) => m.type),
-              axisLabel: { color: '#78716c', rotate: 25 },
-            },
-            yAxis: {
-              type: 'value',
-              minInterval: 1,
-              axisLabel: { color: '#78716c' },
-              splitLine: { lineStyle: { color: '#e7e5e4' } },
-            },
-            series: [
-              {
-                type: 'bar',
-                data: mix.map((m) => ({ value: m.count, itemStyle: { color: m.color } })),
-              },
-            ],
-          }}
-        />
+        <ReactECharts style={{ height: 180 }} option={mixOption} notMerge lazyUpdate />
       </ChartCard>
     </div>
   )

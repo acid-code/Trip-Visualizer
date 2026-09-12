@@ -76,6 +76,8 @@ type Props = {
   tripFocusId?: string | null
   /** Phone: open flights on departure (leg A) instead of the full arc */
   openingOriginOnly?: boolean
+  /** Phone: looser pin zoom + raise target above the bottom dock */
+  phoneFraming?: boolean
   tempPin?: TempPinDraw | null
   nearbyLinks?: NearbyStepLink[]
   tempFlyToken?: number
@@ -130,6 +132,7 @@ export function GlobeView({
   exploreReturnToken = 0,
   tripFocusId = null,
   openingOriginOnly = false,
+  phoneFraming = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const walkOverlayRef = useRef<HTMLDivElement>(null)
@@ -158,6 +161,8 @@ export function GlobeView({
   tripFocusIdRef.current = tripFocusId
   const openingOriginOnlyRef = useRef(openingOriginOnly)
   openingOriginOnlyRef.current = openingOriginOnly
+  const phoneFramingRef = useRef(phoneFraming)
+  phoneFramingRef.current = phoneFraming
 
   itemsRef.current = items
   connectorsRef.current = connectors
@@ -357,13 +362,19 @@ export function GlobeView({
           return
         }
 
-        // Empty map / trip pick — notify after we know it isn't an explore pin
-        onMapPressRef.current?.()
+        // Empty map only — dismiss sheets; trip pins open Steps via onSelect
+        const isTrip =
+          !!entity &&
+          typeof entity.id === 'string' &&
+          String(entity.id).startsWith('trip:')
+        if (!isTrip) {
+          onMapPressRef.current?.()
+        }
 
-        if (entity && typeof entity.id === 'string' && entity.id.startsWith('trip:')) {
+        if (isTrip) {
           lastEmptyTapAt = 0
           lastEmptyTap = null
-          const entityId = String(entity.id)
+          const entityId = String(entity!.id)
           const desc =
             typeof entity.description === 'string'
               ? entity.description
@@ -645,7 +656,12 @@ export function GlobeView({
     if (!item) return
     const endpoint = focusEndpointRef.current
     focusEndpointRef.current = null
-    flyToItem(viewer, item, endpoint)
+    flyToItem(
+      viewer,
+      item,
+      endpoint,
+      phoneFramingRef.current ? 'phone' : 'desktop',
+    )
   }, [selectedId, walkTarget])
 
   // Only when Overview is pressed — NOT on every items change (that zoomed out on add)

@@ -115,8 +115,8 @@ const POINTISH = new Set([
 ])
 
 /**
- * Walking connectors between consecutive same-day steps (by time order),
- * plus hotel → first activity when a stay covers that morning.
+ * Walking (and short evening drive) connectors between same-day steps,
+ * plus hotel → first activity in the morning and last stop → hotel at night.
  */
 export async function buildWalkingConnectors(
   items: TripItem[],
@@ -140,6 +140,7 @@ export async function buildWalkingConnectors(
     to: TripItem
     a: { lat: number; lon: number }
     b: { lat: number; lon: number }
+    mode: 'walk' | 'drive'
   }> = []
   const seen = new Set<string>()
 
@@ -150,26 +151,54 @@ export async function buildWalkingConnectors(
     a: { lat: number; lon: number },
     b: { lat: number; lon: number },
     maxKm: number,
+    mode: 'walk' | 'drive' = 'walk',
   ) {
-    const id = `walk:${from.id}->${to.id}`
+    const id = `${mode}:${from.id}->${to.id}`
     if (seen.has(id)) return
+    // Also skip if the inverse walk/drive pair already covers this edge
+    if (seen.has(`walk:${from.id}->${to.id}`) || seen.has(`drive:${from.id}->${to.id}`)) {
+      return
+    }
     const d = distKm(a, b)
     if (d < 0.05 || d > maxKm) return
     seen.add(id)
-    pairs.push({ id, date, from, to, a, b })
+    pairs.push({ id, date, from, to, a, b, mode })
+  }
+
+  function dayHasTransportToHotel(
+    daySteps: TripItem[],
+    hotel: TripItem,
+    fromApprox: { lat: number; lon: number },
+  ): boolean {
+    const h = pointOf(hotel)
+    if (!h) return false
+    return daySteps.some((i) => {
+      if (
+        i.type !== 'drive' &&
+        i.type !== 'train' &&
+        i.type !== 'bus' &&
+        i.type !== 'ferry'
+      ) {
+        return false
+      }
+      if (!isValidCoord(i.latTo, i.lonTo) || !isValidCoord(i.lat, i.lon)) return false
+      const endsAtHotel = distKm({ lat: i.latTo!, lon: i.lonTo! }, h) < 0.6
+      const startsNearLast = distKm({ lat: i.lat!, lon: i.lon! }, fromApprox) < 8
+      return endsAtHotel && startsNearLast
+    })
   }
 
   for (const [date, dayItems] of byDate) {
     const daySteps = sortItems(dayItems)
 
     // Morning hotel (overnight stay, or earliest same-day check-in) → first step after it
-    const hotel = hotelForMorning(sorted, date)
-    if (hotel) {
-      const firstAfterHotel = firstStepAfterMorningHotel(daySteps, hotel, date)
+    const morningHotel = hotelForMorning(sorted, date)
+    if (morningHotel) {
+      const firstAfterHotel = firstStepAfterMorningHotel(daySteps, morningHotel, date)
       if (firstAfterHotel) {
-        const a = pointOf(hotel)
+        const a = pointOf(morningHotel)
         const b = pointOf(firstAfterHotel)
-        if (a && b) addPair(date, hotel, firstAfterHotel, a, b, 8)
+        if (a && b) addPair(date, morningHotel, firstAfterHotel, a, b, 8, 'walk')
       }
     }
 
@@ -198,7 +227,7 @@ export async function buildWalkingConnectors(
         const a = anchorForDaySequence(from, 'arrive')
         const b = pointOf(to)
         if (!a || !b) continue
-        addPair(date, from, to, a, b, 12)
+        addPair(date, from, to, a, b, 12, 'walk')
         continue
       }
 
@@ -206,7 +235,29 @@ export async function buildWalkingConnectors(
       const a = pointOf(from)
       const b = pointOf(to)
       if (!a || !b) continue
-      addPair(date, from, to, a, b, 8)
+      addPair(date, from, to, a, b, 8, 'walk')
+    }
+
+    // Evening: last activity → hotel for the night (walk nearby, else drive path)
+    const eveningHotel = hotelForEvening(sorted, date)
+    if (eveningHotel) {
+      const last = lastStepBeforeEveningHotel(daySteps, eveningHotel)
+      if (last && last.id !== eveningHotel.id) {
+        const a =
+          last.type === 'drive' ||
+          last.type === 'flight' ||
+          last.type === 'train' ||
+          last.type === 'bus' ||
+          last.type === 'ferry'
+            ? anchorForDaySequence(last, 'arrive')
+            : pointOf(last)
+        const b = pointOf(eveningHotel)
+        if (a && b && !dayHasTransportToHotel(daySteps, eveningHotel, a)) {
+          const d = distKm(a, b)
+          if (d <= 8) addPair(date, last, eveningHotel, a, b, 8, 'walk')
+          else if (d <= 150) addPair(date, last, eveningHotel, a, b, 150, 'drive')
+        }
+      }
     }
   }
 
@@ -216,16 +267,15 @@ export async function buildWalkingConnectors(
     const coords = await fetchOsrmRoute(
       [pair.a.lat, pair.a.lon],
       [pair.b.lat, pair.b.lon],
-      'foot',
+      pair.mode === 'drive' ? 'driving' : 'foot',
     )
     connectors.push({
       id: pair.id,
-      mode: 'walk',
+      mode: pair.mode,
       fromItemId: pair.from.id,
       toItemId: pair.to.id,
       date: pair.date,
       coords,
-      sequenceInDay: done + 1,
     })
     done += 1
     onProgress?.(done, pairs.length)
@@ -286,6 +336,55 @@ function firstStepAfterMorningHotel(
       (i) => i.type !== 'hotel' && !isTransport(i.type),
     ) ?? null
   )
+}
+
+/**
+ * Hotel you're sleeping at after this calendar day:
+ * stay with check-in on or before today and checkout strictly after today.
+ */
+function hotelForEvening(items: TripItem[], day: string): TripItem | null {
+  const hotels = items.filter(
+    (i) =>
+      i.type === 'hotel' &&
+      i.status !== 'cancelled' &&
+      !isPlaceholderBase(i) &&
+      pointOf(i) &&
+      i.date <= day &&
+      !!i.endDate &&
+      i.endDate > day,
+  )
+  if (!hotels.length) return null
+  // Prefer the stay that started most recently (handles same-day hotel change)
+  return [...hotels].sort((a, b) => b.date.localeCompare(a.date) || b.start.localeCompare(a.start))[0] ?? null
+}
+
+/** Last activity before sleeping — prefer post-check-in dinner/sights, else pre-check-in. */
+function lastStepBeforeEveningHotel(
+  daySteps: TripItem[],
+  hotel: TripItem,
+): TripItem | null {
+  const isTransport = (t: TripItem['type']) =>
+    t === 'drive' || t === 'flight' || t === 'train' || t === 'bus' || t === 'ferry'
+
+  const hotelIdx = daySteps.findIndex((i) => i.id === hotel.id)
+  let pool: TripItem[]
+  if (hotelIdx >= 0) {
+    const afterHotel = daySteps.slice(hotelIdx + 1).filter((i) => i.id !== hotel.id)
+    pool = afterHotel.length > 0 ? afterHotel : daySteps.slice(0, hotelIdx)
+  } else {
+    pool = daySteps.filter((i) => i.id !== hotel.id)
+  }
+
+  for (let i = pool.length - 1; i >= 0; i--) {
+    const step = pool[i]!
+    if (step.type === 'hotel') continue
+    if (isTransport(step.type)) {
+      if (anchorForDaySequence(step, 'arrive')) return step
+      continue
+    }
+    if (POINTISH.has(step.type) && pointOf(step)) return step
+  }
+  return null
 }
 
 export function distKm(

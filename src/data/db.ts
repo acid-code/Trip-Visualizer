@@ -117,8 +117,7 @@ export function makeTrip(
 }
 
 export async function ensureExampleTrip(): Promise<TripRecord> {
-  const existing = await getTrip(EXAMPLE_TRIP_ID)
-  if (existing) return existing
+  // Always refresh built-in sample from code so itinerary fixes ship to clients.
   const trip = makeTrip(exampleMeta, structuredClone(exampleItems), {
     id: EXAMPLE_TRIP_ID,
     isExample: true,
