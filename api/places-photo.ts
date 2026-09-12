@@ -3,7 +3,7 @@
  * GET /api/places-photo?name=places/.../photos/...&maxWidthPx=640
  */
 
-import { serverGoogleMapsApiKey } from './_googleKey'
+import { serverGoogleMapsApiKey } from '../lib/serverGoogleKey'
 
 export const config = {
   maxDuration: 20,

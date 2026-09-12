@@ -1485,14 +1485,16 @@ export default function App() {
         <div className="mobile-dock absolute inset-x-0 bottom-0 z-30 flex flex-col pb-[max(0.25rem,env(safe-area-inset-bottom))]">
           {(panelOpen || exploreOpen) && lowerMode !== 'insert' ? (
             <div
-              className={`mobile-panel relative mx-2 mb-1 overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
+              className={`mobile-panel relative mx-2 mb-1 flex flex-col overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
                 exploreOpen
                   ? exploreDetail
                     ? 'max-h-[52vh]'
                     : 'max-h-[34vh]'
                   : navTab === 'timeline'
                     ? 'max-h-[38vh]'
-                    : 'max-h-[52vh]'
+                    : navTab === 'settings'
+                      ? 'max-h-[72vh]'
+                      : 'max-h-[52vh]'
               }`}
             >
               {exploreOpen ? (
@@ -1537,7 +1539,7 @@ export default function App() {
               ) : null}
 
               {!exploreOpen && navTab === 'charts' && active ? (
-                <div className="max-h-[52vh] overflow-y-auto overscroll-contain px-2 pb-2 pt-2">
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] px-2 pb-2 pt-2">
                   <ChartsPanel
                     meta={active.meta}
                     items={active.items}
@@ -1552,7 +1554,7 @@ export default function App() {
               ) : null}
 
               {!exploreOpen && navTab === 'settings' ? (
-                <div className="max-h-[52vh] space-y-3 overflow-y-auto overscroll-contain px-3 pb-3 pt-2 text-sm text-stone-800">
+                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] px-3 pb-3 pt-2 text-sm text-stone-800">
                   <DataPanel
                     active={active}
                     mapStack={mapStack}

@@ -7,7 +7,7 @@ import {
   searchNearbyPlacesGoogle,
   GOOGLE_NEARBY_MAX,
 } from '../src/data/placesGoogle'
-import { serverGoogleMapsApiKey } from './_googleKey'
+import { serverGoogleMapsApiKey } from '../lib/serverGoogleKey'
 
 export const config = {
   maxDuration: 30,

@@ -259,6 +259,7 @@ export default defineConfig(({ mode }) => {
         // Keep version.json out of the precache so clients always hit the network.
         globPatterns: ['**/*.{js,css,html,ico,svg,woff2}'],
         globIgnores: ['**/version.json'],
+        navigateFallbackDenylist: [/^\/api\//],
       },
     }),
   ],

@@ -1,4 +1,4 @@
-/** Shared Google Maps env resolution for Vercel/API routes (never expose to the client). */
+/** Server-only Google Maps env helpers (used by Vercel `/api/*` routes). */
 
 export function serverGoogleMapsApiKey(bodyKey?: unknown): string {
   const fromBody = String(bodyKey ?? '').trim()

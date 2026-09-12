@@ -5,7 +5,7 @@
  */
 
 import { searchTextPlaceGoogle } from '../src/data/placesGoogle'
-import { serverGoogleMapsApiKey } from './_googleKey'
+import { serverGoogleMapsApiKey } from '../lib/serverGoogleKey'
 
 export const config = {
   maxDuration: 20,

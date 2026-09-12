@@ -3,7 +3,7 @@
  * Never returns the key itself.
  */
 
-import { serverPlacesConfigured } from './_googleKey'
+import { serverPlacesConfigured } from '../lib/serverGoogleKey'
 
 export const config = {
   maxDuration: 5,
@@ -44,20 +44,25 @@ function originAllowed(req: VercelReq): boolean {
 }
 
 export default async function handler(req: VercelReq, res: VercelRes) {
-  res.setHeader('Cache-Control', 'no-store')
+  try {
+    res.setHeader('Cache-Control', 'no-store')
 
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('')
-    return
-  }
-  if (req.method !== 'GET') {
-    res.status(405).json({ error: 'GET only' })
-    return
-  }
-  if (!originAllowed(req)) {
-    res.status(403).json({ error: 'Origin not allowed' })
-    return
-  }
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('')
+      return
+    }
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'GET only' })
+      return
+    }
+    if (!originAllowed(req)) {
+      res.status(403).json({ error: 'Origin not allowed' })
+      return
+    }
 
-  res.status(200).json({ placesConfigured: serverPlacesConfigured() })
+    res.status(200).json({ placesConfigured: serverPlacesConfigured() })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'maps-status failed'
+    res.status(500).json({ error: msg, placesConfigured: false })
+  }
 }
