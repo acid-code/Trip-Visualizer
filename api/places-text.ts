@@ -1,14 +1,19 @@
 /**
  * Proxy for Places API (New) Text Search — map search bar pin drop.
- * One call per Enter; Essentials field mask (name / address / location).
- * Uses server GOOGLE_MAPS_API_KEY; client may pass apiKey only as a Data-panel override.
+ * Fully self-contained: Vercel does not bundle ../src into /api functions.
  */
-
-import { searchTextPlaceGoogle } from '../src/data/placesGoogle'
 
 export const config = {
   maxDuration: 20,
 }
+
+const PLACES_TEXT = 'https://places.googleapis.com/v1/places:searchText'
+const TEXT_FIELD_MASK = [
+  'places.id',
+  'places.displayName',
+  'places.location',
+  'places.formattedAddress',
+].join(',')
 
 type VercelReq = {
   method?: string
@@ -21,6 +26,13 @@ type VercelRes = {
   setHeader: (name: string, value: string) => void
   json: (body: unknown) => void
   send: (body: string) => void
+}
+
+type GooglePlace = {
+  id?: string
+  displayName?: { text?: string }
+  location?: { latitude?: number; longitude?: number }
+  formattedAddress?: string
 }
 
 function header(req: VercelReq, name: string): string {
@@ -45,7 +57,6 @@ function originAllowed(req: VercelReq): boolean {
   }
 }
 
-/** Inlined — Vercel does not reliably bundle ../lib into /api functions. */
 function resolveApiKey(bodyKey?: unknown): string {
   const fromBody = String(bodyKey ?? '').trim()
   if (fromBody.startsWith('AIza')) return fromBody
@@ -76,9 +87,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
   const apiKey = resolveApiKey(body.apiKey)
   const biasRaw = body.bias as { lat?: number; lon?: number; radiusM?: number } | undefined
   const bias =
-    biasRaw &&
-    Number.isFinite(biasRaw.lat) &&
-    Number.isFinite(biasRaw.lon)
+    biasRaw && Number.isFinite(biasRaw.lat) && Number.isFinite(biasRaw.lon)
       ? {
           lat: Number(biasRaw.lat),
           lon: Number(biasRaw.lon),
@@ -96,8 +105,62 @@ export default async function handler(req: VercelReq, res: VercelRes) {
   }
 
   try {
-    const place = await searchTextPlaceGoogle({ query, apiKey, bias })
-    res.status(200).json({ place })
+    const payload: Record<string, unknown> = {
+      textQuery: query,
+      languageCode: 'en',
+      pageSize: 1,
+      maxResultCount: 1,
+    }
+    if (bias) {
+      payload.locationBias = {
+        circle: {
+          center: { latitude: bias.lat, longitude: bias.lon },
+          radius: Math.min(Math.max(bias.radiusM ?? 50_000, 100), 50_000),
+        },
+      }
+    }
+
+    const upstream = await fetch(PLACES_TEXT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': TEXT_FIELD_MASK,
+      },
+      body: JSON.stringify(payload),
+    })
+
+    if (!upstream.ok) {
+      const text = await upstream.text().catch(() => '')
+      res.status(502).json({
+        error: `Places Text ${upstream.status}${text ? `: ${text.slice(0, 160)}` : ''}`,
+      })
+      return
+    }
+
+    const json = (await upstream.json()) as { places?: GooglePlace[] }
+    const gp = json.places?.[0]
+    if (!gp) {
+      res.status(200).json({ place: null })
+      return
+    }
+    const lat = gp.location?.latitude
+    const lon = gp.location?.longitude
+    const name = String(gp.displayName?.text || '').trim().slice(0, 120)
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !name) {
+      res.status(200).json({ place: null })
+      return
+    }
+
+    res.status(200).json({
+      place: {
+        lat,
+        lon,
+        name,
+        address: String(gp.formattedAddress || '').trim().slice(0, 200),
+        placeId: String(gp.id || '').trim().slice(0, 128),
+      },
+    })
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Places Text failed'
     res.status(502).json({ error: msg })

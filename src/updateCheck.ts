@@ -39,19 +39,23 @@ export async function forceAppRefresh(): Promise<void> {
  * - SW `registration.update()` only in the background — no auto page reload
  */
 export function startUpdateChecks() {
-  registerSW({
-    immediate: true,
-    onRegisteredSW(_url, registration) {
-      if (!registration) return
-      const tick = () => {
-        void registration.update()
-      }
-      window.setInterval(tick, POLL_MS)
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') tick()
-      })
-    },
-  })
+  try {
+    registerSW({
+      immediate: true,
+      onRegisteredSW(_url, registration) {
+        if (!registration) return
+        const tick = () => {
+          void registration.update().catch(() => {})
+        }
+        window.setInterval(tick, POLL_MS)
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') tick()
+        })
+      },
+    })
+  } catch (err) {
+    logClientInfo('update', `SW register skipped: ${err instanceof Error ? err.message : String(err)}`)
+  }
 
   const checkVersion = async () => {
     try {
@@ -67,15 +71,24 @@ export function startUpdateChecks() {
         } catch {
           /* ignore */
         }
+        // Drop cache-bust query left by force refresh so shares stay clean.
+        try {
+          const url = new URL(window.location.href)
+          if (url.searchParams.has('_bust')) {
+            url.searchParams.delete('_bust')
+            window.history.replaceState({}, '', url.pathname + url.search + url.hash)
+          }
+        } catch {
+          /* ignore */
+        }
         return
       }
 
-      // Already tried this remote id this tab — avoid restart loops with a sticky SW.
       try {
         if (sessionStorage.getItem(UPDATE_ATTEMPTED_KEY) === remote) return
         sessionStorage.setItem(UPDATE_ATTEMPTED_KEY, remote)
       } catch {
-        /* private mode — still attempt once via reloading guard below */
+        /* private mode */
       }
 
       logClientInfo('update', 'New build detected — clearing SW and reloading once')
