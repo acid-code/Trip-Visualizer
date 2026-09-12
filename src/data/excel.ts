@@ -319,10 +319,25 @@ export function downloadWorkbook(wb: XLSX.WorkBook, filename: string) {
 
 /** Binary for Drive upload / programmatic import (same bytes as a downloaded .xlsx). */
 export function workbookToArrayBuffer(wb: XLSX.WorkBook): ArrayBuffer {
-  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as Uint8Array
-  const copy = new Uint8Array(out.byteLength)
-  copy.set(out)
-  return copy.buffer
+  // In browsers SheetJS may return number[], ArrayBuffer, or a typed-array view.
+  const written = XLSX.write(wb, {
+    bookType: 'xlsx',
+    type: 'array',
+  }) as number[] | ArrayBuffer | Uint8Array
+
+  let copy: Uint8Array
+  if (written instanceof ArrayBuffer) {
+    copy = new Uint8Array(written)
+  } else if (ArrayBuffer.isView(written)) {
+    const view = written as ArrayBufferView
+    copy = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+  } else {
+    copy = new Uint8Array(written as number[])
+  }
+
+  // Detach a precise slice so callers never see a shared / oversized backing store.
+  const sliced = copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength)
+  return sliced instanceof ArrayBuffer ? sliced : new Uint8Array(copy).buffer
 }
 
 export function tripToBlankTemplate(): XLSX.WorkBook {
