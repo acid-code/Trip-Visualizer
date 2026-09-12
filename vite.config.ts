@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
@@ -11,10 +11,106 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 /** Preview deploys behind Vercel SSO break /manifest.webmanifest (CORS) — skip PWA there. */
 const disablePwa = process.env.VERCEL_ENV === 'preview'
 
+/** Dev-only Places proxies (same contract as /api/places-* on Vercel). */
+function placesDevProxy(): Plugin {
+  return {
+    name: 'places-dev-proxy',
+    configureServer(server) {
+      const handle = (
+        path: string,
+        run: (body: Record<string, unknown>) => Promise<unknown>,
+      ) => {
+        server.middlewares.use(path, (req, res, next) => {
+          if (req.method === 'OPTIONS') {
+            res.statusCode = 204
+            res.end()
+            return
+          }
+          if (req.method !== 'POST') {
+            next()
+            return
+          }
+          const chunks: Buffer[] = []
+          req.on('data', (c) => chunks.push(c as Buffer))
+          req.on('end', () => {
+            void (async () => {
+              try {
+                const raw = Buffer.concat(chunks).toString('utf8')
+                const body = JSON.parse(raw || '{}') as Record<string, unknown>
+                const payload = await run(body)
+                res.statusCode = 200
+                res.setHeader('Content-Type', 'application/json')
+                res.end(JSON.stringify(payload))
+              } catch (err) {
+                res.statusCode = 502
+                res.setHeader('Content-Type', 'application/json')
+                res.end(
+                  JSON.stringify({
+                    error: err instanceof Error ? err.message : 'Places request failed',
+                  }),
+                )
+              }
+            })()
+          })
+        })
+      }
+
+      handle('/api/places-nearby', async (body) => {
+        const apiKey = String(
+          body.apiKey ||
+            process.env.GOOGLE_MAPS_API_KEY ||
+            process.env.VITE_GOOGLE_MAPS_API_KEY ||
+            '',
+        ).trim()
+        if (!apiKey) throw new Error('Google Maps API key required')
+        const { searchNearbyPlacesGoogle, GOOGLE_NEARBY_MAX } = await import(
+          './src/data/placesGoogle'
+        )
+        const places = await searchNearbyPlacesGoogle({
+          lat: Number(body.lat),
+          lon: Number(body.lon),
+          radiusM: Number(body.radiusM) || 1500,
+          maxResultCount: Math.min(
+            Number(body.maxResultCount) || GOOGLE_NEARBY_MAX,
+            GOOGLE_NEARBY_MAX,
+          ),
+          apiKey,
+        })
+        return { places }
+      })
+
+      handle('/api/places-text', async (body) => {
+        const apiKey = String(
+          body.apiKey ||
+            process.env.GOOGLE_MAPS_API_KEY ||
+            process.env.VITE_GOOGLE_MAPS_API_KEY ||
+            '',
+        ).trim()
+        if (!apiKey) throw new Error('Google Maps API key required')
+        const query = String(body.query || '').trim()
+        if (!query) throw new Error('Missing query')
+        const biasRaw = body.bias as { lat?: number; lon?: number; radiusM?: number } | undefined
+        const bias =
+          biasRaw && Number.isFinite(biasRaw.lat) && Number.isFinite(biasRaw.lon)
+            ? {
+                lat: Number(biasRaw.lat),
+                lon: Number(biasRaw.lon),
+                radiusM: biasRaw.radiusM,
+              }
+            : undefined
+        const { searchTextPlaceGoogle } = await import('./src/data/placesGoogle')
+        const place = await searchTextPlaceGoogle({ query, apiKey, bias })
+        return { place }
+      })
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    placesDevProxy(),
     viteStaticCopy({
       targets: [
         {
@@ -82,7 +178,6 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Local Explore: same-origin /api/overpass → public Overpass (avoids browser CORS)
       '/api/overpass': {
         target: 'https://overpass-api.de',
         changeOrigin: true,

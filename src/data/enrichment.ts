@@ -1,6 +1,7 @@
 import type { TripItem } from '../domain/types'
 import { lookupAirport } from './airports'
 import { nowIso } from './db'
+import { fetchGoogleTextViaProxy } from './placesGoogle'
 import { MAX_GEOCODE_QUERY_LEN, safeHttpsUrl } from './security'
 import { isValidCoord, parseLat, parseLon } from './validate'
 
@@ -124,10 +125,41 @@ export async function geocodePlace(query: string): Promise<{ lat: number; lon: n
   return full ? { lat: full.lat, lon: full.lon } : null
 }
 
-/** Forward geocode with name / address details (Nominatim). */
-export async function lookupPlace(query: string): Promise<PlaceLookup | null> {
+/** Forward geocode with name / address details (Google Text Search when keyed, else Nominatim). */
+export async function lookupPlace(
+  query: string,
+  opts?: {
+    googleApiKey?: string
+    bias?: { lat: number; lon: number; radiusM?: number }
+  },
+): Promise<PlaceLookup | null> {
   const q = query.trim().slice(0, MAX_GEOCODE_QUERY_LEN)
   if (!q) return null
+
+  const googleKey = opts?.googleApiKey?.trim()
+  if (googleKey) {
+    try {
+      const hit = await fetchGoogleTextViaProxy({
+        query: q,
+        apiKey: googleKey,
+        bias: opts?.bias,
+      })
+      if (hit) {
+        return {
+          lat: hit.lat,
+          lon: hit.lon,
+          name: hit.name,
+          address: hit.address || hit.name,
+          city: '',
+          osmId: hit.placeId ? `google:${hit.placeId}` : '',
+          query: q,
+        }
+      }
+    } catch {
+      /* fall through to Nominatim */
+    }
+  }
+
   const url = new URL(NOMINATIM)
   url.searchParams.set('q', q)
   url.searchParams.set('format', 'json')

@@ -58,6 +58,7 @@ import {
   fetchNearbyExplore,
   type ExplorePlace,
 } from './data/explore'
+import { hydrateGooglePlacePhoto } from './data/placesGoogle'
 import {
   FEATURE_TIPS,
   parseSeenTipIds,
@@ -84,6 +85,10 @@ import {
   publicErrorMessage,
   sanitizeSecretInput,
 } from './data/security'
+import {
+  hasEnvGoogleMapsApiKey,
+  resolveGoogleMapsApiKey,
+} from './data/googleKey'
 import { sanitizeTripRecord } from './domain/types'
 import { useIsNarrow } from './ui/useIsNarrow'
 
@@ -105,6 +110,7 @@ export default function App() {
   const [mapStack, setMapStack] = useState<MapStack>('esri')
   const [googleKey, setGoogleKey] = useState('')
   const [ionToken, setIonToken] = useState('')
+  const effectiveGoogleKey = resolveGoogleMapsApiKey(googleKey)
   const [walkApp, setWalkApp] = useState<WalkAppPref>('maps')
   const [status, setStatus] = useState('')
   const [overviewToken, setOverviewToken] = useState(0)
@@ -549,7 +555,16 @@ export default function App() {
         setStatus('Couldn’t read that link — paste an address or Maps place URL')
         return
       }
-      const place = await lookupPlace(query)
+      const bias =
+        tempPin && isValidCoord(tempPin.lat, tempPin.lon)
+          ? { lat: tempPin.lat, lon: tempPin.lon, radiusM: 80_000 }
+          : selected && isValidCoord(selected.lat, selected.lon)
+            ? { lat: selected.lat!, lon: selected.lon!, radiusM: 80_000 }
+            : undefined
+      const place = await lookupPlace(query, {
+        googleApiKey: effectiveGoogleKey || undefined,
+        bias,
+      })
       if (!place) {
         setStatus('No place found for that search')
         return
@@ -907,6 +922,7 @@ export default function App() {
           { lat: lat!, lon: lon! },
           {
             signal: ac.signal,
+            googleApiKey: effectiveGoogleKey || undefined,
             onCacheHit: (cached) => {
               if (ac.signal.aborted) return
               showedCache = true
@@ -933,8 +949,15 @@ export default function App() {
   }
 
   function selectExplorePlace(place: ExplorePlace) {
-    setExploreFocusId(place.id)
-    setExploreDetail(place)
+    const hydrated =
+      effectiveGoogleKey && place.tags.googlePhotoName
+        ? hydrateGooglePlacePhoto(place, effectiveGoogleKey)
+        : place
+    setExploreFocusId(hydrated.id)
+    setExploreDetail(hydrated)
+    setExplorePlaces((prev) =>
+      prev.map((p) => (p.id === hydrated.id ? { ...p, images: hydrated.images } : p)),
+    )
     setExploreFlyToken((n) => n + 1)
   }
 
@@ -1097,7 +1120,7 @@ export default function App() {
           connectors={visibleConnectors}
           selectedId={selectedId}
           mapStack={mapStack}
-          googleKey={googleKey || undefined}
+          googleKey={effectiveGoogleKey || undefined}
           ionToken={ionToken || undefined}
           overviewToken={overviewToken}
           tripFocusId={activeId}
@@ -1332,6 +1355,7 @@ export default function App() {
                     active={active}
                     mapStack={mapStack}
                     googleKey={googleKey}
+                    googleKeyHasEnvDefault={hasEnvGoogleMapsApiKey()}
                     ionToken={ionToken}
                     walkApp={walkApp}
                     enrichProgress={enrichProgress}
@@ -1500,6 +1524,7 @@ export default function App() {
                     active={active}
                     mapStack={mapStack}
                     googleKey={googleKey}
+                    googleKeyHasEnvDefault={hasEnvGoogleMapsApiKey()}
                     ionToken={ionToken}
                     walkApp={walkApp}
                     enrichProgress={enrichProgress}
@@ -1680,6 +1705,7 @@ function DataPanel({
   active,
   mapStack,
   googleKey,
+  googleKeyHasEnvDefault,
   ionToken,
   walkApp,
   enrichProgress,
@@ -1705,6 +1731,7 @@ function DataPanel({
   active: TripRecord | null
   mapStack: MapStack
   googleKey: string
+  googleKeyHasEnvDefault: boolean
   ionToken: string
   walkApp: WalkAppPref
   enrichProgress: string | null
@@ -1854,7 +1881,7 @@ function DataPanel({
           </p>
         </div>
         <label className="mt-3 block text-xs text-stone-500">
-          Google Maps key (optional, for photoreal 3D)
+          Google Maps / Places key
           <input
             className="mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm text-stone-800"
             type="password"
@@ -1863,10 +1890,16 @@ function DataPanel({
             value={googleKey}
             onChange={(e) => setGoogleKey(sanitizeSecretInput(e.target.value))}
             onBlur={() => void setSetting('googleMapsKey', googleKey)}
-            placeholder="Paste key…"
+            placeholder={
+              googleKeyHasEnvDefault
+                ? 'Override deploy default…'
+                : 'Paste key…'
+            }
           />
           <span className="mt-1 block text-[10px] text-stone-400">
-            Stored only in this browser’s IndexedDB — never committed or sent to our servers.
+            {googleKeyHasEnvDefault
+              ? 'Leave blank to use the site default (Vercel env). Paste your own key here to override (e.g. if the shared free quota is used up). Saved only in this browser’s IndexedDB.'
+              : 'Optional — for Places / photoreal 3D. Stored only in this browser’s IndexedDB. Or set VITE_GOOGLE_MAPS_API_KEY on Vercel as the site default.'}
           </span>
         </label>
         <label className="mt-3 block text-xs text-stone-500">

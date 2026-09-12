@@ -231,15 +231,17 @@ export function ExploreSheet({
                 <button
                   type="button"
                   className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 shadow-sm"
-                  onClick={() =>
+                  onClick={() => {
+                    const mapsUri = detail.tags.googleMapsUri
                     openExternalUrl(
-                      mapsPlaceSearchUrl(detail.name, detail, {
-                        address: detail.address,
-                        category: detail.category,
-                        cuisine: detail.cuisine,
-                      }),
+                      mapsUri ||
+                        mapsPlaceSearchUrl(detail.name, detail, {
+                          address: detail.address,
+                          category: detail.category,
+                          cuisine: detail.cuisine,
+                        }),
                     )
-                  }
+                  }}
                 >
                   Google Maps · reviews
                 </button>
@@ -336,7 +338,9 @@ function DetailMeta({
             ★
           </span>
           {place.rating != null ? place.rating : '—'}
-          <span className="text-[9px] text-stone-400">(OSM)</span>
+          <span className="text-[9px] text-stone-400">
+            ({place.tags.source === 'google' ? 'Google' : 'OSM'})
+          </span>
         </span>
       </div>
       {place.summary ? (

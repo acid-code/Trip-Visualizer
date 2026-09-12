@@ -5,6 +5,11 @@ import type { ItemType } from '../domain/types'
 import { distKm } from './routes'
 import { clampText, logClientError, safeHttpsUrl } from './security'
 import { isValidCoord } from './validate'
+import {
+  attachGoogleListPhotos,
+  fetchGoogleNearbyViaProxy,
+  GOOGLE_NEARBY_MAX,
+} from './placesGoogle'
 
 export type ExploreCategory = 'sights' | 'food' | 'drink' | 'nature' | 'other'
 
@@ -99,10 +104,14 @@ function cacheDb() {
   return cacheDbPromise
 }
 
-function cacheKey(lat: number, lon: number, radiusM: number): string {
-  // v4: only place-linked photos/summaries (no geo/name guesswork)
-  // ~1 km cells so nearby pins share the same explore cache
-  return `v4:${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}`
+function cacheKey(
+  lat: number,
+  lon: number,
+  radiusM: number,
+  source: 'google' | 'osm',
+): string {
+  // v5: Google Nearby (one Pro call) or OSM; bump when pipeline changes
+  return `v5:${source}:${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}`
 }
 
 async function getCached(key: string): Promise<ExplorePlace[] | null> {
@@ -486,16 +495,23 @@ export async function fetchNearbyExplore(
     limit?: number
     signal?: AbortSignal
     skipCache?: boolean
+    /** When set, use Places Nearby (1 Pro call) instead of Overpass. */
+    googleApiKey?: string
     /** Fired immediately when a 2-day area cache hit exists (before network). */
     onCacheHit?: (places: ExplorePlace[]) => void
-    /** After a cache hit, still refresh Overpass in the background (default true). */
+    /** After a cache hit, still refresh in the background (default true). */
     refreshInBackground?: boolean
   },
 ): Promise<ExplorePlace[]> {
   if (!isValidCoord(anchor.lat, anchor.lon)) return []
   const radiusM = opts?.radiusM ?? DEFAULT_RADIUS_M
-  const limit = opts?.limit ?? DEFAULT_LIMIT
-  const key = cacheKey(anchor.lat, anchor.lon, radiusM)
+  const useGoogle = Boolean(opts?.googleApiKey?.trim())
+  const source = useGoogle ? 'google' : 'osm'
+  // Google Nearby hard-caps at 20 — don't request / cache more than that
+  const limit = useGoogle
+    ? Math.min(opts?.limit ?? GOOGLE_NEARBY_MAX, GOOGLE_NEARBY_MAX)
+    : (opts?.limit ?? DEFAULT_LIMIT)
+  const key = cacheKey(anchor.lat, anchor.lon, radiusM, source)
 
   const withDistances = (list: ExplorePlace[]) =>
     [...list]
@@ -510,13 +526,37 @@ export async function fetchNearbyExplore(
   if (!opts?.skipCache) {
     const cached = await getCached(key)
     if (cached?.length) {
-      cacheHit = withDistances(cached)
+      let list = withDistances(cached)
+      if (useGoogle && opts?.googleApiKey) {
+        list = attachGoogleListPhotos(
+          list.map((p) =>
+            p.tags.googlePhotoName ? { ...p, images: [] as string[] } : p,
+          ),
+          opts.googleApiKey,
+        )
+      }
+      cacheHit = list
       opts?.onCacheHit?.(cacheHit)
       if (opts?.refreshInBackground === false) return cacheHit
     }
   }
 
   try {
+    if (useGoogle) {
+      const gKey = opts?.googleApiKey?.trim() || ''
+      const places = await fetchGoogleNearbyViaProxy(anchor, {
+        apiKey: gKey,
+        radiusM,
+        maxResultCount: limit,
+        signal: opts?.signal,
+      })
+      if (opts?.signal?.aborted) return cacheHit ?? []
+      const withPhotos = attachGoogleListPhotos(places, gKey)
+      const fresh = withDistances(withPhotos)
+      void setCached(key, fresh)
+      return fresh
+    }
+
     const elements = await queryOverpass(
       buildOverpassQuery(anchor.lat, anchor.lon, radiusM),
       opts?.signal,
