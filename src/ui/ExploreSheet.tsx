@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   exploreCategoryLabel,
   filterAndSortExplore,
@@ -28,13 +28,49 @@ type Props = {
   phone?: boolean
 }
 
-const TYPE_OPTIONS: Array<ExploreCategory | 'all'> = [
-  'all',
-  'sights',
-  'food',
-  'drink',
-  'nature',
-  'other',
+/** One category at a time — full nearby result stays cached; this only filters UI. */
+const CATEGORY_CHIPS: Array<{
+  id: ExploreCategory
+  short: string
+  tone: string
+  toneActive: string
+}> = [
+  {
+    id: 'food',
+    short: 'Food',
+    tone: 'border-orange-200/80 bg-orange-50/70 text-orange-800',
+    toneActive: 'border-orange-400 bg-orange-500 text-white shadow-sm shadow-orange-200',
+  },
+  {
+    id: 'drink',
+    short: 'Drinks',
+    tone: 'border-violet-200/80 bg-violet-50/70 text-violet-800',
+    toneActive: 'border-violet-400 bg-violet-500 text-white shadow-sm shadow-violet-200',
+  },
+  {
+    id: 'sights',
+    short: 'Sights',
+    tone: 'border-sky-200/80 bg-sky-50/70 text-sky-800',
+    toneActive: 'border-sky-400 bg-sky-500 text-white shadow-sm shadow-sky-200',
+  },
+  {
+    id: 'hotel',
+    short: 'Hotels',
+    tone: 'border-teal-200/80 bg-teal-50/70 text-teal-800',
+    toneActive: 'border-teal-400 bg-teal-600 text-white shadow-sm shadow-teal-200',
+  },
+  {
+    id: 'nature',
+    short: 'Nature',
+    tone: 'border-lime-200/80 bg-lime-50/70 text-lime-900',
+    toneActive: 'border-lime-500 bg-lime-600 text-white shadow-sm shadow-lime-200',
+  },
+]
+
+const SORT_OPTIONS: Array<{ id: ExploreSort; label: string }> = [
+  { id: 'distance', label: 'Near' },
+  { id: 'rating', label: 'Rated' },
+  { id: 'name', label: 'A–Z' },
 ]
 
 export function ExploreSheet({
@@ -50,10 +86,8 @@ export function ExploreSheet({
   onCloseDetail,
   onAddStep,
 }: Props) {
-  const [typeFilter, setTypeFilter] = useState<ExploreCategory | 'all'>('all')
+  const [typeFilter, setTypeFilter] = useState<ExploreCategory>('food')
   const [sort, setSort] = useState<ExploreSort>('distance')
-  const [typeOpen, setTypeOpen] = useState(false)
-  const [sortOpen, setSortOpen] = useState(false)
   const scrollerRef = useRef<HTMLDivElement>(null)
   const scrollLeftRef = useRef(0)
 
@@ -61,6 +95,20 @@ export function ExploreSheet({
     () => filterAndSortExplore(places, typeFilter, sort),
     [places, typeFilter, sort],
   )
+
+  const counts = useMemo(() => {
+    const map: Partial<Record<ExploreCategory, number>> = {}
+    for (const p of places) {
+      map[p.category] = (map[p.category] ?? 0) + 1
+    }
+    return map
+  }, [places])
+
+  useEffect(() => {
+    scrollLeftRef.current = 0
+    const el = scrollerRef.current
+    if (el) el.scrollLeft = 0
+  }, [typeFilter, sort])
 
   // Keep horizontal position when the list refreshes in the background.
   useLayoutEffect(() => {
@@ -70,10 +118,6 @@ export function ExploreSheet({
   }, [filtered])
 
   if (!open) return null
-
-  function typeLabel(t: ExploreCategory | 'all') {
-    return t === 'all' ? 'All types' : exploreCategoryLabel(t)
-  }
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-gradient-to-b from-stone-50 to-amber-50/40 text-stone-800">
@@ -107,84 +151,60 @@ export function ExploreSheet({
         </button>
       </div>
 
-      <div className="relative z-10 flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-100/60 px-3 py-2">
-        <span className="text-[10px] uppercase tracking-wide text-stone-400">Type</span>
-        <div className="relative">
-          <button
-            type="button"
-            className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-[11px] text-stone-700 shadow-sm"
-            onClick={() => {
-              setTypeOpen((v) => !v)
-              setSortOpen(false)
-            }}
-          >
-            {typeLabel(typeFilter)} ▾
-          </button>
-          {typeOpen ? (
-            <div className="absolute left-0 top-7 z-20 min-w-[8rem] overflow-hidden rounded-xl border border-stone-200 bg-white py-1 shadow-lg">
-              {TYPE_OPTIONS.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={`block w-full px-3 py-1.5 text-left text-xs ${
-                    typeFilter === id
-                      ? 'bg-amber-50 text-amber-800'
-                      : 'text-stone-700 hover:bg-stone-50'
-                  }`}
-                  onClick={() => {
-                    setTypeFilter(id)
-                    setTypeOpen(false)
-                  }}
-                >
-                  {typeLabel(id)}
-                </button>
-              ))}
-            </div>
-          ) : null}
+      <div className="shrink-0 space-y-2 border-b border-amber-100/60 px-3 py-2.5">
+        <div className="flex gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {CATEGORY_CHIPS.map((chip) => {
+            const active = typeFilter === chip.id
+            const n = counts[chip.id] ?? 0
+            return (
+              <button
+                key={chip.id}
+                type="button"
+                aria-pressed={active}
+                className={`shrink-0 rounded-2xl border px-3 py-1.5 text-[11px] font-semibold tracking-wide transition-[transform,background-color,box-shadow,border-color] duration-150 active:scale-[0.97] ${
+                  active ? chip.toneActive : chip.tone
+                }`}
+                onClick={() => setTypeFilter(chip.id)}
+              >
+                {chip.short}
+                {places.length ? (
+                  <span
+                    className={`ml-1.5 tabular-nums ${
+                      active ? 'text-white/80' : 'opacity-60'
+                    }`}
+                  >
+                    {n}
+                  </span>
+                ) : null}
+              </button>
+            )
+          })}
         </div>
 
-        <span className="text-[10px] uppercase tracking-wide text-stone-400">Sort</span>
-        <div className="relative">
-          <button
-            type="button"
-            className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-[11px] text-stone-700 shadow-sm"
-            onClick={() => {
-              setSortOpen((v) => !v)
-              setTypeOpen(false)
-            }}
-          >
-            {sort === 'distance' ? 'Distance' : sort === 'name' ? 'Name' : 'Rating'} ▾
-          </button>
-          {sortOpen ? (
-            <div className="absolute left-0 top-7 z-20 min-w-[7rem] overflow-hidden rounded-xl border border-stone-200 bg-white py-1 shadow-lg">
-              {(
-                [
-                  ['distance', 'Distance'],
-                  ['name', 'Name'],
-                  ['rating', 'Rating'],
-                ] as const
-              ).map(([id, label]) => (
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-xl border border-stone-200/90 bg-white/80 p-0.5 shadow-sm">
+            {SORT_OPTIONS.map((opt) => {
+              const active = sort === opt.id
+              return (
                 <button
-                  key={id}
+                  key={opt.id}
                   type="button"
-                  className={`block w-full px-3 py-1.5 text-left text-xs ${
-                    sort === id ? 'bg-amber-50 text-amber-800' : 'text-stone-700 hover:bg-stone-50'
+                  className={`rounded-lg px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors duration-150 ${
+                    active
+                      ? 'bg-stone-800 text-white'
+                      : 'text-stone-500 hover:text-stone-800'
                   }`}
-                  onClick={() => {
-                    setSort(id)
-                    setSortOpen(false)
-                  }}
+                  onClick={() => setSort(opt.id)}
                 >
-                  {label}
+                  {opt.label}
                 </button>
-              ))}
-            </div>
-          ) : null}
+              )
+            })}
+          </div>
+          <span className="ml-auto text-[10px] tabular-nums text-stone-400">
+            {busy ? 'Loading…' : `${filtered.length} · ${exploreCategoryLabel(typeFilter)}`}
+          </span>
         </div>
-
-        <span className="ml-auto text-[10px] tabular-nums text-stone-400">
-          {busy ? 'Loading…' : `${filtered.length}`}
-        </span>
       </div>
 
       <div
@@ -199,7 +219,9 @@ export function ExploreSheet({
           <p className="py-6 text-center text-sm text-stone-400">Looking around…</p>
         ) : null}
         {!busy && !filtered.length && !error ? (
-          <p className="py-6 text-center text-sm text-stone-400">No places in this filter.</p>
+          <p className="py-6 text-center text-sm text-stone-400">
+            No {exploreCategoryLabel(typeFilter).toLowerCase()} nearby — try another category.
+          </p>
         ) : null}
 
         <div

@@ -295,6 +295,14 @@ export function downloadWorkbook(wb: XLSX.WorkBook, filename: string) {
   XLSX.writeFile(wb, filename)
 }
 
+/** Binary for Drive upload / programmatic import (same bytes as a downloaded .xlsx). */
+export function workbookToArrayBuffer(wb: XLSX.WorkBook): ArrayBuffer {
+  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as Uint8Array
+  const copy = new Uint8Array(out.byteLength)
+  copy.set(out)
+  return copy.buffer
+}
+
 export function tripToBlankTemplate(): XLSX.WorkBook {
   const blank: TripRecord = {
     id: 'template',

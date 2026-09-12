@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy Policy · Trip Visualizer</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1c1917;
+        --muted: #57534e;
+        --line: #e7e5e4;
+        --bg: #fffaf3;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        line-height: 1.55;
+      }
+      main {
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 2.5rem 1.25rem 4rem;
+      }
+      h1 {
+        font-size: 1.75rem;
+        margin: 0 0 0.35rem;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin-bottom: 1.75rem;
+      }
+      h2 {
+        font-size: 1.1rem;
+        margin: 1.75rem 0 0.5rem;
+      }
+      p,
+      li {
+        color: var(--ink);
+        font-size: 0.98rem;
+      }
+      ul {
+        padding-left: 1.2rem;
+      }
+      a {
+        color: #0f766e;
+      }
+      hr {
+        border: 0;
+        border-top: 1px solid var(--line);
+        margin: 2rem 0;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Privacy Policy</h1>
+      <p class="meta">Trip Visualizer · Last updated: 13 September 2026</p>
+
+      <p>
+        This policy describes how <strong>Trip Visualizer</strong>
+        (<a href="https://trip-visualizer-eta.vercel.app">trip-visualizer-eta.vercel.app</a>)
+        handles information when you use the app, including optional Google Drive sync.
+      </p>
+
+      <h2>What the app stores</h2>
+      <ul>
+        <li>
+          Trip plans (schedule, places, notes, costs) are stored mainly in your browser
+          (IndexedDB / local storage) on your device.
+        </li>
+        <li>
+          Optional settings you enter in the app (for example a Maps key override) stay on
+          your device unless you clear site data.
+        </li>
+        <li>
+          Nearby Explore results may be cached on your device for a short time to reduce
+          repeat network calls.
+        </li>
+      </ul>
+
+      <h2>Google Sign-In and Google Drive</h2>
+      <p>
+        If you use <strong>Save to Google Drive</strong> / load from Drive, you sign in with
+        Google and grant access limited to files this app creates or opens
+        (<code>drive.file</code> scope).
+      </p>
+      <ul>
+        <li>
+          Workbooks are written under a folder named <code>trip-planer</code> in
+          <em>your</em> Google Drive.
+        </li>
+        <li>
+          We do not receive or store your Google password. Access uses Google’s OAuth tokens
+          in the browser session.
+        </li>
+        <li>
+          You can revoke access anytime in your
+          <a href="https://myaccount.google.com/permissions">Google Account permissions</a>.
+        </li>
+      </ul>
+
+      <h2>Maps and place data</h2>
+      <p>
+        The app may call map/place services (for example Google Places via our server proxy,
+        OpenStreetMap / Nominatim, routing, and imagery providers) to show maps and nearby
+        places. Those providers process the coordinates or queries needed to answer the
+        request under their own policies.
+      </p>
+
+      <h2>Analytics and ads</h2>
+      <p>We do not sell your personal data. The app is not monetized with ad networks.</p>
+
+      <h2>Hosting</h2>
+      <p>
+        The web app is hosted on Vercel. Server logs from hosting/API routes may include
+        standard technical data (such as IP address, user agent, and timestamps) as part of
+        operating the service.
+      </p>
+
+      <h2>Children</h2>
+      <p>
+        The app is not directed at children under 13, and we do not knowingly collect
+        personal information from children.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        Questions about this policy: use the contact method associated with the Google Cloud
+        project / OAuth consent screen for this app, or the site operator who shared the app
+        with you.
+      </p>
+
+      <hr />
+      <p class="meta">
+        <a href="/">Back to app</a> ·
+        <a href="/terms.html">Terms of Service</a>
+      </p>
+    </main>
+  </body>
+</html>

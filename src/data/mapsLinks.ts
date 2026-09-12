@@ -64,6 +64,8 @@ export function mapsPlaceSearchUrl(
     }
     const kind = cat === 'drink' ? 'bar' : 'restaurant'
     if (!new RegExp(`\\b${kind}\\b`, 'i').test(title)) parts.push(kind)
+  } else if (cat === 'hotel') {
+    if (!/\bhotel\b/i.test(title)) parts.push('hotel')
   } else if (cat === 'sights' || cat === 'nature') {
     // keep name + address; location bias does the rest
   }

@@ -70,6 +70,18 @@ type GooglePlace = {
 function categoryFromTypes(primary: string, types: string[]): ExploreCategory {
   const all = [primary, ...types].map((t) => t.toLowerCase())
   const has = (t: string) => all.includes(t)
+  // Lodging first — places often also carry food-related types
+  if (
+    has('lodging') ||
+    has('hotel') ||
+    has('motel') ||
+    has('resort_hotel') ||
+    has('extended_stay_hotel') ||
+    has('guest_house') ||
+    has('hostel')
+  ) {
+    return 'hotel'
+  }
   if (
     has('restaurant') ||
     has('cafe') ||

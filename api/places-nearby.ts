@@ -133,6 +133,17 @@ function categoryFromTypes(primary: string, types: string[]): string {
   const all = [primary, ...types].map((t) => t.toLowerCase())
   const has = (t: string) => all.includes(t)
   if (
+    has('lodging') ||
+    has('hotel') ||
+    has('motel') ||
+    has('resort_hotel') ||
+    has('extended_stay_hotel') ||
+    has('guest_house') ||
+    has('hostel')
+  ) {
+    return 'hotel'
+  }
+  if (
     has('restaurant') ||
     has('cafe') ||
     has('bakery') ||

@@ -19,7 +19,19 @@ import {
   downloadWorkbook,
   parseTripWorkbook,
   tripToBlankTemplate,
+  workbookToArrayBuffer,
 } from './data/excel'
+import {
+  connectGoogleDrive,
+  disconnectGoogleDrive,
+  downloadDriveFile,
+  DRIVE_FOLDER_NAME,
+  isGoogleDriveConfigured,
+  isGoogleDriveConnected,
+  listTripWorkbooksOnDrive,
+  uploadTripWorkbookToDrive,
+  type DriveFileInfo,
+} from './data/googleDrive'
 import {
   enrichTripItems,
   extractCoordsFromText,
@@ -303,47 +315,54 @@ export default function App() {
     await persist(next)
   }
 
+  async function importWorkbookBuffer(buf: ArrayBuffer, sourceLabel = 'Imported') {
+    if (buf.byteLength > MAX_IMPORT_BYTES) {
+      setStatus('Import failed — file is too large (max 5 MB)')
+      return
+    }
+    const { meta, items } = parseTripWorkbook(buf)
+    const dates = sanitizeMetaDates(meta.startDate, meta.endDate)
+    const safeMeta = {
+      ...meta,
+      name: meta.name.trim() || `${sourceLabel} trip`,
+      ...dates,
+    }
+    const withBases = ensureDayStartBases(safeMeta, items)
+    setStatus(`Imported “${safeMeta.name}” · looking up places on the map…`)
+    const pinned = await pinTripItemsOnMap(withBases, (done, total) => {
+      setStatus(`Pinning places ${done}/${total}…`)
+    })
+    const pinnedCount = pinned.filter(
+      (item, i) =>
+        (isValidCoord(item.lat, item.lon) && !isValidCoord(withBases[i]?.lat, withBases[i]?.lon)) ||
+        (isValidCoord(item.latTo, item.lonTo) &&
+          !isValidCoord(withBases[i]?.latTo, withBases[i]?.lonTo)),
+    ).length
+    const trip = sanitizeTripRecord({
+      id: createId('TRIP'),
+      meta: safeMeta,
+      items: pinned,
+      isExample: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    await saveTrip(trip)
+    await refresh()
+    setActiveId(trip.id)
+    setStatus(
+      pinnedCount > 0
+        ? `Imported “${safeMeta.name}” · ${pinnedCount} place${pinnedCount === 1 ? '' : 's'} pinned on the map`
+        : `Imported “${safeMeta.name}”`,
+    )
+  }
+
   async function onImportFile(file: File) {
     try {
       if (file.size > MAX_IMPORT_BYTES) {
         setStatus('Import failed — file is too large (max 5 MB)')
         return
       }
-      const buf = await file.arrayBuffer()
-      const { meta, items } = parseTripWorkbook(buf)
-      const dates = sanitizeMetaDates(meta.startDate, meta.endDate)
-      const safeMeta = {
-        ...meta,
-        name: meta.name.trim() || 'Imported trip',
-        ...dates,
-      }
-      const withBases = ensureDayStartBases(safeMeta, items)
-      setStatus(`Imported “${safeMeta.name}” · looking up places on the map…`)
-      const pinned = await pinTripItemsOnMap(withBases, (done, total) => {
-        setStatus(`Pinning places ${done}/${total}…`)
-      })
-      const pinnedCount = pinned.filter(
-        (item, i) =>
-          (isValidCoord(item.lat, item.lon) && !isValidCoord(withBases[i]?.lat, withBases[i]?.lon)) ||
-          (isValidCoord(item.latTo, item.lonTo) &&
-            !isValidCoord(withBases[i]?.latTo, withBases[i]?.lonTo)),
-      ).length
-      const trip = sanitizeTripRecord({
-        id: createId('TRIP'),
-        meta: safeMeta,
-        items: pinned,
-        isExample: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      })
-      await saveTrip(trip)
-      await refresh()
-      setActiveId(trip.id)
-      setStatus(
-        pinnedCount > 0
-          ? `Imported “${safeMeta.name}” · ${pinnedCount} place${pinnedCount === 1 ? '' : 's'} pinned on the map`
-          : `Imported “${safeMeta.name}”`,
-      )
+      await importWorkbookBuffer(await file.arrayBuffer())
     } catch (err) {
       logClientError('import', err)
       setStatus(
@@ -352,6 +371,30 @@ export default function App() {
           'Import failed — use a Trip Tracker Excel with a Schedule sheet',
         ),
       )
+    }
+  }
+
+  async function onExportToDrive() {
+    if (!active) return
+    try {
+      setStatus('Signing in to Google Drive…')
+      const bytes = workbookToArrayBuffer(buildTripWorkbook(active))
+      const { fileName } = await uploadTripWorkbookToDrive(active.meta.name, bytes)
+      setStatus(`Saved to Drive · ${DRIVE_FOLDER_NAME}/${fileName}`)
+    } catch (err) {
+      logClientError('drive-export', err)
+      setStatus(publicErrorMessage(err, 'Could not save to Google Drive'))
+    }
+  }
+
+  async function onImportFromDrive(fileId: string, fileName: string) {
+    try {
+      setStatus(`Downloading ${fileName} from Drive…`)
+      const buf = await downloadDriveFile(fileId)
+      await importWorkbookBuffer(buf, 'Drive')
+    } catch (err) {
+      logClientError('drive-import', err)
+      setStatus(publicErrorMessage(err, 'Could not load trip from Google Drive'))
     }
   }
 
@@ -1403,6 +1446,8 @@ export default function App() {
                     onBlank={() => void onBlank()}
                     onImportFile={(f) => void onImportFile(f)}
                     onExport={() => void onExport()}
+                    onExportToDrive={() => void onExportToDrive()}
+                    onImportFromDrive={(id, name) => void onImportFromDrive(id, name)}
                     onExportExampleExcel={() => void onExportExampleExcel()}
                     onExportTemplate={() => void onExportTemplate()}
                     onPolarsteps={() => {
@@ -1585,6 +1630,8 @@ export default function App() {
                     onBlank={() => void onBlank()}
                     onImportFile={(f) => void onImportFile(f)}
                     onExport={() => void onExport()}
+                    onExportToDrive={() => void onExportToDrive()}
+                    onImportFromDrive={(id, name) => void onImportFromDrive(id, name)}
                     onExportExampleExcel={() => void onExportExampleExcel()}
                     onExportTemplate={() => void onExportTemplate()}
                     onPolarsteps={() => {
@@ -1752,6 +1799,135 @@ export default function App() {
   )
 }
 
+function DriveSyncPanel({
+  active,
+  onExportToDrive,
+  onImportFromDrive,
+}: {
+  active: TripRecord | null
+  onExportToDrive: () => void
+  onImportFromDrive: (fileId: string, fileName: string) => void
+}) {
+  const configured = isGoogleDriveConfigured()
+  const [connected, setConnected] = useState(() => isGoogleDriveConnected())
+  const [busy, setBusy] = useState(false)
+  const [files, setFiles] = useState<DriveFileInfo[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function onConnect() {
+    setBusy(true)
+    setError(null)
+    try {
+      await connectGoogleDrive()
+      setConnected(true)
+      const list = await listTripWorkbooksOnDrive()
+      setFiles(list)
+    } catch (err) {
+      setConnected(false)
+      setError(err instanceof Error ? err.message : 'Google sign-in failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function onDisconnect() {
+    disconnectGoogleDrive()
+    setConnected(false)
+    setFiles(null)
+    setError(null)
+  }
+
+  async function onRefreshList() {
+    setBusy(true)
+    setError(null)
+    try {
+      const list = await listTripWorkbooksOnDrive()
+      setFiles(list)
+      setConnected(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not list Drive files')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3">
+      <div className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
+        Google Drive
+      </div>
+        <p className="mt-1 text-xs text-stone-600">
+        Saves Excel into <code className="rounded bg-white px-1">{DRIVE_FOLDER_NAME}/</code> as{' '}
+        <code className="rounded bg-white px-1">trip-name.xlsx</code> (adds{' '}
+        <code className="rounded bg-white px-1">-2</code> if the name already exists). Sign in with
+        Google once, then save or load from that folder.
+      </p>
+      {!configured ? (
+        <p className="mt-2 text-xs text-amber-800">
+          Set <code className="rounded bg-white px-1">VITE_GOOGLE_OAUTH_CLIENT_ID</code> (Google Cloud
+          OAuth web client) and add this site to Authorized JavaScript origins.
+        </p>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {!connected ? (
+            <button
+              type="button"
+              className={btnPrimary}
+              disabled={busy}
+              onClick={() => void onConnect()}
+            >
+              {busy ? 'Connecting…' : 'Connect Google'}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className={btnPrimary}
+                disabled={busy || !active}
+                onClick={onExportToDrive}
+              >
+                Save trip to Drive
+              </button>
+              <button
+                type="button"
+                className={btn}
+                disabled={busy}
+                onClick={() => void onRefreshList()}
+              >
+                Refresh Drive list
+              </button>
+              <button type="button" className={btn} disabled={busy} onClick={onDisconnect}>
+                Disconnect
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {error ? <p className="mt-2 text-xs text-rose-700">{error}</p> : null}
+      {connected && files ? (
+        <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-xl border border-emerald-100 bg-white/80 p-2">
+          {!files.length ? (
+            <p className="text-xs text-stone-400">No workbooks in {DRIVE_FOLDER_NAME}/ yet.</p>
+          ) : (
+            files.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-stone-700 hover:bg-emerald-50"
+                disabled={busy}
+                onClick={() => onImportFromDrive(f.id, f.name)}
+              >
+                <span className="min-w-0 truncate font-medium">{f.name}</span>
+                <span className="shrink-0 text-[10px] text-emerald-700">Load</span>
+              </button>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function DataPanel({
   active,
   mapStack,
@@ -1766,6 +1942,8 @@ function DataPanel({
   onBlank,
   onImportFile,
   onExport,
+  onExportToDrive,
+  onImportFromDrive,
   onExportExampleExcel,
   onExportTemplate,
   onPolarsteps,
@@ -1792,6 +1970,8 @@ function DataPanel({
   onBlank: () => void
   onImportFile: (f: File) => void
   onExport: () => void
+  onExportToDrive: () => void
+  onImportFromDrive: (fileId: string, fileName: string) => void
   onExportExampleExcel: () => void
   onExportTemplate: () => void
   onPolarsteps: () => void
@@ -1856,6 +2036,12 @@ function DataPanel({
           Download blank template
         </button>
       </ActionRow>
+
+      <DriveSyncPanel
+        active={active}
+        onExportToDrive={onExportToDrive}
+        onImportFromDrive={onImportFromDrive}
+      />
 
       <div className="rounded-2xl border border-orange-200 bg-orange-50/80 p-3">
         <div className="text-xs font-semibold uppercase tracking-wide text-orange-700">

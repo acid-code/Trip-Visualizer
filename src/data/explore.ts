@@ -12,7 +12,13 @@ import {
   GOOGLE_NEARBY_MAX,
 } from './placesGoogle'
 
-export type ExploreCategory = 'sights' | 'food' | 'drink' | 'nature' | 'other'
+export type ExploreCategory =
+  | 'sights'
+  | 'food'
+  | 'drink'
+  | 'hotel'
+  | 'nature'
+  | 'other'
 
 export type ExplorePlace = {
   id: string
@@ -67,6 +73,12 @@ const CATEGORY_QUERIES: Record<ExploreCategory, string[]> = {
     'nwr["amenity"="pub"]',
     'nwr["amenity"="biergarten"]',
   ],
+  hotel: [
+    'nwr["tourism"="hotel"]',
+    'nwr["tourism"="guest_house"]',
+    'nwr["tourism"="hostel"]',
+    'nwr["tourism"="motel"]',
+  ],
   nature: [
     'nwr["leisure"="park"]',
     'nwr["leisure"="nature_reserve"]',
@@ -74,7 +86,6 @@ const CATEGORY_QUERIES: Record<ExploreCategory, string[]> = {
     'nwr["natural"="beach"]',
   ],
   other: [
-    'nwr["tourism"="hotel"]',
     'nwr["shop"="bakery"]',
     'nwr["amenity"="marketplace"]',
     'nwr["leisure"="playground"]',
@@ -111,8 +122,8 @@ function cacheKey(
   radiusM: number,
   source: 'google' | 'osm',
 ): string {
-  // v5: Google Nearby (one Pro call) or OSM; bump when pipeline changes
-  return `v5:${source}:${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}`
+  // v6: hotels as first-class category; bump when pipeline / category rules change
+  return `v6:${source}:${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}`
 }
 
 async function getCached(key: string): Promise<ExplorePlace[] | null> {
@@ -152,6 +163,7 @@ function categoryForTags(tags: Record<string, string>): ExploreCategory {
   const amenity = tags.amenity || ''
   const leisure = tags.leisure || ''
   const natural = tags.natural || ''
+  if (['hotel', 'guest_house', 'hostel', 'motel'].includes(tourism)) return 'hotel'
   if (
     ['attraction', 'museum', 'viewpoint', 'artwork', 'gallery', 'zoo', 'theme_park'].includes(
       tourism,
@@ -631,7 +643,9 @@ export function exploreCategoryLabel(cat: ExploreCategory): string {
     case 'food':
       return 'Food'
     case 'drink':
-      return 'Drink'
+      return 'Drinks'
+    case 'hotel':
+      return 'Hotels'
     case 'nature':
       return 'Nature'
     default:
@@ -644,6 +658,8 @@ export function explorePlaceToItemType(place: ExplorePlace): ItemType {
     case 'food':
     case 'drink':
       return 'restaurant'
+    case 'hotel':
+      return 'hotel'
     case 'nature':
       return 'activity'
     case 'sights':
