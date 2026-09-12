@@ -6,92 +6,12 @@ import {
   type ItemType,
   type TripItem,
   type TripMeta,
-  type TripRecord,
 } from '../domain/types'
-import { createId, nowIso, sortItems } from './db'
+import { createId, sortItems } from './db'
 import { normalizeCurrency } from './fx'
 import { MAX_SCHEDULE_ROWS } from './security'
 import { parseLat, parseLon, sanitizeEndDate } from './validate'
 import { sanitizeTripItem, sanitizeTripMeta } from '../domain/types'
-
-/** Human Steps sheet columns (export order). */
-const STEPS_COLS = [
-  'Date',
-  'Start',
-  'End',
-  'Type',
-  'Title',
-  'Place',
-  'City',
-  'From',
-  'To',
-  'Confirm',
-  'Cost',
-  'Currency',
-  'Status',
-  'Notes',
-  'URL',
-  'Tags',
-  'Lat',
-  'Lon',
-  'Lat to',
-  'Lon to',
-] as const
-
-const STEPS_HINTS = [
-  'Required · YYYY-MM-DD',
-  'Optional · HH:MM (24h)',
-  'Optional · HH:MM (24h)',
-  'Required · flight, train, bus, ferry, drive, sight, restaurant, activity, city, note, other',
-  'Required · free text',
-  'Optional · free text',
-  'Optional · free text',
-  'Optional · place or IATA',
-  'Optional · place or IATA',
-  'Optional · booking ref',
-  'Optional · number ≥ 0',
-  'Optional · 3-letter code (EUR)',
-  'Optional · planned / booked / done / cancelled',
-  'Optional · free text',
-  'Optional · https://…',
-  'Optional · comma-separated',
-  'Optional · decimal degrees',
-  'Optional · decimal degrees',
-  'Optional · decimal degrees',
-  'Optional · decimal degrees',
-] as const
-
-const HOTELS_COLS = [
-  'Check-in',
-  'Check-out',
-  'Hotel',
-  'Place',
-  'City',
-  'Confirm',
-  'Cost',
-  'Currency',
-  'Status',
-  'Notes',
-  'URL',
-  'Lat',
-  'Lon',
-] as const
-
-const HOTELS_HINTS = [
-  'Required · YYYY-MM-DD',
-  'Preferred · YYYY-MM-DD (defaults to check-in)',
-  'Required · free text',
-  'Optional · free text',
-  'Optional · free text',
-  'Optional · booking ref',
-  'Optional · number ≥ 0',
-  'Optional · 3-letter code (EUR)',
-  'Optional · planned / booked / done / cancelled',
-  'Optional · free text',
-  'Optional · https://…',
-  'Optional · decimal degrees',
-  'Optional · decimal degrees',
-] as const
 
 const HEADER_ALIASES: Record<string, string> = {
   id: 'id',
@@ -323,10 +243,6 @@ function findSheet(wb: XLSX.WorkBook, name: string): XLSX.WorkSheet | undefined 
   return key ? wb.Sheets[key] : undefined
 }
 
-function isPlaceholderItem(item: TripItem): boolean {
-  return item.tags?.includes('placeholder') === true
-}
-
 function isHintRow(row: Record<string, unknown>): boolean {
   const blob = Object.values(row)
     .map((v) => String(v ?? '').toLowerCase())
@@ -411,8 +327,36 @@ function rowToItem(
   }
 }
 
+/** Find the header row (Date/Type/Title or Check-in/Hotel) so title/legend rows above tables still import. */
+function findHeaderRowIndex(aoa: unknown[][]): number {
+  for (let i = 0; i < Math.min(aoa.length, 30); i++) {
+    const row = aoa[i] ?? []
+    const mapped = new Set(
+      row
+        .map((c) => HEADER_ALIASES[normalizeHeader(c)])
+        .filter((k): k is string => Boolean(k)),
+    )
+    const hasDate = mapped.has('date')
+    const hasTitle = mapped.has('title')
+    const hasType = mapped.has('type')
+    // Steps: Date + Type + Title · Hotels: Check-in (+ Hotel as title) · legacy Schedule
+    if (hasDate && hasTitle && (hasType || mapped.has('end_date') || mapped.size >= 5)) {
+      return i
+    }
+  }
+  return 0
+}
+
 function parseSheetRows(sheet: XLSX.WorkSheet): Record<string, unknown>[] {
+  const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
+    defval: '',
+    raw: true,
+  })
+  if (!aoa.length) return []
+  const headerIdx = findHeaderRowIndex(aoa)
   return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+    range: headerIdx,
     defval: '',
     raw: true,
   })
@@ -538,275 +482,9 @@ export function parseTripWorkbook(data: ArrayBuffer): {
   }
 }
 
-function tagsJoined(item: TripItem): string {
-  return item.tags.filter((t) => t !== 'placeholder').join(', ')
-}
-
-function buildStepsAoA(items: TripItem[]): (string | number | null)[][] {
-  const rows: (string | number | null)[][] = [
-    [...STEPS_COLS],
-    [...STEPS_HINTS],
-  ]
-  for (const item of items) {
-    if (item.type === 'hotel' || isPlaceholderItem(item)) continue
-    rows.push([
-      item.date,
-      item.start || '',
-      item.end || '',
-      item.type,
-      item.title,
-      item.place || '',
-      item.city || '',
-      item.from || '',
-      item.to || '',
-      item.confirm || '',
-      item.cost,
-      item.currency || '',
-      item.status,
-      item.notes || '',
-      item.url || '',
-      tagsJoined(item),
-      item.lat,
-      item.lon,
-      item.latTo,
-      item.lonTo,
-    ])
-  }
-  return rows
-}
-
-function buildHotelsAoA(items: TripItem[]): (string | number | null)[][] {
-  const rows: (string | number | null)[][] = [
-    [...HOTELS_COLS],
-    [...HOTELS_HINTS],
-  ]
-  for (const item of items) {
-    if (item.type !== 'hotel' || isPlaceholderItem(item)) continue
-    rows.push([
-      item.date,
-      item.endDate || item.date,
-      item.title,
-      item.place || '',
-      item.city || '',
-      item.confirm || '',
-      item.cost,
-      item.currency || '',
-      item.status,
-      item.notes || '',
-      item.url || '',
-      item.lat,
-      item.lon,
-    ])
-  }
-  return rows
-}
-
-function buildCashAoA(items: TripItem[]): (string | number | null)[][] {
-  const byType = new Map<string, number>()
-  const byCur = new Map<string, number>()
-  for (const item of items) {
-    if (isPlaceholderItem(item)) continue
-    if (item.status === 'cancelled') continue
-    if (item.cost == null || !Number.isFinite(item.cost)) continue
-    byType.set(item.type, (byType.get(item.type) ?? 0) + item.cost)
-    const cur = normalizeCurrency(item.currency || 'EUR')
-    byCur.set(cur, (byCur.get(cur) ?? 0) + item.cost)
-  }
-
-  const aoa: (string | number | null)[][] = [
-    ['Cash snapshot (export only — ignored when importing)'],
-    ['Amounts as entered (no FX conversion)'],
-    [],
-    ['By type', 'Total'],
-  ]
-  for (const [type, total] of [...byType.entries()].sort((a, b) => b[1] - a[1])) {
-    aoa.push([type, Math.round(total * 100) / 100])
-  }
-  if (!byType.size) aoa.push(['(none)', 0])
-
-  aoa.push([])
-  aoa.push(['By currency', 'Total'])
-  for (const [cur, total] of [...byCur.entries()].sort((a, b) => b[1] - a[1])) {
-    aoa.push([cur, Math.round(total * 100) / 100])
-  }
-  if (!byCur.size) aoa.push(['(none)', 0])
-
-  return aoa
-}
-
-export function buildTripWorkbook(trip: TripRecord): XLSX.WorkBook {
-  const wb = XLSX.utils.book_new()
-  const items = sortItems(trip.items)
-
-  const tripAoA: (string | number)[][] = [
-    ['key', 'value'],
-    ['name', trip.meta.name],
-    ['start_date', trip.meta.startDate],
-    ['end_date', trip.meta.endDate],
-    ['home_currency', trip.meta.homeCurrency],
-    ['timezone_note', trip.meta.timezoneNote],
-    ['travelers', trip.meta.travelers],
-    ['notes', trip.meta.notes],
-    [],
-    ['How to use'],
-    [
-      'Edit the Steps sheet for day plans (sights, food, drives, flights). Use Hotels for stays. Cash is a read-only spend snapshot.',
-    ],
-    [
-      'Row 2 under each table shows Required/Optional and the preferred format. Import also accepts other common date/time styles.',
-    ],
-    ['Preferred date: YYYY-MM-DD · Preferred time: HH:MM (24h).'],
-  ]
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(tripAoA), 'Trip')
-
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildStepsAoA(items)), 'Steps')
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildHotelsAoA(items)), 'Hotels')
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildCashAoA(items)), 'Cash')
-
-  return wb
-}
-
-export function downloadWorkbook(wb: XLSX.WorkBook, filename: string) {
-  XLSX.writeFile(wb, filename)
-}
-
-/** Binary for Drive upload / programmatic import (same bytes as a downloaded .xlsx). */
-export function workbookToArrayBuffer(wb: XLSX.WorkBook): ArrayBuffer {
-  const written = XLSX.write(wb, {
-    bookType: 'xlsx',
-    type: 'array',
-  }) as number[] | ArrayBuffer | Uint8Array
-
-  let copy: Uint8Array
-  if (written instanceof ArrayBuffer) {
-    copy = new Uint8Array(written)
-  } else if (ArrayBuffer.isView(written)) {
-    const view = written as ArrayBufferView
-    copy = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
-  } else {
-    copy = new Uint8Array(written as number[])
-  }
-
-  const sliced = copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength)
-  return sliced instanceof ArrayBuffer ? sliced : new Uint8Array(copy).buffer
-}
-
-export function tripToBlankTemplate(): XLSX.WorkBook {
-  const blank: TripRecord = {
-    id: 'template',
-    isExample: false,
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-    meta: {
-      name: 'My trip',
-      startDate: '2026-10-01',
-      endDate: '2026-10-10',
-      homeCurrency: 'EUR',
-      timezoneNote: 'All times are local',
-      travelers: '',
-      notes: 'Fill Steps + Hotels. Cash is filled automatically on export.',
-    },
-    items: [
-      {
-        id: 'F01',
-        type: 'flight',
-        title: 'Example flight',
-        place: '',
-        city: '',
-        date: '2026-10-01',
-        endDate: '',
-        start: '10:00',
-        end: '13:00',
-        from: 'TLV',
-        to: 'CDG',
-        confirm: '',
-        cost: null,
-        currency: 'EUR',
-        status: 'planned',
-        notes: 'Replace with your flight',
-        url: '',
-        tags: [],
-        lat: null,
-        lon: null,
-        latTo: null,
-        lonTo: null,
-        wikidata: '',
-        osmId: '',
-        geocodeQuery: '',
-        updatedAt: '',
-        enrichmentSummary: '',
-        enrichmentImage: '',
-        enrichmentSource: '',
-        routeCoords: [],
-        source: 'excel',
-      },
-      {
-        id: 'H01',
-        type: 'hotel',
-        title: 'Example hotel',
-        place: 'Hotel name',
-        city: 'Paris',
-        date: '2026-10-01',
-        endDate: '2026-10-03',
-        start: '',
-        end: '',
-        from: '',
-        to: '',
-        confirm: '',
-        cost: null,
-        currency: 'EUR',
-        status: 'planned',
-        notes: '2 nights example',
-        url: '',
-        tags: [],
-        lat: null,
-        lon: null,
-        latTo: null,
-        lonTo: null,
-        wikidata: '',
-        osmId: '',
-        geocodeQuery: '',
-        updatedAt: '',
-        enrichmentSummary: '',
-        enrichmentImage: '',
-        enrichmentSource: '',
-        routeCoords: [],
-        source: 'excel',
-      },
-      {
-        id: 'S01',
-        type: 'sight',
-        title: 'Example sight',
-        place: '',
-        city: 'Paris',
-        date: '2026-10-02',
-        endDate: '',
-        start: '11:00',
-        end: '',
-        from: '',
-        to: '',
-        confirm: '',
-        cost: null,
-        currency: 'EUR',
-        status: 'planned',
-        notes: '',
-        url: '',
-        tags: [],
-        lat: null,
-        lon: null,
-        latTo: null,
-        lonTo: null,
-        wikidata: '',
-        osmId: '',
-        geocodeQuery: '',
-        updatedAt: '',
-        enrichmentSummary: '',
-        enrichmentImage: '',
-        enrichmentSource: '',
-        routeCoords: [],
-        source: 'excel',
-      },
-    ],
-  }
-  return buildTripWorkbook(blank)
-}
+export {
+  buildTripWorkbook,
+  downloadWorkbook,
+  tripToBlankTemplate,
+  workbookToArrayBuffer,
+} from './excelExport'

@@ -33,6 +33,7 @@ import {
   syncTripEntities,
   type ExplorePinDraw,
   type MapStack,
+  DEFAULT_MAP_STACK,
   type TempPinDraw,
 } from '../globe/viewer'
 
@@ -164,6 +165,11 @@ export function GlobeView({
   const phoneFramingRef = useRef(phoneFraming)
   phoneFramingRef.current = phoneFraming
 
+  const mapStackRef = useRef(mapStack)
+  mapStackRef.current = mapStack
+  const googleKeyRef = useRef(googleKey)
+  googleKeyRef.current = googleKey
+
   itemsRef.current = items
   connectorsRef.current = connectors
   metaRef.current = meta
@@ -273,6 +279,7 @@ export function GlobeView({
         return
       }
       viewerRef.current = viewer
+      void applyMapStack(viewer, mapStackRef.current || DEFAULT_MAP_STACK, googleKeyRef.current)
 
       ro = new ResizeObserver(() => {
         try {
@@ -616,15 +623,10 @@ export function GlobeView({
     applySelectionHighlight(viewer, selectedId ?? null, focusedEntityIdRef.current)
   }, [selectedId])
 
-  const mapStackApplied = useRef(false)
   useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return
-    if (!mapStackApplied.current) {
-      mapStackApplied.current = true
-      return
-    }
-    void applyMapStack(viewer, mapStack, googleKey)
+    void applyMapStack(viewer, mapStack || DEFAULT_MAP_STACK, googleKey)
   }, [mapStack, googleKey])
 
   useEffect(() => {

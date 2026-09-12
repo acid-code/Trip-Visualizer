@@ -39,6 +39,9 @@ import { logClientError, sanitizeEntityId } from '../data/security'
 
 export type MapStack = 'esri' | 'osm' | 'google3d'
 
+/** Default basemap for new sessions / unset preference. */
+export const DEFAULT_MAP_STACK: MapStack = 'esri'
+
 let googleTileset: Cesium3DTileset | null = null
 
 function osmLayer(): ImageryLayer {

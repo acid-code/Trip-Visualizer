@@ -25,8 +25,8 @@ npm run gen:excel  # regenerate sample France South Loop .xlsx
 - **Day bases** — each day starts with a hotel/arrival slot (empty placeholders when needed)
 - **Auto geocode** — paste an address or Maps link on Add/Import; lat/lon filled automatically
 - **Spend** — per-step currency (EUR / USD / ILS…); Stats convert into your home currency (ECB rates)
-- **Excel** — import / export `Trip` + `Schedule` + `Legend` sheets
-- **Polarsteps bridge** — export a compatible JSON (no public Polarsteps import API)
+- **Excel** — import / export Trip + Steps + Hotels + Cash sheets
+- **Google Drive** — save / load trip workbooks from a Drive folder
 - **PWA** — installable mobile-friendly shell
 - **Example trip** — France South Loop → Napoli (Paris → TGV Marseille → Provence loop → Naples)
 

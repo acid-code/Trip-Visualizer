@@ -37,7 +37,7 @@ type Props = {
   onInsertBetween: (afterId: string | null, beforeId: string | null) => void
   onAddDay?: () => void
   onDeleteStep?: (id: string) => void
-  /** Desktop vertical rail vs phone Polarsteps-style horizontal strip. */
+  /** Desktop vertical rail vs phone horizontal strip. */
   layout?: 'vertical' | 'horizontal'
   /** When Detail is open on desktop, pin the selected card to the top of the list. */
   detailOpen?: boolean

@@ -4,7 +4,7 @@ import { ITEM_TYPES } from './domain/types'
 import {
   createBlankTrip,
   createId,
-  duplicateTrip,
+  deleteTrip,
   ensureExampleTrip,
   getSetting,
   getTrip,
@@ -18,7 +18,6 @@ import {
   buildTripWorkbook,
   downloadWorkbook,
   parseTripWorkbook,
-  tripToBlankTemplate,
   workbookToArrayBuffer,
 } from './data/excel'
 import {
@@ -84,10 +83,9 @@ import {
   unseenFeatureTips,
   type FeatureTip,
 } from './data/featureGuide'
-import type { MapStack } from './globe/viewer'
+import { DEFAULT_MAP_STACK, type MapStack } from './globe/viewer'
 import { firstOpenableStep } from './globe/viewer'
-import { EXAMPLE_TRIP_ID } from './data/examples/france-south-loop'
-import { downloadPolarstepsJson } from './data/polarsteps'
+import { EXAMPLE_TRIP_ID, exampleItems, exampleMeta } from './data/examples/france-south-loop'
 import { ensureDayStartBases, deleteStepAndPrune, isPlaceholderBase, itemTouchesDay } from './data/dayBases'
 import { normalizeCurrency } from './data/fx'
 import {
@@ -130,7 +128,7 @@ export default function App() {
   const [detailExpanded, setDetailExpanded] = useState(false)
   const [dayFilter, setDayFilter] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
-  const [mapStack, setMapStack] = useState<MapStack>('esri')
+  const [mapStack, setMapStack] = useState<MapStack>(DEFAULT_MAP_STACK)
   const [googleKey, setGoogleKey] = useState('')
   const [ionToken, setIonToken] = useState('')
   /** Data-panel override only — deploy key stays on the server. */
@@ -197,6 +195,8 @@ export default function App() {
   const [guideTips, setGuideTips] = useState<FeatureTip[]>([])
   const [seenTipIds, setSeenTipIds] = useState<Set<string>>(() => new Set())
   const guideAutoShownRef = useRef(false)
+  /** When true, keep the example trip alongside personal trips (user opened it explicitly). */
+  const keepExampleRef = useRef(false)
   const routesForTripRef = useRef<string | null>(null)
   const tempPinGenRef = useRef(0)
   const exploreAbortRef = useRef<AbortController | null>(null)
@@ -212,19 +212,31 @@ export default function App() {
   )
 
   const refresh = useCallback(async () => {
-    await ensureExampleTrip()
-    const all = await listTrips()
+    let all = await listTrips()
+    const hasPersonal = all.some((t) => !t.isExample && t.id !== EXAMPLE_TRIP_ID)
+    if (hasPersonal && !keepExampleRef.current) {
+      const hadExample = all.some((t) => t.isExample || t.id === EXAMPLE_TRIP_ID)
+      if (hadExample) {
+        await deleteTrip(EXAMPLE_TRIP_ID)
+        all = await listTrips()
+      }
+    }
     setTrips(all)
-    // Prefer the latest personal / WIP trip; fall back to the example
+    // Prefer the latest personal / WIP trip; fall back to the example only if nothing else
     setActiveId(
       (prev) =>
         prev ??
-        all.find((t) => !t.isExample)?.id ??
-        all.find((t) => t.isExample)?.id ??
+        all.find((t) => !t.isExample && t.id !== EXAMPLE_TRIP_ID)?.id ??
+        all.find((t) => t.isExample || t.id === EXAMPLE_TRIP_ID)?.id ??
         all[0]?.id ??
         null,
     )
   }, [])
+
+  async function retireExampleTrip() {
+    keepExampleRef.current = false
+    await deleteTrip(EXAMPLE_TRIP_ID)
+  }
 
   useEffect(() => {
     void (async () => {
@@ -235,7 +247,7 @@ export default function App() {
       setMapStack(
         savedStack === 'osm' || savedStack === 'esri' || savedStack === 'google3d'
           ? savedStack
-          : 'esri',
+          : DEFAULT_MAP_STACK,
       )
       const walkPref = await getSetting('walkApp')
       setWalkApp(isWalkAppPref(walkPref) ? walkPref : 'maps')
@@ -366,6 +378,7 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     })
     await saveTrip(trip)
+    if (!existing) await retireExampleTrip()
     await refresh()
     setActiveId(trip.id)
     setStatus(
@@ -416,7 +429,7 @@ export default function App() {
     if (!active) return
     try {
       setStatus('Signing in to Google Drive…')
-      const bytes = workbookToArrayBuffer(buildTripWorkbook(active))
+      const bytes = await workbookToArrayBuffer(buildTripWorkbook(active))
       const { fileName } = await uploadTripWorkbookToDrive(
         active.meta.name,
         bytes,
@@ -472,37 +485,36 @@ export default function App() {
 
   async function onExport() {
     if (!active) return
-    downloadWorkbook(buildTripWorkbook(active), `${slug(active.meta.name)}.xlsx`)
+    await downloadWorkbook(buildTripWorkbook(active), `${slug(active.meta.name)}.xlsx`)
     setStatus('Excel downloaded')
   }
 
-  async function onExportTemplate() {
-    downloadWorkbook(tripToBlankTemplate(), 'trip-template.xlsx')
-  }
-
   async function onExportExampleExcel() {
-    const example = await getTrip(EXAMPLE_TRIP_ID)
-    if (!example) return
-    downloadWorkbook(buildTripWorkbook(example), 'france-south-loop.xlsx')
+    const example =
+      (await getTrip(EXAMPLE_TRIP_ID)) ??
+      ({
+        id: EXAMPLE_TRIP_ID,
+        meta: exampleMeta,
+        items: exampleItems,
+        isExample: true,
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      } satisfies TripRecord)
+    await downloadWorkbook(buildTripWorkbook(example), 'france-south-loop.xlsx')
   }
 
   async function onOpenExample() {
+    keepExampleRef.current = true
     const example = await ensureExampleTrip()
+    await refresh()
     setActiveId(example.id)
     setOverviewToken((n) => n + 1)
-    setStatus('Opened example trip')
-  }
-
-  async function onDuplicate() {
-    if (!active) return
-    const copy = await duplicateTrip(active)
-    await refresh()
-    setActiveId(copy.id)
-    setStatus('Duplicated as editable trip')
+    setStatus('Opened example')
   }
 
   async function onBlank() {
     const trip = await createBlankTrip()
+    await retireExampleTrip()
     await refresh()
     setActiveId(trip.id)
   }
@@ -1410,22 +1422,6 @@ export default function App() {
         </div>
       </header>
 
-      {active?.isExample ? (
-        <div
-          className={`pointer-events-auto absolute right-3 z-20 flex max-w-sm items-center justify-between gap-2 rounded-2xl border border-orange-300/40 bg-orange-500/90 px-3 py-2 text-xs text-white shadow-lg backdrop-blur ${
-            isPhone ? 'top-[4.75rem]' : 'top-[5.5rem]'
-          }`}
-        >
-          <span>Example trip — duplicate to keep a personal copy.</span>
-          <button
-            className="shrink-0 rounded-full bg-white px-3 py-1 font-semibold text-orange-700"
-            onClick={() => void onDuplicate()}
-          >
-            Duplicate
-          </button>
-        </div>
-      ) : null}
-
       {/* Desktop: left sidebar + side book tongues */}
       {!isPhone ? (
       <aside
@@ -1514,19 +1510,12 @@ export default function App() {
                     enrichProgress={enrichProgress}
                     routesStatus={routesStatus}
                     onOpenExample={() => void onOpenExample()}
-                    onDuplicate={() => void onDuplicate()}
                     onBlank={() => void onBlank()}
                     onImportFile={(f) => void onImportFile(f)}
                     onExport={() => void onExport()}
                     onExportToDrive={() => void onExportToDrive()}
                     onImportFromDrive={(f) => void onImportFromDrive(f)}
                     onExportExampleExcel={() => void onExportExampleExcel()}
-                    onExportTemplate={() => void onExportTemplate()}
-                    onPolarsteps={() => {
-                      if (!active) return
-                      downloadPolarstepsJson(active)
-                      setStatus('Polarsteps-compatible JSON downloaded')
-                    }}
                     onEnrich={() => void onEnrich()}
                     onRebuildRoutes={() => {
                       if (!active) return
@@ -1699,19 +1688,12 @@ export default function App() {
                     enrichProgress={enrichProgress}
                     routesStatus={routesStatus}
                     onOpenExample={() => void onOpenExample()}
-                    onDuplicate={() => void onDuplicate()}
                     onBlank={() => void onBlank()}
                     onImportFile={(f) => void onImportFile(f)}
                     onExport={() => void onExport()}
                     onExportToDrive={() => void onExportToDrive()}
                     onImportFromDrive={(f) => void onImportFromDrive(f)}
                     onExportExampleExcel={() => void onExportExampleExcel()}
-                    onExportTemplate={() => void onExportTemplate()}
-                    onPolarsteps={() => {
-                      if (!active) return
-                      downloadPolarstepsJson(active)
-                      setStatus('Polarsteps-compatible JSON downloaded')
-                    }}
                     onEnrich={() => void onEnrich()}
                     onRebuildRoutes={() => {
                       if (!active) return
@@ -2088,15 +2070,12 @@ function DataPanel({
   enrichProgress,
   routesStatus,
   onOpenExample,
-  onDuplicate,
   onBlank,
   onImportFile,
   onExport,
   onExportToDrive,
   onImportFromDrive,
   onExportExampleExcel,
-  onExportTemplate,
-  onPolarsteps,
   onEnrich,
   onRebuildRoutes,
   onAddDay,
@@ -2117,15 +2096,12 @@ function DataPanel({
   enrichProgress: string | null
   routesStatus: string | null
   onOpenExample: () => void
-  onDuplicate: () => void
   onBlank: () => void
   onImportFile: (f: File) => void
   onExport: () => void
   onExportToDrive: () => void
   onImportFromDrive: (file: DriveFileInfo) => void
   onExportExampleExcel: () => void
-  onExportTemplate: () => void
-  onPolarsteps: () => void
   onEnrich: () => void
   onRebuildRoutes: () => void
   onAddDay: () => void
@@ -2153,13 +2129,10 @@ function DataPanel({
       </div>
 
       <ActionRow>
-        <button className={btnPrimary} onClick={onOpenExample}>
-          Open example trip
+        <button type="button" className={btnPrimary} onClick={onOpenExample}>
+          Open example
         </button>
-        <button className={btn} onClick={onDuplicate}>
-          Duplicate as my trip
-        </button>
-        <button className={btn} onClick={onBlank}>
+        <button type="button" className={btn} onClick={onBlank}>
           New blank trip
         </button>
       </ActionRow>
@@ -2178,14 +2151,11 @@ function DataPanel({
             }}
           />
         </label>
-        <button className={btn} onClick={onExport}>
+        <button type="button" className={btn} onClick={onExport} disabled={!active}>
           Export Excel
         </button>
-        <button className={btn} onClick={onExportExampleExcel}>
+        <button type="button" className={btn} onClick={onExportExampleExcel}>
           Download example .xlsx
-        </button>
-        <button className={btn} onClick={onExportTemplate}>
-          Download blank template
         </button>
       </ActionRow>
 
@@ -2195,20 +2165,6 @@ function DataPanel({
         onImportFromDrive={onImportFromDrive}
         onStatus={onStatus}
       />
-
-      <div className="rounded-2xl border border-orange-200 bg-orange-50/80 p-3">
-        <div className="text-xs font-semibold uppercase tracking-wide text-orange-700">
-          Polarsteps bridge
-        </div>
-        <p className="mt-1 text-xs text-stone-600">
-          Polarsteps has no public import API yet. Export a{' '}
-          <code className="rounded bg-white px-1">trip.json</code>-compatible file now so you can
-          move steps later (or feed a future sync).
-        </p>
-        <button className={`${btnPrimary} mt-2`} disabled={!active} onClick={onPolarsteps}>
-          Export Polarsteps JSON
-        </button>
-      </div>
 
       <button className={btnPrimary} onClick={onEnrich} disabled={!!enrichProgress}>
         Enrich pinpoints (Nominatim / Wikidata / OSRM)
@@ -2409,9 +2365,9 @@ function DataPanel({
             }
           />
           <p className="mt-2 text-xs text-stone-500">
-            Types: {ITEM_TYPES.join(', ')}. Excel uses Trip + Steps + Hotels + Cash (Cash is
-            export-only). Older Schedule workbooks still import.
-            sheets.
+            Types: {ITEM_TYPES.join(', ')}. Excel uses Trip + Steps + Hotels + Cash — color-coded
+            tables, cost heat, and Cash spend charts (Cash is export-only). Older Schedule workbooks
+            still import.
           </p>
         </div>
       ) : null}
@@ -2426,9 +2382,9 @@ function ActionRow({ children }: { children: React.ReactNode }) {
 }
 
 const btn =
-  'cursor-pointer rounded-full border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700 shadow-sm'
+  'cursor-pointer rounded-full border border-stone-200 bg-white px-3 py-2 text-xs font-medium leading-none text-stone-700 shadow-sm inline-flex items-center'
 const btnPrimary =
-  'rounded-full bg-[var(--coral)] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50'
+  'cursor-pointer rounded-full bg-[var(--coral)] px-3 py-2 text-xs font-semibold leading-none text-white disabled:opacity-50 inline-flex items-center'
 
 function ClientLogsBlob() {
   const logs = useSyncExternalStore(
