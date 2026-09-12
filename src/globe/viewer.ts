@@ -173,16 +173,17 @@ function configureTouchCameraControls(viewer: Viewer) {
 }
 
 /**
- * Merge overlapping step pins when zoomed out so labels don't stack on top of each other.
- * Clustering lives on the default data source (viewer.entities is only the collection).
+ * Merge overlapping step pins when zoomed out.
+ * Labels are NOT clustered (point+label on one pin used to inflate counts and “stick”).
+ * Clustering turns off when the camera is close so coincident pins can separate.
  */
 function configureEntityClustering(viewer: Viewer) {
   const cluster: EntityCluster = viewer.dataSourceDisplay.defaultDataSource.clustering
   cluster.enabled = true
-  cluster.pixelRange = 56
+  cluster.pixelRange = 28
   cluster.minimumClusterSize = 2
   cluster.clusterBillboards = true
-  cluster.clusterLabels = true
+  cluster.clusterLabels = false
   cluster.clusterPoints = true
 
   const pinBuilder = new PinBuilder()
@@ -191,15 +192,21 @@ function configureEntityClustering(viewer: Viewer) {
     .toDataURL()
 
   const onCluster: EntityCluster.newClusterCallback = (clusteredEntities, clusterObj) => {
-    // Count real step pins (A/B endpoints), not route mid-labels
     const pinIds = new Set<string>()
     for (const e of clusteredEntities) {
       const id = String(e.id)
       if (!id.startsWith('trip:')) continue
       if (id.endsWith(':route') || id.endsWith(':arc') || id.endsWith(':seq')) continue
-      pinIds.add(id)
+      // Endpoint suffixes (:a / :b) count as the same stop when clustered
+      pinIds.add(id.replace(/:(a|b)$/i, ''))
     }
-    const n = pinIds.size || clusteredEntities.length
+    const n = pinIds.size
+    // Point+label ghosts or mid-labels alone — don't paint a fake cluster badge
+    if (n < 2) {
+      clusterObj.billboard.show = false
+      clusterObj.label.show = false
+      return
+    }
     clusterObj.label.show = true
     clusterObj.label.text = String(n)
     clusterObj.label.font = '700 14px "DM Sans", Segoe UI, sans-serif'
@@ -218,6 +225,21 @@ function configureEntityClustering(viewer: Viewer) {
     clusterObj.billboard.id = clusterObj.label.id
   }
   cluster.clusterEvent.addEventListener(onCluster)
+
+  // Only cluster when looking at a wide region — turn off early while zooming in.
+  const CLUSTER_MIN_HEIGHT_M = 120_000
+  const syncClusterByHeight = () => {
+    try {
+      const h = viewer.camera.positionCartographic.height
+      const want = h >= CLUSTER_MIN_HEIGHT_M
+      if (cluster.enabled !== want) cluster.enabled = want
+    } catch {
+      /* ignore */
+    }
+  }
+  viewer.camera.changed.addEventListener(syncClusterByHeight)
+  viewer.camera.moveEnd.addEventListener(syncClusterByHeight)
+  syncClusterByHeight()
 }
 
 export async function applyMapStack(

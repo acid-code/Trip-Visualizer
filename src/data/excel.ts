@@ -115,14 +115,36 @@ function asStatus(value: unknown): ItemStatus {
     : 'planned'
 }
 
+function findSheet(wb: XLSX.WorkBook, name: string): XLSX.WorkSheet | undefined {
+  const want = name.trim().toLowerCase()
+  const key =
+    wb.SheetNames.find((n) => n.trim().toLowerCase() === want) ||
+    Object.keys(wb.Sheets).find((n) => n.trim().toLowerCase() === want)
+  return key ? wb.Sheets[key] : undefined
+}
+
 export function parseTripWorkbook(data: ArrayBuffer): {
   meta: TripMeta
   items: TripItem[]
 } {
-  const wb = XLSX.read(data, { type: 'array', cellDates: true })
-  const tripSheet = wb.Sheets.Trip
-  const scheduleSheet = wb.Sheets.Schedule
-  if (!scheduleSheet) throw new Error('Missing Schedule sheet')
+  const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data as ArrayBuffer)
+  if (bytes.byteLength < 64) {
+    throw new Error('File is empty or corrupt — re-save the Excel from the app / Drive')
+  }
+  // ZIP/xlsx files start with PK
+  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+    throw new Error(
+      'Not a valid .xlsx workbook (Drive may have converted it). Save again after the latest update.',
+    )
+  }
+
+  const wb = XLSX.read(bytes, { type: 'array', cellDates: true })
+  const scheduleSheet = findSheet(wb, 'Schedule')
+  if (!scheduleSheet) {
+    const names = (wb.SheetNames || []).join(', ') || '(none)'
+    throw new Error(`Missing Schedule sheet (found: ${names})`)
+  }
+  const tripSheet = findSheet(wb, 'Trip')
 
   const metaMap: Record<string, string> = {}
   if (tripSheet) {

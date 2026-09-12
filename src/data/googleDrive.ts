@@ -11,11 +11,13 @@ const DRIVE_API = 'https://www.googleapis.com/drive/v3'
 const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3'
 const TOKEN_STORAGE_KEY = 'trip-drive-oauth'
 const FOLDER_STORAGE_KEY = 'trip-drive-folder-id'
+const TRIP_FILE_MAP_KEY = 'trip-drive-file-map'
 
 export type DriveFileInfo = {
   id: string
   name: string
   modifiedTime?: string
+  webViewLink?: string
 }
 
 type TokenResponse = {
@@ -263,11 +265,18 @@ async function driveFetch(
   const token = await requestAccessToken(interactive)
   const headers = new Headers(init.headers)
   headers.set('Authorization', `Bearer ${token}`)
+  // Let the browser set multipart boundary when body is FormData
+  if (typeof FormData !== 'undefined' && init.body instanceof FormData) {
+    headers.delete('Content-Type')
+  }
   const res = await fetch(url, { ...init, headers })
   if (res.status === 401) {
     persistToken(null)
     const retryToken = await requestAccessToken(true)
     headers.set('Authorization', `Bearer ${retryToken}`)
+    if (typeof FormData !== 'undefined' && init.body instanceof FormData) {
+      headers.delete('Content-Type')
+    }
     return fetch(url, { ...init, headers })
   }
   return res
@@ -419,6 +428,61 @@ async function ensureTripPlanerFolder(interactive = true): Promise<string> {
   return createTripPlanerFolder(interactive)
 }
 
+function readTripFileMap(): Record<string, { fileId: string; fileName: string }> {
+  try {
+    const raw = localStorage.getItem(TRIP_FILE_MAP_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object') return {}
+    return parsed as Record<string, { fileId: string; fileName: string }>
+  } catch {
+    return {}
+  }
+}
+
+function writeTripFileMap(map: Record<string, { fileId: string; fileName: string }>) {
+  try {
+    localStorage.setItem(TRIP_FILE_MAP_KEY, JSON.stringify(map))
+  } catch {
+    /* ignore */
+  }
+}
+
+export function rememberDriveFileForTrip(
+  tripId: string,
+  fileId: string,
+  fileName: string,
+): void {
+  const map = readTripFileMap()
+  map[tripId] = { fileId, fileName }
+  writeTripFileMap(map)
+}
+
+export function getRememberedDriveFileForTrip(
+  tripId: string,
+): { fileId: string; fileName: string } | null {
+  return readTripFileMap()[tripId] ?? null
+}
+
+export function getStoredDriveFolderId(): string | null {
+  return readStoredFolderId()
+}
+
+/** Opens in Drive web / app (folder). */
+export function driveFolderWebUrl(folderId: string): string {
+  return `https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}`
+}
+
+/** Opens in Drive web / app (file). */
+export function driveFileWebUrl(fileId: string): string {
+  return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`
+}
+
+export async function resolveDriveFolderOpenUrl(): Promise<string | null> {
+  const id = readStoredFolderId() || (await ensureTripPlanerFolder(true))
+  return id ? driveFolderWebUrl(id) : null
+}
+
 export function slugTripFileBase(tripName: string): string {
   const s = tripName
     .trim()
@@ -426,6 +490,15 @@ export function slugTripFileBase(tripName: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
   return s || 'trip'
+}
+
+/** Strip .xlsx and optional -2/-3 suffix used for duplicate Drive names. */
+export function tripNameSlugFromDriveFileName(fileName: string): string {
+  return fileName
+    .replace(/\.xlsx?$/i, '')
+    .replace(/-\d+$/, '')
+    .trim()
+    .toLowerCase()
 }
 
 function uniqueWorkbookName(base: string, existingNames: string[]): string {
@@ -442,69 +515,129 @@ function uniqueWorkbookName(base: string, existingNames: string[]): string {
 async function listFilesInFolder(folderId: string): Promise<DriveFileInfo[]> {
   const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`)
   const res = await driveFetch(
-    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,modifiedTime)&pageSize=100&orderBy=modifiedTime desc`,
+    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,modifiedTime,webViewLink)&pageSize=100&orderBy=modifiedTime desc`,
   )
   if (!res.ok) throw new Error(await driveErrorMessage(res, 'Drive list failed'))
   const data = (await res.json()) as { files?: DriveFileInfo[] }
   return data.files ?? []
 }
 
-/** Upload workbook bytes into trip-planer/, with -2/-3 suffix if the name exists. */
-export async function uploadTripWorkbookToDrive(
-  tripName: string,
+async function updateExistingDriveFile(
+  fileId: string,
+  fileName: string,
   bytes: ArrayBuffer,
 ): Promise<{ fileName: string; fileId: string }> {
-  const folderId = await ensureTripPlanerFolder(true)
-  const files = await listFilesInFolder(folderId)
-  const fileName = uniqueWorkbookName(
-    slugTripFileBase(tripName),
-    files.map((f) => f.name),
+  const xlsxMime =
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  const metaRes = await driveFetch(
+    `${DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=id,name`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: fileName }),
+    },
+    true,
   )
-
-  const metadata = {
-    name: fileName,
-    parents: [folderId],
-    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  if (!metaRes.ok) {
+    throw new Error(await driveErrorMessage(metaRes, 'Drive file update failed'))
   }
 
-  const boundary = `tripbound_${Date.now().toString(36)}`
-  const metaPart =
-    `--${boundary}\r\n` +
-    `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
-    `${JSON.stringify(metadata)}\r\n`
-  const fileHeader =
-    `--${boundary}\r\n` +
-    `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n`
-  const footer = `\r\n--${boundary}--`
-
-  const metaBytes = new TextEncoder().encode(metaPart + fileHeader)
-  const footerBytes = new TextEncoder().encode(footer)
-  const body = new Uint8Array(metaBytes.length + bytes.byteLength + footerBytes.length)
-  body.set(metaBytes, 0)
-  body.set(new Uint8Array(bytes), metaBytes.length)
-  body.set(footerBytes, metaBytes.length + bytes.byteLength)
-
   const res = await driveFetch(
-    `${DRIVE_UPLOAD}/files?uploadType=multipart&fields=id,name`,
+    `${DRIVE_UPLOAD}/files/${encodeURIComponent(fileId)}?uploadType=media&fields=id,name,mimeType,size,modifiedTime`,
     {
-      method: 'POST',
-      headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-      body,
+      method: 'PATCH',
+      headers: { 'Content-Type': xlsxMime },
+      body: bytes,
     },
     true,
   )
   if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    // Re-wrap for consistent messaging
-    const fake = {
-      ok: false,
-      status: res.status,
-      text: async () => text,
-    } as Response
-    throw new Error(await driveErrorMessage(fake, 'Drive upload failed'))
+    throw new Error(await driveErrorMessage(res, 'Drive content upload failed'))
   }
   const data = (await res.json()) as { id: string; name: string }
-  return { fileName: data.name || fileName, fileId: data.id }
+  return { fileName: data.name || fileName, fileId: data.id || fileId }
+}
+
+/** Upload workbook bytes into trip-planer/. Updates the same file when tripId was saved before. */
+export async function uploadTripWorkbookToDrive(
+  tripName: string,
+  bytes: ArrayBuffer,
+  tripId?: string,
+): Promise<{ fileName: string; fileId: string }> {
+  const folderId = await ensureTripPlanerFolder(true)
+  const files = await listFilesInFolder(folderId)
+  const base = slugTripFileBase(tripName)
+
+  if (tripId) {
+    const remembered = getRememberedDriveFileForTrip(tripId)
+    if (remembered && files.some((f) => f.id === remembered.fileId)) {
+      const updated = await updateExistingDriveFile(
+        remembered.fileId,
+        `${base}.xlsx`,
+        bytes,
+      )
+      rememberDriveFileForTrip(tripId, updated.fileId, updated.fileName)
+      return updated
+    }
+    // Same base name already in folder → overwrite that file when linked by name
+    const byName = files.find((f) => f.name.toLowerCase() === `${base}.xlsx`)
+    if (byName) {
+      const updated = await updateExistingDriveFile(byName.id, byName.name, bytes)
+      rememberDriveFileForTrip(tripId, updated.fileId, updated.fileName)
+      return updated
+    }
+  }
+
+  const fileName = uniqueWorkbookName(
+    base,
+    files.map((f) => f.name),
+  )
+
+  const xlsxMime =
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  const metadata = {
+    name: fileName,
+    parents: [folderId],
+  }
+
+  // FormData multipart is more reliable in browsers than hand-built related bodies
+  // (corrupt uploads were loading back without a Schedule sheet).
+  const form = new FormData()
+  form.append(
+    'metadata',
+    new Blob([JSON.stringify(metadata)], { type: 'application/json' }),
+  )
+  form.append('file', new Blob([bytes], { type: xlsxMime }), fileName)
+
+  const res = await driveFetch(
+    `${DRIVE_UPLOAD}/files?uploadType=multipart&fields=id,name,mimeType,size`,
+    {
+      method: 'POST',
+      body: form,
+    },
+    true,
+  )
+  if (!res.ok) {
+    throw new Error(await driveErrorMessage(res, 'Drive upload failed'))
+  }
+  const data = (await res.json()) as {
+    id: string
+    name: string
+    mimeType?: string
+    size?: string
+  }
+  if (data.mimeType && /google-apps\.(spreadsheet|document)/i.test(data.mimeType)) {
+    throw new Error(
+      'Drive converted the workbook to a Google Doc — re-save and keep .xlsx. Try again after this update.',
+    )
+  }
+  const size = data.size ? Number(data.size) : 0
+  if (size > 0 && size < 64) {
+    throw new Error('Drive upload looked empty — try Save to Drive again')
+  }
+  const out = { fileName: data.name || fileName, fileId: data.id }
+  if (tripId) rememberDriveFileForTrip(tripId, out.fileId, out.fileName)
+  return out
 }
 
 /** List .xlsx workbooks in trip-planer/ (creates the folder if needed). */
@@ -518,6 +651,16 @@ export async function downloadDriveFile(fileId: string): Promise<ArrayBuffer> {
   const res = await driveFetch(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`, {}, true)
   if (!res.ok) throw new Error(await driveErrorMessage(res, 'Drive download failed'))
   return res.arrayBuffer()
+}
+
+export async function getDriveFileMeta(fileId: string): Promise<DriveFileInfo> {
+  const res = await driveFetch(
+    `${DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=id,name,modifiedTime,webViewLink`,
+    {},
+    true,
+  )
+  if (!res.ok) throw new Error(await driveErrorMessage(res, 'Drive file lookup failed'))
+  return (await res.json()) as DriveFileInfo
 }
 
 export { DRIVE_FOLDER_NAME }

@@ -13,6 +13,7 @@ export type FeatureTipVisual =
   | 'explore'
   | 'plus-save'
   | 'overview'
+  | 'drive'
 
 export type FeatureTip = {
   id: string
@@ -76,6 +77,12 @@ export const FEATURE_TIPS: FeatureTip[] = [
     title: 'Overview',
     body: 'Use Overview in the header to zoom the camera back out and see the whole trip at once.',
     visual: 'overview',
+  },
+  {
+    id: 'google-drive-sync',
+    title: 'Google Drive backup',
+    body: 'In Data, connect Google once, then Save trip to Drive (trip-planer/folder). Open folder / Open opens Drive in the browser or app. Load switches to the matching trip and overwrites it only when the Drive file is newer than your local copy.',
+    visual: 'drive',
   },
 ]
 

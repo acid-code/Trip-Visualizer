@@ -209,6 +209,29 @@ function TipFrame({ visual }: { visual: FeatureTipVisual }) {
             <div className="absolute left-[55%] top-[62%] h-2 w-2 rounded-full bg-violet-400" />
           </>
         ) : null}
+
+        {visual === 'drive' ? (
+          <>
+            <div className="absolute left-3 right-3 top-3 rounded-xl border border-emerald-400/40 bg-emerald-950/70 p-2.5 shadow">
+              <div className="text-[9px] font-semibold uppercase tracking-wide text-emerald-300">
+                Google Drive
+              </div>
+              <div className="mt-1.5 space-y-1">
+                <div className="flex items-center justify-between rounded-lg bg-white/10 px-2 py-1">
+                  <span className="truncate text-[10px] text-white/90">france-south-loop.xlsx</span>
+                  <span className="text-[9px] text-emerald-300">Load</span>
+                </div>
+                <div className="flex items-center justify-between rounded-lg bg-white/10 px-2 py-1">
+                  <span className="truncate text-[10px] text-white/90">my-trip-2.xlsx</span>
+                  <span className="text-[9px] text-emerald-300">Load</span>
+                </div>
+              </div>
+            </div>
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-emerald-500 px-3 py-1 text-[10px] font-semibold text-white shadow">
+              Save trip to Drive
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   )
