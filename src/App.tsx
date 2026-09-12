@@ -1860,12 +1860,15 @@ function DriveSyncPanel({
         Saves Excel into <code className="rounded bg-white px-1">{DRIVE_FOLDER_NAME}/</code> as{' '}
         <code className="rounded bg-white px-1">trip-name.xlsx</code> (adds{' '}
         <code className="rounded bg-white px-1">-2</code> if the name already exists). Sign in with
-        Google once, then save or load from that folder.
+        Google once, then save or load from that folder. Allow popups for this site if the Google
+        window does not close after Approve.
       </p>
       {!configured ? (
         <p className="mt-2 text-xs text-amber-800">
-          Set <code className="rounded bg-white px-1">VITE_GOOGLE_OAUTH_CLIENT_ID</code> (Google Cloud
-          OAuth web client) and add this site to Authorized JavaScript origins.
+          Set <code className="rounded bg-white px-1">VITE_GOOGLE_OAUTH_CLIENT_ID</code> in{' '}
+          <code className="rounded bg-white px-1">.env.local</code> (OAuth web client) and restart
+          Vite. Add <code className="rounded bg-white px-1">{window.location.origin}</code> to
+          Authorized JavaScript origins.
         </p>
       ) : (
         <div className="mt-2 flex flex-wrap gap-2">

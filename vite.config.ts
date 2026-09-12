@@ -283,6 +283,10 @@ export default defineConfig(({ mode }) => {
   },
   server: {
     port: 5173,
+    // GIS OAuth popup needs this — vercel.json headers do not apply in Vite dev.
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+    },
     proxy: {
       '/api/overpass': {
         target: 'https://overpass-api.de',
@@ -298,6 +302,12 @@ export default defineConfig(({ mode }) => {
           })
         },
       },
+    },
+  },
+  preview: {
+    port: 4173,
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     },
   },
 }
