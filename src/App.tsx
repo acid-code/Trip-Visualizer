@@ -1462,6 +1462,7 @@ export default function App() {
                     }}
                     onAddDay={() => void addDay()}
                     onShowTips={() => openFeatureGuide({ all: true })}
+                    onStatus={setStatus}
                     setMapStack={(id) => {
                       setMapStack(id)
                       void setSetting('mapStack', id)
@@ -1646,6 +1647,7 @@ export default function App() {
                     }}
                     onAddDay={() => void addDay()}
                     onShowTips={() => openFeatureGuide({ all: true })}
+                    onStatus={setStatus}
                     setMapStack={(id) => {
                       setMapStack(id)
                       void setSetting('mapStack', id)
@@ -1803,10 +1805,12 @@ function DriveSyncPanel({
   active,
   onExportToDrive,
   onImportFromDrive,
+  onStatus,
 }: {
   active: TripRecord | null
   onExportToDrive: () => void
   onImportFromDrive: (fileId: string, fileName: string) => void
+  onStatus: (msg: string) => void
 }) {
   const configured = isGoogleDriveConfigured()
   const [connected, setConnected] = useState(() => isGoogleDriveConnected())
@@ -1820,11 +1824,29 @@ function DriveSyncPanel({
     try {
       await connectGoogleDrive()
       setConnected(true)
-      const list = await listTripWorkbooksOnDrive()
-      setFiles(list)
+      onStatus('Google Drive connected')
+      try {
+        const list = await listTripWorkbooksOnDrive()
+        setFiles(list)
+        onStatus(
+          list.length
+            ? `Drive ready · ${list.length} workbook${list.length === 1 ? '' : 's'} in ${DRIVE_FOLDER_NAME}/`
+            : `Drive ready · ${DRIVE_FOLDER_NAME}/ (empty)`,
+        )
+      } catch (listErr) {
+        logClientError('drive-list', listErr)
+        const msg =
+          listErr instanceof Error ? listErr.message : 'Could not list Drive files'
+        setError(msg)
+        onStatus(msg)
+        setFiles([])
+      }
     } catch (err) {
+      logClientError('drive-connect', err)
       setConnected(false)
-      setError(err instanceof Error ? err.message : 'Google sign-in failed')
+      const msg = err instanceof Error ? err.message : 'Google sign-in failed'
+      setError(msg)
+      onStatus(msg)
     } finally {
       setBusy(false)
     }
@@ -1835,6 +1857,7 @@ function DriveSyncPanel({
     setConnected(false)
     setFiles(null)
     setError(null)
+    onStatus('Google Drive disconnected')
   }
 
   async function onRefreshList() {
@@ -1844,8 +1867,16 @@ function DriveSyncPanel({
       const list = await listTripWorkbooksOnDrive()
       setFiles(list)
       setConnected(true)
+      onStatus(
+        list.length
+          ? `Drive · ${list.length} workbook${list.length === 1 ? '' : 's'}`
+          : `Drive · ${DRIVE_FOLDER_NAME}/ is empty`,
+      )
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not list Drive files')
+      logClientError('drive-list', err)
+      const msg = err instanceof Error ? err.message : 'Could not list Drive files'
+      setError(msg)
+      onStatus(msg)
     } finally {
       setBusy(false)
     }
@@ -1954,6 +1985,7 @@ function DataPanel({
   onRebuildRoutes,
   onAddDay,
   onShowTips,
+  onStatus,
   setMapStack,
   setWalkApp,
   setGoogleKey,
@@ -1982,6 +2014,7 @@ function DataPanel({
   onRebuildRoutes: () => void
   onAddDay: () => void
   onShowTips: () => void
+  onStatus: (msg: string) => void
   setMapStack: (id: MapStack) => void
   setWalkApp: (pref: WalkAppPref) => void
   setGoogleKey: (v: string) => void
@@ -2044,6 +2077,7 @@ function DataPanel({
         active={active}
         onExportToDrive={onExportToDrive}
         onImportFromDrive={onImportFromDrive}
+        onStatus={onStatus}
       />
 
       <div className="rounded-2xl border border-orange-200 bg-orange-50/80 p-3">

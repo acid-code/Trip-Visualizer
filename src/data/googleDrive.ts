@@ -10,6 +10,7 @@ const GIS_SCRIPT = 'https://accounts.google.com/gsi/client'
 const DRIVE_API = 'https://www.googleapis.com/drive/v3'
 const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3'
 const TOKEN_STORAGE_KEY = 'trip-drive-oauth'
+const FOLDER_STORAGE_KEY = 'trip-drive-folder-id'
 
 export type DriveFileInfo = {
   id: string
@@ -235,6 +236,11 @@ export function disconnectGoogleDrive(): void {
   const token = cachedToken?.accessToken
   persistToken(null)
   tokenClient = null
+  try {
+    localStorage.removeItem(FOLDER_STORAGE_KEY)
+  } catch {
+    /* ignore */
+  }
   if (token && window.google?.accounts?.oauth2) {
     try {
       window.google.accounts.oauth2.revoke(token)
@@ -267,7 +273,100 @@ async function driveFetch(
   return res
 }
 
+async function driveErrorMessage(res: Response, fallback: string): Promise<string> {
+  let body = ''
+  try {
+    body = await res.text()
+  } catch {
+    /* ignore */
+  }
+  type DriveErr = {
+    error?: {
+      message?: string
+      status?: string
+      errors?: Array<{ reason?: string; message?: string }>
+    }
+  }
+  let parsed: DriveErr | null = null
+  try {
+    parsed = body ? (JSON.parse(body) as DriveErr) : null
+  } catch {
+    parsed = null
+  }
+  const apiMessage =
+    parsed?.error?.message ||
+    parsed?.error?.errors?.[0]?.message ||
+    (body ? body.slice(0, 160) : '')
+  const blob = `${apiMessage} ${parsed?.error?.status || ''} ${parsed?.error?.errors?.[0]?.reason || ''}`
+
+  if (res.status === 403) {
+    if (/accessNotConfigured|has not been used|API has not been|disabled/i.test(blob)) {
+      return (
+        'Google Drive API is not enabled for this Cloud project. Open Google Cloud Console → ' +
+        'APIs & Services → Library → enable “Google Drive API”, wait ~1 minute, then Connect again.'
+      )
+    }
+    if (/insufficientPermissions|PERMISSION_DENIED|accessDenied/i.test(blob)) {
+      return (
+        'Drive access was denied. Disconnect, Connect Google again, and accept the Drive permission.'
+      )
+    }
+  }
+
+  return apiMessage
+    ? `${fallback} (${res.status}: ${apiMessage})`
+    : `${fallback} (${res.status})`
+}
+
+function readStoredFolderId(): string | null {
+  try {
+    return localStorage.getItem(FOLDER_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function writeStoredFolderId(id: string | null) {
+  try {
+    if (!id) localStorage.removeItem(FOLDER_STORAGE_KEY)
+    else localStorage.setItem(FOLDER_STORAGE_KEY, id)
+  } catch {
+    /* ignore */
+  }
+}
+
+async function verifyFolderId(
+  folderId: string,
+  interactive = false,
+): Promise<string | null> {
+  const res = await driveFetch(
+    `${DRIVE_API}/files/${encodeURIComponent(folderId)}?fields=id,name,trashed,mimeType`,
+    {},
+    interactive,
+  )
+  if (!res.ok) {
+    writeStoredFolderId(null)
+    return null
+  }
+  const data = (await res.json()) as {
+    id?: string
+    trashed?: boolean
+    mimeType?: string
+  }
+  if (!data.id || data.trashed || data.mimeType !== 'application/vnd.google-apps.folder') {
+    writeStoredFolderId(null)
+    return null
+  }
+  return data.id
+}
+
 async function findFolderId(tokenInteractive = false): Promise<string | null> {
+  const remembered = readStoredFolderId()
+  if (remembered) {
+    const ok = await verifyFolderId(remembered, tokenInteractive)
+    if (ok) return ok
+  }
+
   const q = encodeURIComponent(
     `name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
   )
@@ -277,16 +376,17 @@ async function findFolderId(tokenInteractive = false): Promise<string | null> {
     tokenInteractive,
   )
   if (!res.ok) {
-    throw new Error(`Drive folder lookup failed (${res.status})`)
+    // With drive.file, search can be picky — caller may still create a folder.
+    if (res.status === 404 || res.status === 400) return null
+    throw new Error(await driveErrorMessage(res, 'Drive folder lookup failed'))
   }
   const data = (await res.json()) as { files?: Array<{ id: string }> }
-  return data.files?.[0]?.id ?? null
+  const id = data.files?.[0]?.id ?? null
+  if (id) writeStoredFolderId(id)
+  return id
 }
 
-async function ensureTripPlanerFolder(interactive = true): Promise<string> {
-  const existing = await findFolderId(interactive)
-  if (existing) return existing
-
+async function createTripPlanerFolder(interactive = true): Promise<string> {
   const res = await driveFetch(
     `${DRIVE_API}/files?fields=id,name`,
     {
@@ -300,10 +400,23 @@ async function ensureTripPlanerFolder(interactive = true): Promise<string> {
     interactive,
   )
   if (!res.ok) {
-    throw new Error(`Could not create Drive folder “${DRIVE_FOLDER_NAME}” (${res.status})`)
+    throw new Error(await driveErrorMessage(res, `Could not create Drive folder “${DRIVE_FOLDER_NAME}”`))
   }
   const data = (await res.json()) as { id: string }
+  writeStoredFolderId(data.id)
   return data.id
+}
+
+async function ensureTripPlanerFolder(interactive = true): Promise<string> {
+  try {
+    const existing = await findFolderId(interactive)
+    if (existing) return existing
+  } catch (err) {
+    // If lookup is forbidden but API works for create, still try create.
+    const msg = err instanceof Error ? err.message : ''
+    if (!/403|not enabled|denied/i.test(msg)) throw err
+  }
+  return createTripPlanerFolder(interactive)
 }
 
 export function slugTripFileBase(tripName: string): string {
@@ -331,7 +444,7 @@ async function listFilesInFolder(folderId: string): Promise<DriveFileInfo[]> {
   const res = await driveFetch(
     `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,modifiedTime)&pageSize=100&orderBy=modifiedTime desc`,
   )
-  if (!res.ok) throw new Error(`Drive list failed (${res.status})`)
+  if (!res.ok) throw new Error(await driveErrorMessage(res, 'Drive list failed'))
   const data = (await res.json()) as { files?: DriveFileInfo[] }
   return data.files ?? []
 }
@@ -382,7 +495,13 @@ export async function uploadTripWorkbookToDrive(
   )
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(`Drive upload failed (${res.status})${text ? `: ${text.slice(0, 120)}` : ''}`)
+    // Re-wrap for consistent messaging
+    const fake = {
+      ok: false,
+      status: res.status,
+      text: async () => text,
+    } as Response
+    throw new Error(await driveErrorMessage(fake, 'Drive upload failed'))
   }
   const data = (await res.json()) as { id: string; name: string }
   return { fileName: data.name || fileName, fileId: data.id }
@@ -397,7 +516,7 @@ export async function listTripWorkbooksOnDrive(): Promise<DriveFileInfo[]> {
 
 export async function downloadDriveFile(fileId: string): Promise<ArrayBuffer> {
   const res = await driveFetch(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`, {}, true)
-  if (!res.ok) throw new Error(`Drive download failed (${res.status})`)
+  if (!res.ok) throw new Error(await driveErrorMessage(res, 'Drive download failed'))
   return res.arrayBuffer()
 }
 
