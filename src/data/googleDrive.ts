@@ -522,19 +522,80 @@ async function listFilesInFolder(folderId: string): Promise<DriveFileInfo[]> {
   return data.files ?? []
 }
 
+const XLSX_MIME =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+function asBinaryBody(bytes: ArrayBuffer): Blob {
+  return new Blob([new Uint8Array(bytes)], { type: XLSX_MIME })
+}
+
+function assertXlsxBytes(bytes: ArrayBuffer): void {
+  const u8 = new Uint8Array(bytes)
+  if (u8.byteLength < 64 || u8[0] !== 0x50 || u8[1] !== 0x4b) {
+    throw new Error('Workbook bytes are not a valid .xlsx — export aborted')
+  }
+}
+
+async function createDriveFileMetadata(
+  folderId: string,
+  fileName: string,
+): Promise<string> {
+  const res = await driveFetch(
+    `${DRIVE_API}/files?fields=id,name`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: fileName,
+        parents: [folderId],
+        mimeType: XLSX_MIME,
+      }),
+    },
+    true,
+  )
+  if (!res.ok) {
+    throw new Error(await driveErrorMessage(res, 'Could not create Drive file'))
+  }
+  const data = (await res.json()) as { id: string }
+  return data.id
+}
+
+async function uploadDriveFileMedia(
+  fileId: string,
+  bytes: ArrayBuffer,
+): Promise<{ id: string; name: string; mimeType?: string; size?: string }> {
+  const res = await driveFetch(
+    `${DRIVE_UPLOAD}/files/${encodeURIComponent(fileId)}?uploadType=media&fields=id,name,mimeType,size,modifiedTime`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': XLSX_MIME },
+      body: asBinaryBody(bytes),
+    },
+    true,
+  )
+  if (!res.ok) {
+    throw new Error(await driveErrorMessage(res, 'Drive content upload failed'))
+  }
+  return (await res.json()) as {
+    id: string
+    name: string
+    mimeType?: string
+    size?: string
+  }
+}
+
 async function updateExistingDriveFile(
   fileId: string,
   fileName: string,
   bytes: ArrayBuffer,
 ): Promise<{ fileName: string; fileId: string }> {
-  const xlsxMime =
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  assertXlsxBytes(bytes)
   const metaRes = await driveFetch(
     `${DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=id,name`,
     {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: fileName }),
+      body: JSON.stringify({ name: fileName, mimeType: XLSX_MIME }),
     },
     true,
   )
@@ -542,19 +603,14 @@ async function updateExistingDriveFile(
     throw new Error(await driveErrorMessage(metaRes, 'Drive file update failed'))
   }
 
-  const res = await driveFetch(
-    `${DRIVE_UPLOAD}/files/${encodeURIComponent(fileId)}?uploadType=media&fields=id,name,mimeType,size,modifiedTime`,
-    {
-      method: 'PATCH',
-      headers: { 'Content-Type': xlsxMime },
-      body: bytes,
-    },
-    true,
-  )
-  if (!res.ok) {
-    throw new Error(await driveErrorMessage(res, 'Drive content upload failed'))
+  const data = await uploadDriveFileMedia(fileId, bytes)
+  if (data.mimeType && /google-apps\.(spreadsheet|document)/i.test(data.mimeType)) {
+    throw new Error('Drive converted the file — try Save to Drive again')
   }
-  const data = (await res.json()) as { id: string; name: string }
+  const size = data.size ? Number(data.size) : 0
+  if (size > 0 && size < 64) {
+    throw new Error('Drive upload looked empty — try Save to Drive again')
+  }
   return { fileName: data.name || fileName, fileId: data.id || fileId }
 }
 
@@ -564,6 +620,7 @@ export async function uploadTripWorkbookToDrive(
   bytes: ArrayBuffer,
   tripId?: string,
 ): Promise<{ fileName: string; fileId: string }> {
+  assertXlsxBytes(bytes)
   const folderId = await ensureTripPlanerFolder(true)
   const files = await listFilesInFolder(folderId)
   const base = slugTripFileBase(tripName)
@@ -579,7 +636,6 @@ export async function uploadTripWorkbookToDrive(
       rememberDriveFileForTrip(tripId, updated.fileId, updated.fileName)
       return updated
     }
-    // Same base name already in folder → overwrite that file when linked by name
     const byName = files.find((f) => f.name.toLowerCase() === `${base}.xlsx`)
     if (byName) {
       const updated = await updateExistingDriveFile(byName.id, byName.name, bytes)
@@ -593,49 +649,20 @@ export async function uploadTripWorkbookToDrive(
     files.map((f) => f.name),
   )
 
-  const xlsxMime =
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-  const metadata = {
-    name: fileName,
-    parents: [folderId],
-  }
-
-  // FormData multipart is more reliable in browsers than hand-built related bodies
-  // (corrupt uploads were loading back without a Schedule sheet).
-  const form = new FormData()
-  form.append(
-    'metadata',
-    new Blob([JSON.stringify(metadata)], { type: 'application/json' }),
-  )
-  form.append('file', new Blob([bytes], { type: xlsxMime }), fileName)
-
-  const res = await driveFetch(
-    `${DRIVE_UPLOAD}/files?uploadType=multipart&fields=id,name,mimeType,size`,
-    {
-      method: 'POST',
-      body: form,
-    },
-    true,
-  )
-  if (!res.ok) {
-    throw new Error(await driveErrorMessage(res, 'Drive upload failed'))
-  }
-  const data = (await res.json()) as {
-    id: string
-    name: string
-    mimeType?: string
-    size?: string
-  }
+  // Two-step upload (metadata JSON, then raw media) — FormData multipart/form-data
+  // corrupts binary .xlsx on Drive and Sheets cannot open the result.
+  const fileId = await createDriveFileMetadata(folderId, fileName)
+  const data = await uploadDriveFileMedia(fileId, bytes)
   if (data.mimeType && /google-apps\.(spreadsheet|document)/i.test(data.mimeType)) {
     throw new Error(
-      'Drive converted the workbook to a Google Doc — re-save and keep .xlsx. Try again after this update.',
+      'Drive converted the workbook to a Google Doc — re-save and keep .xlsx.',
     )
   }
   const size = data.size ? Number(data.size) : 0
   if (size > 0 && size < 64) {
     throw new Error('Drive upload looked empty — try Save to Drive again')
   }
-  const out = { fileName: data.name || fileName, fileId: data.id }
+  const out = { fileName: data.name || fileName, fileId: data.id || fileId }
   if (tripId) rememberDriveFileForTrip(tripId, out.fileId, out.fileName)
   return out
 }
@@ -648,14 +675,41 @@ export async function listTripWorkbooksOnDrive(): Promise<DriveFileInfo[]> {
 }
 
 export async function downloadDriveFile(fileId: string): Promise<ArrayBuffer> {
-  const res = await driveFetch(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`, {}, true)
+  // Prefer native binary download; if Drive converted to Google Sheet, export as xlsx.
+  const metaRes = await driveFetch(
+    `${DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType`,
+    {},
+    true,
+  )
+  if (!metaRes.ok) {
+    throw new Error(await driveErrorMessage(metaRes, 'Drive file lookup failed'))
+  }
+  const meta = (await metaRes.json()) as { mimeType?: string }
+
+  if (meta.mimeType === 'application/vnd.google-apps.spreadsheet') {
+    const exp = await driveFetch(
+      `${DRIVE_API}/files/${encodeURIComponent(fileId)}/export?mimeType=${encodeURIComponent(XLSX_MIME)}`,
+      {},
+      true,
+    )
+    if (!exp.ok) {
+      throw new Error(await driveErrorMessage(exp, 'Drive Sheets export failed'))
+    }
+    return exp.arrayBuffer()
+  }
+
+  const res = await driveFetch(
+    `${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`,
+    {},
+    true,
+  )
   if (!res.ok) throw new Error(await driveErrorMessage(res, 'Drive download failed'))
   return res.arrayBuffer()
 }
 
 export async function getDriveFileMeta(fileId: string): Promise<DriveFileInfo> {
   const res = await driveFetch(
-    `${DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=id,name,modifiedTime,webViewLink`,
+    `${DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=id,name,modifiedTime,webViewLink,mimeType`,
     {},
     true,
   )

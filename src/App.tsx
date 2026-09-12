@@ -1983,7 +1983,8 @@ function DriveSyncPanel({
       <p className="mt-1 text-xs text-stone-600">
         Saves Excel into <code className="rounded bg-white px-1">{DRIVE_FOLDER_NAME}/</code>. Load
         switches to the matching trip and overwrites it only when the Drive file is newer than your
-        local copy. Open opens the folder or file in Google Drive.
+        local copy. Open opens the folder or file in Google Drive. If an older save won’t open in
+        Sheets, delete it and Save trip to Drive again.
       </p>
       {!configured ? (
         <p className="mt-2 text-xs text-amber-800">
