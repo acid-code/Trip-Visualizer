@@ -1,12 +1,13 @@
 /**
  * Proxy for Places API (New) Nearby Search — avoids browser CORS.
- * Client may pass apiKey (Data override / VITE key); else server env is used.
+ * Uses server GOOGLE_MAPS_API_KEY; client may pass apiKey only as a Data-panel override.
  */
 
 import {
   searchNearbyPlacesGoogle,
   GOOGLE_NEARBY_MAX,
 } from '../src/data/placesGoogle'
+import { serverGoogleMapsApiKey } from './_googleKey'
 
 export const config = {
   maxDuration: 30,
@@ -74,12 +75,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     Number(body.maxResultCount) || GOOGLE_NEARBY_MAX,
     GOOGLE_NEARBY_MAX,
   )
-  const apiKey = String(
-    body.apiKey ||
-      process.env.GOOGLE_MAPS_API_KEY ||
-      process.env.VITE_GOOGLE_MAPS_API_KEY ||
-      '',
-  ).trim()
+  const apiKey = serverGoogleMapsApiKey(body.apiKey)
 
   if (!apiKey || !apiKey.startsWith('AIza')) {
     res.status(400).json({ error: 'Google Maps API key required' })

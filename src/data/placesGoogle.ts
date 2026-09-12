@@ -107,22 +107,27 @@ function categoryFromTypes(primary: string, types: string[]): ExploreCategory {
   return 'other'
 }
 
-/** Place Photos media URL — loading it in <img> counts as a Photo SKU. */
+/**
+ * Place Photos media URL — loading it in <img> counts as a Photo SKU.
+ * With a Data-panel key → Google URL; otherwise → same-origin proxy (server key).
+ */
 export function googlePlacePhotoMediaUrl(
   photoName: string,
-  apiKey: string,
+  apiKey?: string,
   maxWidthPx = 640,
 ): string {
   const name = photoName.replace(/^\//, '')
   if (!name.startsWith('places/')) return ''
-  const key = sanitizeSecretInput(apiKey)
-  if (!key) return ''
-  return `https://places.googleapis.com/v1/${name}/media?maxWidthPx=${maxWidthPx}&key=${encodeURIComponent(key)}`
+  const key = sanitizeSecretInput(apiKey ?? '')
+  if (key) {
+    return `https://places.googleapis.com/v1/${name}/media?maxWidthPx=${maxWidthPx}&key=${encodeURIComponent(key)}`
+  }
+  return `/api/places-photo?name=${encodeURIComponent(name)}&maxWidthPx=${maxWidthPx}`
 }
 
 export function hydrateGooglePlacePhoto(
   place: ExplorePlace,
-  apiKey: string,
+  apiKey?: string,
 ): ExplorePlace {
   if (place.images.length) return place
   const photoName = place.tags.googlePhotoName
@@ -135,7 +140,7 @@ export function hydrateGooglePlacePhoto(
 /** Attach media URLs for the first N places that have a Google photo name. */
 export function attachGoogleListPhotos(
   places: ExplorePlace[],
-  apiKey: string,
+  apiKey?: string,
   budget = GOOGLE_LIST_PHOTO_BUDGET,
 ): ExplorePlace[] {
   let used = 0
@@ -262,16 +267,17 @@ export async function searchNearbyPlacesGoogle(opts: {
   return out
 }
 
-/** Client → same-origin proxy (avoids CORS). */
+/** Client → same-origin proxy (avoids CORS). Server key used when `apiKey` omitted. */
 export async function fetchGoogleNearbyViaProxy(
   anchor: { lat: number; lon: number },
   opts: {
-    apiKey: string
+    apiKey?: string
     radiusM?: number
     maxResultCount?: number
     signal?: AbortSignal
   },
 ): Promise<ExplorePlace[]> {
+  const override = sanitizeSecretInput(opts.apiKey ?? '')
   const res = await fetch('/api/places-nearby', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -280,13 +286,15 @@ export async function fetchGoogleNearbyViaProxy(
       lon: anchor.lon,
       radiusM: opts.radiusM ?? 1500,
       maxResultCount: opts.maxResultCount ?? GOOGLE_NEARBY_MAX,
-      apiKey: sanitizeSecretInput(opts.apiKey),
+      ...(override ? { apiKey: override } : {}),
     }),
     signal: opts.signal,
   })
   if (!res.ok) {
     const errBody = (await res.json().catch(() => null)) as { error?: string } | null
-    throw new Error(errBody?.error || `Places proxy ${res.status}`)
+    const msg = errBody?.error || `Places proxy ${res.status}`
+    logClientError('places-nearby-proxy', msg)
+    throw new Error(msg)
   }
   const json = (await res.json()) as { places?: ExplorePlace[] }
   return json.places ?? []
@@ -372,23 +380,27 @@ export async function searchTextPlaceGoogle(opts: {
 
 export async function fetchGoogleTextViaProxy(opts: {
   query: string
-  apiKey: string
+  /** Data-panel override only; omit to use server `GOOGLE_MAPS_API_KEY`. */
+  apiKey?: string
   bias?: { lat: number; lon: number; radiusM?: number }
   signal?: AbortSignal
 }): Promise<GoogleTextHit | null> {
+  const override = sanitizeSecretInput(opts.apiKey ?? '')
   const res = await fetch('/api/places-text', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
       query: opts.query,
-      apiKey: sanitizeSecretInput(opts.apiKey),
+      ...(override ? { apiKey: override } : {}),
       bias: opts.bias,
     }),
     signal: opts.signal,
   })
   if (!res.ok) {
     const errBody = (await res.json().catch(() => null)) as { error?: string } | null
-    throw new Error(errBody?.error || `Places text proxy ${res.status}`)
+    const msg = errBody?.error || `Places text proxy ${res.status}`
+    logClientError('places-text-proxy', msg)
+    throw new Error(msg)
   }
   const json = (await res.json()) as { place?: GoogleTextHit | null }
   return json.place ?? null

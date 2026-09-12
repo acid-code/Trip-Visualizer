@@ -129,6 +129,9 @@ export async function geocodePlace(query: string): Promise<{ lat: number; lon: n
 export async function lookupPlace(
   query: string,
   opts?: {
+    /** Prefer Google Text Search via proxy when true. */
+    useGooglePlaces?: boolean
+    /** Data-panel override only. */
     googleApiKey?: string
     bias?: { lat: number; lon: number; radiusM?: number }
   },
@@ -137,11 +140,11 @@ export async function lookupPlace(
   if (!q) return null
 
   const googleKey = opts?.googleApiKey?.trim()
-  if (googleKey) {
+  if (opts?.useGooglePlaces || googleKey) {
     try {
       const hit = await fetchGoogleTextViaProxy({
         query: q,
-        apiKey: googleKey,
+        apiKey: googleKey || undefined,
         bias: opts?.bias,
       })
       if (hit) {

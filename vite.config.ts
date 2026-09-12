@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
@@ -11,11 +11,113 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 /** Preview deploys behind Vercel SSO break /manifest.webmanifest (CORS) — skip PWA there. */
 const disablePwa = process.env.VERCEL_ENV === 'preview'
 
+/** Stable per deploy (Vercel commit) or unique local build id. */
+const appBuildId =
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  process.env.VITE_APP_BUILD_ID ||
+  `local-${Date.now()}`
+
+/** Emit `/version.json` so clients can detect a new deployment without hard refresh. */
+function emitBuildVersion(): Plugin {
+  return {
+    name: 'emit-build-version',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'version.json',
+        source: JSON.stringify({
+          buildId: appBuildId,
+          builtAt: new Date().toISOString(),
+        }),
+      })
+    },
+  }
+}
+
 /** Dev-only Places proxies (same contract as /api/places-* on Vercel). */
 function placesDevProxy(): Plugin {
+  const resolveKey = (bodyKey?: unknown) => {
+    const fromBody = String(bodyKey ?? '').trim()
+    if (fromBody.startsWith('AIza')) return fromBody
+    return String(process.env.GOOGLE_MAPS_API_KEY ?? '').trim()
+  }
+
   return {
     name: 'places-dev-proxy',
     configureServer(server) {
+      server.middlewares.use('/api/maps-status', (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204
+          res.end()
+          return
+        }
+        if (req.method !== 'GET') {
+          next()
+          return
+        }
+        const key = String(process.env.GOOGLE_MAPS_API_KEY ?? '').trim()
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ placesConfigured: key.startsWith('AIza') }))
+      })
+
+      server.middlewares.use('/api/places-photo', (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204
+          res.end()
+          return
+        }
+        if (req.method !== 'GET') {
+          next()
+          return
+        }
+        void (async () => {
+          try {
+            const url = new URL(req.url || '', 'http://localhost')
+            const name = (url.searchParams.get('name') || '').replace(/^\//, '')
+            const maxWidthPx = Math.min(
+              Math.max(Number(url.searchParams.get('maxWidthPx')) || 640, 1),
+              1600,
+            )
+            const apiKey = resolveKey()
+            if (!/^places\/[^/]+\/photos\/[^/]+$/.test(name)) {
+              res.statusCode = 400
+              res.end(JSON.stringify({ error: 'Invalid photo name' }))
+              return
+            }
+            if (!apiKey.startsWith('AIza')) {
+              res.statusCode = 400
+              res.end(JSON.stringify({ error: 'Google Maps API key required' }))
+              return
+            }
+            const upstream = await fetch(
+              `https://places.googleapis.com/v1/${name}/media?maxWidthPx=${maxWidthPx}&key=${encodeURIComponent(apiKey)}`,
+              { redirect: 'follow' },
+            )
+            if (!upstream.ok) {
+              res.statusCode = upstream.status
+              res.end(JSON.stringify({ error: 'Photo fetch failed' }))
+              return
+            }
+            const ct = upstream.headers.get('content-type') || 'image/jpeg'
+            const buf = Buffer.from(await upstream.arrayBuffer())
+            res.statusCode = 200
+            res.setHeader('Content-Type', ct)
+            res.setHeader('Cache-Control', 'public, max-age=86400')
+            res.end(buf)
+          } catch (err) {
+            res.statusCode = 502
+            res.setHeader('Content-Type', 'application/json')
+            res.end(
+              JSON.stringify({
+                error: err instanceof Error ? err.message : 'Photo proxy failed',
+              }),
+            )
+          }
+        })()
+      })
+
       const handle = (
         path: string,
         run: (body: Record<string, unknown>) => Promise<unknown>,
@@ -56,12 +158,7 @@ function placesDevProxy(): Plugin {
       }
 
       handle('/api/places-nearby', async (body) => {
-        const apiKey = String(
-          body.apiKey ||
-            process.env.GOOGLE_MAPS_API_KEY ||
-            process.env.VITE_GOOGLE_MAPS_API_KEY ||
-            '',
-        ).trim()
+        const apiKey = resolveKey(body.apiKey)
         if (!apiKey) throw new Error('Google Maps API key required')
         const { searchNearbyPlacesGoogle, GOOGLE_NEARBY_MAX } = await import(
           './src/data/placesGoogle'
@@ -80,12 +177,7 @@ function placesDevProxy(): Plugin {
       })
 
       handle('/api/places-text', async (body) => {
-        const apiKey = String(
-          body.apiKey ||
-            process.env.GOOGLE_MAPS_API_KEY ||
-            process.env.VITE_GOOGLE_MAPS_API_KEY ||
-            '',
-        ).trim()
+        const apiKey = resolveKey(body.apiKey)
         if (!apiKey) throw new Error('Google Maps API key required')
         const query = String(body.query || '').trim()
         if (!query) throw new Error('Missing query')
@@ -106,7 +198,14 @@ function placesDevProxy(): Plugin {
   }
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  // Non-VITE_ secrets (e.g. GOOGLE_MAPS_API_KEY) are not on process.env unless we load them.
+  const env = loadEnv(mode, process.cwd(), '')
+  if (env.GOOGLE_MAPS_API_KEY) {
+    process.env.GOOGLE_MAPS_API_KEY = env.GOOGLE_MAPS_API_KEY
+  }
+
+  return {
   plugins: [
     react(),
     tailwindcss(),
@@ -131,9 +230,12 @@ export default defineConfig({
         },
       ],
     }),
+    emitBuildVersion(),
     VitePWA({
       disable: disablePwa,
       registerType: 'autoUpdate',
+      // Registered from `src/updateCheck.ts` so we can poll for updates.
+      injectRegister: false,
       includeAssets: ['favicon.svg'],
       manifest: {
         name: 'Trip Tracker',
@@ -154,7 +256,9 @@ export default defineConfig({
       },
       workbox: {
         maximumFileSizeToCacheInBytes: 12 * 1024 * 1024,
-        globPatterns: ['**/*.{js,css,html,ico,svg,json,woff2}'],
+        // Keep version.json out of the precache so clients always hit the network.
+        globPatterns: ['**/*.{js,css,html,ico,svg,woff2}'],
+        globIgnores: ['**/version.json'],
       },
     }),
   ],
@@ -165,6 +269,7 @@ export default defineConfig({
   },
   define: {
     CESIUM_BASE_URL: JSON.stringify('/cesium'),
+    __APP_BUILD_ID__: JSON.stringify(appBuildId),
   },
   optimizeDeps: {
     include: ['cesium', 'mersenne-twister'],
@@ -194,4 +299,5 @@ export default defineConfig({
       },
     },
   },
+}
 })

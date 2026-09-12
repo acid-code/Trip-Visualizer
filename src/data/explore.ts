@@ -4,6 +4,7 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import type { ItemType } from '../domain/types'
 import { distKm } from './routes'
 import { clampText, logClientError, safeHttpsUrl } from './security'
+import { logClientInfo } from './clientLogs'
 import { isValidCoord } from './validate'
 import {
   attachGoogleListPhotos,
@@ -495,7 +496,9 @@ export async function fetchNearbyExplore(
     limit?: number
     signal?: AbortSignal
     skipCache?: boolean
-    /** When set, use Places Nearby (1 Pro call) instead of Overpass. */
+    /** Prefer Google Nearby when true (server key and/or Data override). */
+    useGooglePlaces?: boolean
+    /** Data-panel override only — omit to use server `GOOGLE_MAPS_API_KEY`. */
     googleApiKey?: string
     /** Fired immediately when a 2-day area cache hit exists (before network). */
     onCacheHit?: (places: ExplorePlace[]) => void
@@ -505,8 +508,14 @@ export async function fetchNearbyExplore(
 ): Promise<ExplorePlace[]> {
   if (!isValidCoord(anchor.lat, anchor.lon)) return []
   const radiusM = opts?.radiusM ?? DEFAULT_RADIUS_M
-  const useGoogle = Boolean(opts?.googleApiKey?.trim())
+  const useGoogle = Boolean(opts?.useGooglePlaces)
   const source = useGoogle ? 'google' : 'osm'
+  logClientInfo(
+    'explore',
+    useGoogle
+      ? `Using Google Nearby (overrideKey=${opts?.googleApiKey ? 'yes' : 'no'})`
+      : 'Using OSM/Overpass — Google Places not enabled (no server key / Data override)',
+  )
   // Google Nearby hard-caps at 20 — don't request / cache more than that
   const limit = useGoogle
     ? Math.min(opts?.limit ?? GOOGLE_NEARBY_MAX, GOOGLE_NEARBY_MAX)
@@ -527,12 +536,12 @@ export async function fetchNearbyExplore(
     const cached = await getCached(key)
     if (cached?.length) {
       let list = withDistances(cached)
-      if (useGoogle && opts?.googleApiKey) {
+      if (useGoogle) {
         list = attachGoogleListPhotos(
           list.map((p) =>
             p.tags.googlePhotoName ? { ...p, images: [] as string[] } : p,
           ),
-          opts.googleApiKey,
+          opts?.googleApiKey,
         )
       }
       cacheHit = list
@@ -543,18 +552,25 @@ export async function fetchNearbyExplore(
 
   try {
     if (useGoogle) {
-      const gKey = opts?.googleApiKey?.trim() || ''
-      const places = await fetchGoogleNearbyViaProxy(anchor, {
-        apiKey: gKey,
-        radiusM,
-        maxResultCount: limit,
-        signal: opts?.signal,
-      })
-      if (opts?.signal?.aborted) return cacheHit ?? []
-      const withPhotos = attachGoogleListPhotos(places, gKey)
-      const fresh = withDistances(withPhotos)
-      void setCached(key, fresh)
-      return fresh
+      try {
+        const gKey = opts?.googleApiKey?.trim() || undefined
+        const places = await fetchGoogleNearbyViaProxy(anchor, {
+          apiKey: gKey,
+          radiusM,
+          maxResultCount: limit,
+          signal: opts?.signal,
+        })
+        if (opts?.signal?.aborted) return cacheHit ?? []
+        const withPhotos = attachGoogleListPhotos(places, gKey)
+        const fresh = withDistances(withPhotos)
+        void setCached(key, fresh)
+        logClientInfo('explore', `Google Nearby ok — ${fresh.length} places`)
+        return fresh
+      } catch (err) {
+        logClientError('explore-google', err)
+        logClientInfo('explore', 'Google Nearby failed — falling back to OSM')
+        // fall through to Overpass
+      }
     }
 
     const elements = await queryOverpass(
@@ -576,7 +592,10 @@ export async function fetchNearbyExplore(
     const enriched = await enrichImages(trimmed, opts?.signal)
     if (opts?.signal?.aborted) return cacheHit ?? enriched
     const fresh = withDistances(enriched)
-    void setCached(key, fresh)
+    // Always store OSM under the osm key (never poison the google cache after fallback).
+    const osmKey = cacheKey(anchor.lat, anchor.lon, radiusM, 'osm')
+    void setCached(osmKey, fresh)
+    logClientInfo('explore', `OSM ok — ${fresh.length} places`)
     return fresh
   } catch (err) {
     if (cacheHit) return cacheHit

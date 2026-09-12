@@ -1,22 +1,11 @@
-/** Google Maps / Places key resolution: Data override → Vercel/env default → none. */
+/** Google Maps key: Data-panel override only (never bake VITE_ secrets into the client). */
 
 import { sanitizeSecretInput } from './security'
 
-/** Build-time default from Vercel / `.env` (`VITE_GOOGLE_MAPS_API_KEY`). */
-export function envGoogleMapsApiKey(): string {
-  return sanitizeSecretInput(String(import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? ''))
-}
-
 /**
- * Effective key for Map Tiles / Places.
- * Non-empty Data override wins; empty override falls back to the deploy env default.
+ * Effective client-side key (Map Tiles / optional photo URLs).
+ * Deploy default lives server-side as `GOOGLE_MAPS_API_KEY` and is used via `/api/*`.
  */
 export function resolveGoogleMapsApiKey(overrideFromData: string | null | undefined): string {
-  const override = sanitizeSecretInput(overrideFromData ?? '')
-  if (override) return override
-  return envGoogleMapsApiKey()
-}
-
-export function hasEnvGoogleMapsApiKey(): boolean {
-  return envGoogleMapsApiKey().length > 0
+  return sanitizeSecretInput(overrideFromData ?? '')
 }

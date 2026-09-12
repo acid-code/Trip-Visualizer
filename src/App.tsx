@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { TripItem, TripRecord } from './domain/types'
 import { ITEM_TYPES } from './domain/types'
 import {
@@ -85,10 +85,14 @@ import {
   publicErrorMessage,
   sanitizeSecretInput,
 } from './data/security'
+import { resolveGoogleMapsApiKey } from './data/googleKey'
 import {
-  hasEnvGoogleMapsApiKey,
-  resolveGoogleMapsApiKey,
-} from './data/googleKey'
+  clearClientLogs,
+  formatClientLogsText,
+  getClientLogsSnapshot,
+  logClientInfo,
+  subscribeClientLogs,
+} from './data/clientLogs'
 import { sanitizeTripRecord } from './domain/types'
 import { useIsNarrow } from './ui/useIsNarrow'
 
@@ -110,7 +114,10 @@ export default function App() {
   const [mapStack, setMapStack] = useState<MapStack>('esri')
   const [googleKey, setGoogleKey] = useState('')
   const [ionToken, setIonToken] = useState('')
+  /** Data-panel override only — deploy key stays on the server. */
   const effectiveGoogleKey = resolveGoogleMapsApiKey(googleKey)
+  const [serverPlacesConfigured, setServerPlacesConfigured] = useState(false)
+  const placesEnabled = Boolean(effectiveGoogleKey) || serverPlacesConfigured
   const [walkApp, setWalkApp] = useState<WalkAppPref>('maps')
   const [status, setStatus] = useState('')
   const [overviewToken, setOverviewToken] = useState(0)
@@ -223,6 +230,31 @@ export default function App() {
       }
     })()
   }, [refresh])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch('/api/maps-status', { cache: 'no-store' })
+        if (!res.ok) {
+          logClientError('maps-status', `HTTP ${res.status}`)
+          setServerPlacesConfigured(false)
+          return
+        }
+        const data = (await res.json()) as { placesConfigured?: boolean }
+        const ok = Boolean(data.placesConfigured)
+        setServerPlacesConfigured(ok)
+        logClientInfo(
+          'maps-status',
+          ok
+            ? 'Server GOOGLE_MAPS_API_KEY is configured — Explore will use Google Places'
+            : 'No server GOOGLE_MAPS_API_KEY — Explore uses OSM unless you paste a key in Data',
+        )
+      } catch (err) {
+        setServerPlacesConfigured(false)
+        logClientError('maps-status', err)
+      }
+    })()
+  }, [])
 
   async function markTipsSeen(ids: string[]) {
     if (!ids.length) return
@@ -562,6 +594,7 @@ export default function App() {
             ? { lat: selected.lat!, lon: selected.lon!, radiusM: 80_000 }
             : undefined
       const place = await lookupPlace(query, {
+        useGooglePlaces: placesEnabled,
         googleApiKey: effectiveGoogleKey || undefined,
         bias,
       })
@@ -922,6 +955,7 @@ export default function App() {
           { lat: lat!, lon: lon! },
           {
             signal: ac.signal,
+            useGooglePlaces: placesEnabled,
             googleApiKey: effectiveGoogleKey || undefined,
             onCacheHit: (cached) => {
               if (ac.signal.aborted) return
@@ -949,10 +983,9 @@ export default function App() {
   }
 
   function selectExplorePlace(place: ExplorePlace) {
-    const hydrated =
-      effectiveGoogleKey && place.tags.googlePhotoName
-        ? hydrateGooglePlacePhoto(place, effectiveGoogleKey)
-        : place
+    const hydrated = place.tags.googlePhotoName
+      ? hydrateGooglePlacePhoto(place, effectiveGoogleKey || undefined)
+      : place
     setExploreFocusId(hydrated.id)
     setExploreDetail(hydrated)
     setExplorePlaces((prev) =>
@@ -1355,7 +1388,7 @@ export default function App() {
                     active={active}
                     mapStack={mapStack}
                     googleKey={googleKey}
-                    googleKeyHasEnvDefault={hasEnvGoogleMapsApiKey()}
+                    serverPlacesConfigured={serverPlacesConfigured}
                     ionToken={ionToken}
                     walkApp={walkApp}
                     enrichProgress={enrichProgress}
@@ -1524,7 +1557,7 @@ export default function App() {
                     active={active}
                     mapStack={mapStack}
                     googleKey={googleKey}
-                    googleKeyHasEnvDefault={hasEnvGoogleMapsApiKey()}
+                    serverPlacesConfigured={serverPlacesConfigured}
                     ionToken={ionToken}
                     walkApp={walkApp}
                     enrichProgress={enrichProgress}
@@ -1705,7 +1738,7 @@ function DataPanel({
   active,
   mapStack,
   googleKey,
-  googleKeyHasEnvDefault,
+  serverPlacesConfigured,
   ionToken,
   walkApp,
   enrichProgress,
@@ -1731,7 +1764,7 @@ function DataPanel({
   active: TripRecord | null
   mapStack: MapStack
   googleKey: string
-  googleKeyHasEnvDefault: boolean
+  serverPlacesConfigured: boolean
   ionToken: string
   walkApp: WalkAppPref
   enrichProgress: string | null
@@ -1891,15 +1924,15 @@ function DataPanel({
             onChange={(e) => setGoogleKey(sanitizeSecretInput(e.target.value))}
             onBlur={() => void setSetting('googleMapsKey', googleKey)}
             placeholder={
-              googleKeyHasEnvDefault
-                ? 'Override deploy default…'
+              serverPlacesConfigured
+                ? 'Override server key…'
                 : 'Paste key…'
             }
           />
           <span className="mt-1 block text-[10px] text-stone-400">
-            {googleKeyHasEnvDefault
-              ? 'Leave blank to use the site default (Vercel env). Paste your own key here to override (e.g. if the shared free quota is used up). Saved only in this browser’s IndexedDB.'
-              : 'Optional — for Places / photoreal 3D. Stored only in this browser’s IndexedDB. Or set VITE_GOOGLE_MAPS_API_KEY on Vercel as the site default.'}
+            {serverPlacesConfigured
+              ? 'Leave blank to use the server key (GOOGLE_MAPS_API_KEY on Vercel). Paste your own here to override — saved only in this browser. Photoreal 3D needs a key here (browser Map Tiles).'
+              : 'Optional override for Places. Prefer setting GOOGLE_MAPS_API_KEY on Vercel (server-only, not VITE_). Photoreal 3D tiles need a key pasted here.'}
           </span>
         </label>
         <label className="mt-3 block text-xs text-stone-500">
@@ -2024,6 +2057,8 @@ function DataPanel({
           </p>
         </div>
       ) : null}
+
+      <ClientLogsBlob />
     </>
   )
 }
@@ -2036,6 +2071,51 @@ const btn =
   'cursor-pointer rounded-full border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700 shadow-sm'
 const btnPrimary =
   'rounded-full bg-[var(--coral)] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50'
+
+function ClientLogsBlob() {
+  const logs = useSyncExternalStore(
+    subscribeClientLogs,
+    getClientLogsSnapshot,
+    () => [] as ReturnType<typeof getClientLogsSnapshot>,
+  )
+  const text = formatClientLogsText(logs)
+
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-stone-50/80 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+          Client logs
+        </div>
+        <div className="flex gap-1">
+          <button
+            type="button"
+            className={btn}
+            disabled={!logs.length}
+            onClick={() => {
+              void navigator.clipboard?.writeText(text)
+            }}
+          >
+            Copy
+          </button>
+          <button
+            type="button"
+            className={btn}
+            disabled={!logs.length}
+            onClick={() => clearClientLogs()}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+      <p className="mt-1 text-[10px] text-stone-400">
+        Explore / Places / maps-status errors land here (secrets redacted).
+      </p>
+      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-stone-200 bg-white p-2 font-mono text-[10px] leading-snug text-stone-700">
+        {text || 'No log lines yet.'}
+      </pre>
+    </div>
+  )
+}
 
 function slug(name: string) {
   return name

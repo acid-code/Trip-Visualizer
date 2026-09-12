@@ -3,8 +3,7 @@
  * for this local-first SPA (no multi-tenant backend).
  */
 
-const SECRET_HINT =
-  /(?:api[_-]?key|token|secret|password|authorization|bearer|eyJ[A-Za-z0-9_-]{10,}|AIza[0-9A-Za-z_-]{10,})/i
+import { appendClientLog } from './clientLogs'
 
 /** Setting keys the UI may write — deny everything else (allowlist). */
 export const ALLOWED_SETTING_KEYS = [
@@ -70,22 +69,9 @@ export function publicErrorMessage(
   return fallback
 }
 
-/** Dev/console logging only — strip tokens / key-like substrings. */
+/** Always record in the Data-panel log blob; also console in DEV. */
 export function logClientError(context: string, err: unknown): void {
-  if (!import.meta.env.DEV) return
-  const msg =
-    err instanceof Error
-      ? redactSecrets(err.message)
-      : redactSecrets(String(err))
-  console.error(`[${context}]`, msg)
-}
-
-function redactSecrets(text: string): string {
-  return text
-    .split(/(\s+)/)
-    .map((part) => (SECRET_HINT.test(part) ? '[redacted]' : part))
-    .join('')
-    .slice(0, 500)
+  appendClientLog('error', context, err)
 }
 
 /** Excel / import size limits (DoS / memory). */

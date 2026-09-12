@@ -1,9 +1,11 @@
 /**
  * Proxy for Places API (New) Text Search — map search bar pin drop.
  * One call per Enter; Essentials field mask (name / address / location).
+ * Uses server GOOGLE_MAPS_API_KEY; client may pass apiKey only as a Data-panel override.
  */
 
 import { searchTextPlaceGoogle } from '../src/data/placesGoogle'
+import { serverGoogleMapsApiKey } from './_googleKey'
 
 export const config = {
   maxDuration: 20,
@@ -65,12 +67,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     unknown
   >
   const query = String(body.query || '').trim()
-  const apiKey = String(
-    body.apiKey ||
-      process.env.GOOGLE_MAPS_API_KEY ||
-      process.env.VITE_GOOGLE_MAPS_API_KEY ||
-      '',
-  ).trim()
+  const apiKey = serverGoogleMapsApiKey(body.apiKey)
   const biasRaw = body.bias as { lat?: number; lon?: number; radiusM?: number } | undefined
   const bias =
     biasRaw &&
