@@ -465,6 +465,7 @@ function addConnectorRoute(
     id: string
     mode: 'drive' | 'walk'
     coords: [number, number][]
+    fromItemId?: string
     toItemId?: string
     date?: string
     sequenceInDay?: number
@@ -510,6 +511,7 @@ export function syncTripEntities(
     id: string
     mode: 'drive' | 'walk'
     coords: [number, number][]
+    fromItemId?: string
     toItemId?: string
     date?: string
     sequenceInDay?: number
