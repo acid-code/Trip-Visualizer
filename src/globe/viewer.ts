@@ -14,6 +14,7 @@ import {
   LabelStyle,
   NearFarScalar,
   OpenStreetMapImageryProvider,
+  PinBuilder,
   UrlTemplateImageryProvider,
   VerticalOrigin,
   Viewer,
@@ -28,6 +29,7 @@ import {
   EllipsoidGeodesic,
   Matrix4,
   Transforms,
+  type EntityCluster,
 } from 'cesium'
 import type { TripItem, TripMeta } from '../domain/types'
 import { dayColor, dayColorByIndex } from '../data/dayTheme'
@@ -87,6 +89,7 @@ export async function createTripViewer(
   viewer.camera.percentageChanged = 0.08
 
   configureTouchCameraControls(viewer)
+  configureEntityClustering(viewer)
 
   // Known-good starting view (France / W Europe) before trip overview flies
   viewer.camera.setView({
@@ -167,6 +170,54 @@ function configureTouchCameraControls(viewer: Viewer) {
   }
   canvas.addEventListener('touchstart', blockBrowserGesture, { passive: false })
   canvas.addEventListener('touchmove', blockBrowserGesture, { passive: false })
+}
+
+/**
+ * Merge overlapping step pins when zoomed out so labels don't stack on top of each other.
+ * Clustering lives on the default data source (viewer.entities is only the collection).
+ */
+function configureEntityClustering(viewer: Viewer) {
+  const cluster: EntityCluster = viewer.dataSourceDisplay.defaultDataSource.clustering
+  cluster.enabled = true
+  cluster.pixelRange = 56
+  cluster.minimumClusterSize = 2
+  cluster.clusterBillboards = true
+  cluster.clusterLabels = true
+  cluster.clusterPoints = true
+
+  const pinBuilder = new PinBuilder()
+  const clusterIcon = pinBuilder
+    .fromColor(Color.fromCssColorString('#ff6b4a'), 48)
+    .toDataURL()
+
+  const onCluster: EntityCluster.newClusterCallback = (clusteredEntities, clusterObj) => {
+    // Count real step pins (A/B endpoints), not route mid-labels
+    const pinIds = new Set<string>()
+    for (const e of clusteredEntities) {
+      const id = String(e.id)
+      if (!id.startsWith('trip:')) continue
+      if (id.endsWith(':route') || id.endsWith(':arc') || id.endsWith(':seq')) continue
+      pinIds.add(id)
+    }
+    const n = pinIds.size || clusteredEntities.length
+    clusterObj.label.show = true
+    clusterObj.label.text = String(n)
+    clusterObj.label.font = '700 14px "DM Sans", Segoe UI, sans-serif'
+    clusterObj.label.fillColor = Color.WHITE
+    clusterObj.label.outlineColor = Color.fromCssColorString('#9a3412')
+    clusterObj.label.outlineWidth = 3
+    clusterObj.label.style = LabelStyle.FILL_AND_OUTLINE
+    clusterObj.label.verticalOrigin = VerticalOrigin.CENTER
+    clusterObj.label.horizontalOrigin = HorizontalOrigin.CENTER
+    clusterObj.label.disableDepthTestDistance = Number.POSITIVE_INFINITY
+    clusterObj.label.pixelOffset = new Cartesian2(0, 0)
+    clusterObj.billboard.show = true
+    clusterObj.billboard.image = clusterIcon
+    clusterObj.billboard.verticalOrigin = VerticalOrigin.CENTER
+    clusterObj.billboard.disableDepthTestDistance = Number.POSITIVE_INFINITY
+    clusterObj.billboard.id = clusterObj.label.id
+  }
+  cluster.clusterEvent.addEventListener(onCluster)
 }
 
 export async function applyMapStack(
@@ -330,7 +381,7 @@ function addSeqLabel(
       backgroundColor: color.withAlpha(0.9),
       backgroundPadding: new Cartesian2(6, 4),
       show: true,
-      distanceDisplayCondition: new DistanceDisplayCondition(0.0, 5e5),
+      distanceDisplayCondition: new DistanceDisplayCondition(0.0, 1.2e5),
       // Prefer picking pins over badges
       scale: 0.95,
     },
