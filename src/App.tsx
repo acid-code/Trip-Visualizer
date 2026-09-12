@@ -1489,12 +1489,12 @@ export default function App() {
               className={`mobile-panel relative mx-2 mb-1 flex flex-col overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
                 exploreOpen
                   ? exploreDetail
-                    ? 'max-h-[52vh]'
-                    : 'max-h-[34vh]'
+                    ? 'h-[min(52vh,22rem)]'
+                    : 'h-[min(34vh,15.5rem)]'
                   : navTab === 'timeline'
                     ? 'max-h-[38vh]'
-                    : navTab === 'settings'
-                      ? 'max-h-[72vh]'
+                    : navTab === 'settings' || navTab === 'charts'
+                      ? 'h-[min(72vh,32rem)]'
                       : 'max-h-[52vh]'
               }`}
             >
@@ -1540,10 +1540,15 @@ export default function App() {
               ) : null}
 
               {!exploreOpen && navTab === 'charts' && active ? (
-                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] px-2 pb-2 pt-2">
+                <div
+                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] px-2 pb-2 pt-2"
+                  onTouchStart={(e) => e.stopPropagation()}
+                  onTouchMove={(e) => e.stopPropagation()}
+                >
                   <ChartsPanel
                     meta={active.meta}
                     items={active.items}
+                    ownScroll={false}
                     onHomeCurrencyChange={(code) =>
                       void updateActive((t) => ({
                         ...t,
@@ -1555,7 +1560,11 @@ export default function App() {
               ) : null}
 
               {!exploreOpen && navTab === 'settings' ? (
-                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] px-3 pb-3 pt-2 text-sm text-stone-800">
+                <div
+                  className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] px-3 pb-3 pt-2 text-sm text-stone-800"
+                  onTouchStart={(e) => e.stopPropagation()}
+                  onTouchMove={(e) => e.stopPropagation()}
+                >
                   <DataPanel
                     active={active}
                     mapStack={mapStack}

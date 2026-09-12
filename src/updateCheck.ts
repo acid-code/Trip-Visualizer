@@ -4,7 +4,9 @@ import { logClientInfo } from './data/clientLogs'
 /** Injected at build time — must match `/version.json` `buildId`. */
 declare const __APP_BUILD_ID__: string
 
-const POLL_MS = 60 * 1000
+/** Quiet poll — frequent checks + SW apply caused full-app reload loops. */
+const POLL_MS = 5 * 60 * 1000
+const UPDATE_ATTEMPTED_KEY = 'trip-worker-update-attempted'
 
 /** Nuke service workers + Cache Storage, then reload (unsticks stubborn PWAs). */
 export async function forceAppRefresh(): Promise<void> {
@@ -31,16 +33,14 @@ export async function forceAppRefresh(): Promise<void> {
 }
 
 /**
- * Keep clients on the latest deploy:
- * 1) Service worker autoUpdate + periodic `registration.update()`
- * 2) Poll `/version.json` (never cached) and reload when buildId changes
+ * Keep clients on the latest deploy without reload loops:
+ * - Poll `/version.json` every few minutes
+ * - On mismatch, unregister SW + clear caches once per buildId (session)
+ * - SW `registration.update()` only in the background — no auto page reload
  */
 export function startUpdateChecks() {
-  const updateSW = registerSW({
+  registerSW({
     immediate: true,
-    onNeedRefresh() {
-      void updateSW(true)
-    },
     onRegisteredSW(_url, registration) {
       if (!registration) return
       const tick = () => {
@@ -53,42 +53,39 @@ export function startUpdateChecks() {
     },
   })
 
-  let reloading = false
-  const reloadToNewBuild = async () => {
-    if (reloading) return
-    reloading = true
-    logClientInfo('update', 'New build detected — reloading')
-    try {
-      await updateSW(true)
-    } catch {
-      // No SW / already applying — hard bust instead.
-    }
-    try {
-      if ('caches' in window) {
-        const keys = await caches.keys()
-        await Promise.all(keys.map((k) => caches.delete(k)))
-      }
-    } catch {
-      /* ignore */
-    }
-    window.location.reload()
-  }
-
   const checkVersion = async () => {
     try {
       const res = await fetch(`/version.json?_=${Date.now()}`, { cache: 'no-store' })
       if (!res.ok) return
       const data = (await res.json()) as { buildId?: string }
-      if (data.buildId && data.buildId !== __APP_BUILD_ID__) {
-        await reloadToNewBuild()
+      const remote = data.buildId
+      if (!remote) return
+
+      if (remote === __APP_BUILD_ID__) {
+        try {
+          sessionStorage.removeItem(UPDATE_ATTEMPTED_KEY)
+        } catch {
+          /* ignore */
+        }
+        return
       }
+
+      // Already tried this remote id this tab — avoid restart loops with a sticky SW.
+      try {
+        if (sessionStorage.getItem(UPDATE_ATTEMPTED_KEY) === remote) return
+        sessionStorage.setItem(UPDATE_ATTEMPTED_KEY, remote)
+      } catch {
+        /* private mode — still attempt once via reloading guard below */
+      }
+
+      logClientInfo('update', 'New build detected — clearing SW and reloading once')
+      await forceAppRefresh()
     } catch {
       // Offline or first paint before version.json exists — ignore.
     }
   }
 
-  // First check soon — don't wait 2 minutes when already stale.
-  window.setTimeout(() => void checkVersion(), 2_000)
+  window.setTimeout(() => void checkVersion(), 8_000)
   window.setInterval(() => void checkVersion(), POLL_MS)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void checkVersion()

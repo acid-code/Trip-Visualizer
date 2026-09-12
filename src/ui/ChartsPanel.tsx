@@ -8,9 +8,16 @@ type Props = {
   meta: TripMeta
   items: TripItem[]
   onHomeCurrencyChange?: (code: string) => void
+  /** When false, parent owns scrolling (needed on phone sheets). Default true. */
+  ownScroll?: boolean
 }
 
-export function ChartsPanel({ meta, items, onHomeCurrencyChange }: Props) {
+export function ChartsPanel({
+  meta,
+  items,
+  onHomeCurrencyChange,
+  ownScroll = true,
+}: Props) {
   const [rates, setRates] = useState<FxRates | null>(null)
 
   useEffect(() => {
@@ -29,7 +36,13 @@ export function ChartsPanel({ meta, items, onHomeCurrencyChange }: Props) {
   const spend = rates ? spendSummary(items, meta.homeCurrency, rates) : null
 
   return (
-    <div className="h-full min-h-0 space-y-3 overflow-y-auto overscroll-contain pb-8 text-stone-800">
+    <div
+      className={
+        ownScroll
+          ? 'h-full min-h-0 space-y-3 overflow-y-auto overscroll-contain pb-8 text-stone-800'
+          : 'space-y-3 pb-6 text-stone-800'
+      }
+    >
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-stone-200 bg-white px-3 py-2 shadow-sm">
         <div className="text-xs text-stone-500">
           Totals convert into your home currency (ECB rates
