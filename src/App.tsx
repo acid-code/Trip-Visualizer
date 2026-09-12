@@ -1538,8 +1538,8 @@ export default function App() {
               className={`mobile-panel relative mx-2 mb-1 flex flex-col overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
                 exploreOpen
                   ? exploreDetail
-                    ? 'h-[min(52vh,22rem)]'
-                    : 'h-[min(34vh,15.5rem)]'
+                    ? 'h-[min(62vh,26.5rem)]'
+                    : 'h-[min(41vh,18.5rem)]'
                   : navTab === 'timeline'
                     ? 'max-h-[38vh]'
                     : navTab === 'settings' || navTab === 'charts'
@@ -1550,7 +1550,7 @@ export default function App() {
               {exploreOpen ? (
                 <div
                   className={
-                    exploreDetail ? 'h-[min(52vh,22rem)]' : 'h-[min(34vh,15.5rem)]'
+                    exploreDetail ? 'h-[min(62vh,26.5rem)]' : 'h-[min(41vh,18.5rem)]'
                   }
                   onTouchStart={(e) => e.stopPropagation()}
                   onTouchMove={(e) => e.stopPropagation()}

@@ -121,8 +121,8 @@ export function ExploreSheet({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-gradient-to-b from-stone-50 to-amber-50/40 text-stone-800">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-amber-100/80 px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2 border-b border-amber-100/80 px-3 py-2">
+        <div className="flex min-w-0 shrink-0 items-center gap-2">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700/80">
               Nearby
@@ -132,7 +132,7 @@ export function ExploreSheet({
           {anchor && isValidAnchor(anchor) ? (
             <button
               type="button"
-              className="mt-2 rounded-full bg-[#1a73e8] px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white shadow-sm hover:bg-[#1557b0]"
+              className="rounded-full bg-[#1a73e8] px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white shadow-sm hover:bg-[#1557b0]"
               title="Open this area in Google Maps"
               onClick={() =>
                 openExternalUrl(mapsNearbyExploreUrl(anchor, anchor.label))
@@ -142,17 +142,38 @@ export function ExploreSheet({
             </button>
           ) : null}
         </div>
+
+        <div className="mx-auto inline-flex shrink-0 rounded-lg border border-stone-200/90 bg-white/90 p-px shadow-sm">
+          {SORT_OPTIONS.map((opt) => {
+            const active = sort === opt.id
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                className={`rounded-md px-1.5 py-0.5 text-[9px] font-semibold tracking-wide transition-colors duration-150 ${
+                  active
+                    ? 'bg-stone-800 text-white'
+                    : 'text-stone-500 hover:text-stone-800'
+                }`}
+                onClick={() => setSort(opt.id)}
+              >
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
+
         <button
           type="button"
-          className="rounded-full border border-stone-200 bg-white px-3 py-1 text-xs text-stone-600 shadow-sm"
+          className="shrink-0 rounded-full border border-stone-200 bg-white px-3 py-1 text-xs text-stone-600 shadow-sm"
           onClick={onClose}
         >
           Close
         </button>
       </div>
 
-      <div className="shrink-0 space-y-2 border-b border-amber-100/60 px-3 py-2.5">
-        <div className="flex gap-1.5 overflow-x-auto overscroll-x-contain pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="flex shrink-0 items-center gap-2 border-b border-amber-100/60 px-3 py-2">
+        <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {CATEGORY_CHIPS.map((chip) => {
             const active = typeFilter === chip.id
             const n = counts[chip.id] ?? 0
@@ -180,31 +201,9 @@ export function ExploreSheet({
             )
           })}
         </div>
-
-        <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-xl border border-stone-200/90 bg-white/80 p-0.5 shadow-sm">
-            {SORT_OPTIONS.map((opt) => {
-              const active = sort === opt.id
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  className={`rounded-lg px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors duration-150 ${
-                    active
-                      ? 'bg-stone-800 text-white'
-                      : 'text-stone-500 hover:text-stone-800'
-                  }`}
-                  onClick={() => setSort(opt.id)}
-                >
-                  {opt.label}
-                </button>
-              )
-            })}
-          </div>
-          <span className="ml-auto text-[10px] tabular-nums text-stone-400">
-            {busy ? 'Loading…' : `${filtered.length} · ${exploreCategoryLabel(typeFilter)}`}
-          </span>
-        </div>
+        <span className="shrink-0 text-[10px] tabular-nums text-stone-400">
+          {busy ? 'Loading…' : filtered.length}
+        </span>
       </div>
 
       <div
