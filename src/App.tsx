@@ -406,7 +406,7 @@ export default function App() {
       setStatus(
         publicErrorMessage(
           err,
-          'Import failed — use a Trip Tracker Excel with a Schedule sheet',
+          'Import failed — use a Trip Tracker Excel with Steps/Hotels (or legacy Schedule)',
         ),
       )
     }
@@ -2409,7 +2409,8 @@ function DataPanel({
             }
           />
           <p className="mt-2 text-xs text-stone-500">
-            Types: {ITEM_TYPES.join(', ')}. Schedule-first Excel uses Trip + Schedule + Legend
+            Types: {ITEM_TYPES.join(', ')}. Excel uses Trip + Steps + Hotels + Cash (Cash is
+            export-only). Older Schedule workbooks still import.
             sheets.
           </p>
         </div>

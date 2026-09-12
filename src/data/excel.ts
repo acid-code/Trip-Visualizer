@@ -2,7 +2,6 @@ import * as XLSX from 'xlsx'
 import {
   ITEM_STATUSES,
   ITEM_TYPES,
-  SCHEDULE_HEADERS,
   type ItemStatus,
   type ItemType,
   type TripItem,
@@ -12,18 +11,102 @@ import {
 import { createId, nowIso, sortItems } from './db'
 import { normalizeCurrency } from './fx'
 import { MAX_SCHEDULE_ROWS } from './security'
-import { parseLat, parseLon, parseNonNegativeNumber, sanitizeEndDate } from './validate'
+import { parseLat, parseLon, sanitizeEndDate } from './validate'
 import { sanitizeTripItem, sanitizeTripMeta } from '../domain/types'
+
+/** Human Steps sheet columns (export order). */
+const STEPS_COLS = [
+  'Date',
+  'Start',
+  'End',
+  'Type',
+  'Title',
+  'Place',
+  'City',
+  'From',
+  'To',
+  'Confirm',
+  'Cost',
+  'Currency',
+  'Status',
+  'Notes',
+  'URL',
+  'Tags',
+  'Lat',
+  'Lon',
+  'Lat to',
+  'Lon to',
+] as const
+
+const STEPS_HINTS = [
+  'Required · YYYY-MM-DD',
+  'Optional · HH:MM (24h)',
+  'Optional · HH:MM (24h)',
+  'Required · flight, train, bus, ferry, drive, sight, restaurant, activity, city, note, other',
+  'Required · free text',
+  'Optional · free text',
+  'Optional · free text',
+  'Optional · place or IATA',
+  'Optional · place or IATA',
+  'Optional · booking ref',
+  'Optional · number ≥ 0',
+  'Optional · 3-letter code (EUR)',
+  'Optional · planned / booked / done / cancelled',
+  'Optional · free text',
+  'Optional · https://…',
+  'Optional · comma-separated',
+  'Optional · decimal degrees',
+  'Optional · decimal degrees',
+  'Optional · decimal degrees',
+  'Optional · decimal degrees',
+] as const
+
+const HOTELS_COLS = [
+  'Check-in',
+  'Check-out',
+  'Hotel',
+  'Place',
+  'City',
+  'Confirm',
+  'Cost',
+  'Currency',
+  'Status',
+  'Notes',
+  'URL',
+  'Lat',
+  'Lon',
+] as const
+
+const HOTELS_HINTS = [
+  'Required · YYYY-MM-DD',
+  'Preferred · YYYY-MM-DD (defaults to check-in)',
+  'Required · free text',
+  'Optional · free text',
+  'Optional · free text',
+  'Optional · booking ref',
+  'Optional · number ≥ 0',
+  'Optional · 3-letter code (EUR)',
+  'Optional · planned / booked / done / cancelled',
+  'Optional · free text',
+  'Optional · https://…',
+  'Optional · decimal degrees',
+  'Optional · decimal degrees',
+] as const
 
 const HEADER_ALIASES: Record<string, string> = {
   id: 'id',
   date: 'date',
   end_date: 'end_date',
   enddate: 'end_date',
+  check_in: 'date',
+  checkin: 'date',
+  check_out: 'end_date',
+  checkout: 'end_date',
   start: 'start',
   end: 'end',
   type: 'type',
   title: 'title',
+  hotel: 'title',
   place: 'place',
   city: 'city',
   from: 'from',
@@ -49,11 +132,39 @@ const HEADER_ALIASES: Record<string, string> = {
   updated_at: 'updated_at',
 }
 
+const TYPE_SYNONYMS: Record<string, ItemType> = {
+  food: 'restaurant',
+  meal: 'restaurant',
+  meals: 'restaurant',
+  cafe: 'restaurant',
+  coffee: 'restaurant',
+  sightseeing: 'sight',
+  sights: 'sight',
+  museum: 'sight',
+  attraction: 'sight',
+  car: 'drive',
+  driving: 'drive',
+  road: 'drive',
+  lodging: 'hotel',
+  accommodation: 'hotel',
+  stay: 'hotel',
+  drink: 'restaurant',
+  drinks: 'restaurant',
+  nature: 'activity',
+  park: 'activity',
+  walk: 'activity',
+  hiking: 'activity',
+}
+
 function normalizeHeader(h: unknown): string {
   return String(h ?? '')
     .trim()
     .toLowerCase()
+    .replace(/\*+/g, '')
+    .replace(/[·•].*$/, '') // drop " · format" if pasted into header
     .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
 }
 
 function parseTags(value: unknown): string[] {
@@ -64,48 +175,137 @@ function parseTags(value: unknown): string[] {
     .filter(Boolean)
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+function isoFromYmd(y: number, m: number, d: number): string {
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return ''
+  if (m < 1 || m > 12 || d < 1 || d > 31) return ''
+  const s = `${y}-${pad2(m)}-${pad2(d)}`
+  const dt = new Date(s + 'T12:00:00')
+  if (Number.isNaN(dt.getTime()) || dt.toISOString().slice(0, 10) !== s) return ''
+  return s
+}
+
+/** Lenient date → YYYY-MM-DD (preferred ISO; falls back to common user formats). */
 function excelDateToIso(value: unknown): string {
   if (value === null || value === undefined || value === '') return ''
-  if (typeof value === 'number') {
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10)
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
     const parsed = XLSX.SSF.parse_date_code(value)
-    if (!parsed) return ''
-    const m = String(parsed.m).padStart(2, '0')
-    const d = String(parsed.d).padStart(2, '0')
-    return `${parsed.y}-${m}-${d}`
+    if (parsed) return isoFromYmd(parsed.y, parsed.m, parsed.d)
   }
+
   const s = String(value).trim()
+  if (!s) return ''
+
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-    const dt = new Date(s + 'T12:00:00')
-    if (!Number.isNaN(dt.getTime()) && dt.toISOString().slice(0, 10) === s) return s
-    return ''
+    return isoFromYmd(Number(s.slice(0, 4)), Number(s.slice(5, 7)), Number(s.slice(8, 10)))
   }
+
+  // YYYY/MM/DD
+  let m = s.match(/^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})$/)
+  if (m) return isoFromYmd(Number(m[1]), Number(m[2]), Number(m[3]))
+
+  // D/M/Y or M/D/Y
+  m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/)
+  if (m) {
+    let a = Number(m[1])
+    let b = Number(m[2])
+    let y = Number(m[3])
+    if (y < 100) y += y >= 70 ? 1900 : 2000
+    if (a > 12 && b <= 12) return isoFromYmd(y, b, a) // DMY
+    if (b > 12 && a <= 12) return isoFromYmd(y, a, b) // MDY
+    // ambiguous — try DMY then MDY
+    return isoFromYmd(y, b, a) || isoFromYmd(y, a, b)
+  }
+
   const dt = new Date(s)
   if (!Number.isNaN(dt.getTime())) return dt.toISOString().slice(0, 10)
   return ''
 }
 
+/** Lenient time → HH:MM. */
 function excelTimeToHm(value: unknown): string {
   if (value === null || value === undefined || value === '') return ''
+
   if (typeof value === 'number' && Number.isFinite(value)) {
-    const totalMinutes = Math.round(value * 24 * 60)
-    const hh = String(Math.floor(totalMinutes / 60) % 24).padStart(2, '0')
-    const mm = String(totalMinutes % 60).padStart(2, '0')
-    return `${hh}:${mm}`
+    // Excel time fraction (or datetime serial — use fractional day)
+    let frac = value
+    if (value >= 1) frac = value % 1
+    const totalMinutes = Math.round(frac * 24 * 60)
+    const hh = Math.floor(totalMinutes / 60) % 24
+    const mm = totalMinutes % 60
+    return `${pad2(hh)}:${pad2(mm)}`
   }
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${pad2(value.getHours())}:${pad2(value.getMinutes())}`
+  }
+
   const s = String(value).trim()
-  const m = s.match(/^(\d{1,2}):(\d{2})/)
+  if (!s) return ''
+
+  let m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*$/)
   if (m) {
     const h = Number(m[1])
     const min = Number(m[2])
     if (h > 23 || min > 59) return ''
-    return `${m[1].padStart(2, '0')}:${m[2]}`
+    return `${pad2(h)}:${pad2(min)}`
   }
+
+  m = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)\.?$/i)
+  if (m) {
+    let h = Number(m[1])
+    const min = Number(m[2] || 0)
+    const ap = m[3]!.toLowerCase()
+    if (min > 59 || h < 1 || h > 12) return ''
+    if (ap === 'pm' && h < 12) h += 12
+    if (ap === 'am' && h === 12) h = 0
+    return `${pad2(h)}:${pad2(min)}`
+  }
+
   return ''
 }
 
+function parseCostLoose(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'number' && Number.isFinite(value)) return value < 0 ? null : value
+  const s = String(value)
+    .trim()
+    .replace(/\s/g, '')
+    .replace(/[€$£¥₪]/g, '')
+    .replace(/,/g, '.')
+  if (!s) return null
+  const n = Number(s)
+  if (!Number.isFinite(n) || n < 0) return null
+  return n
+}
+
+function normalizeCurrencyLoose(value: unknown, fallback: string): string {
+  const raw = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  if (!raw) return normalizeCurrency(fallback)
+  if (raw === 'euro' || raw === 'euros' || raw === '€') return 'EUR'
+  if (raw === 'dollar' || raw === 'dollars' || raw === 'usd' || raw === '$') return 'USD'
+  if (raw === 'pound' || raw === 'pounds' || raw === 'gbp' || raw === '£') return 'GBP'
+  if (raw === 'shekel' || raw === 'shekels' || raw === 'ils' || raw === 'nis') return 'ILS'
+  return normalizeCurrency(raw.toUpperCase(), fallback)
+}
+
 function asType(value: unknown): ItemType {
-  const t = String(value ?? 'other').trim().toLowerCase()
-  return (ITEM_TYPES as readonly string[]).includes(t) ? (t as ItemType) : 'other'
+  const t = String(value ?? 'other')
+    .trim()
+    .toLowerCase()
+  if ((ITEM_TYPES as readonly string[]).includes(t)) return t as ItemType
+  if (TYPE_SYNONYMS[t]) return TYPE_SYNONYMS[t]!
+  return 'other'
 }
 
 function asStatus(value: unknown): ItemStatus {
@@ -123,29 +323,102 @@ function findSheet(wb: XLSX.WorkBook, name: string): XLSX.WorkSheet | undefined 
   return key ? wb.Sheets[key] : undefined
 }
 
-export function parseTripWorkbook(data: ArrayBuffer): {
-  meta: TripMeta
-  items: TripItem[]
-} {
-  const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data as ArrayBuffer)
-  if (bytes.byteLength < 64) {
-    throw new Error('File is empty or corrupt — re-save the Excel from the app / Drive')
-  }
-  // ZIP/xlsx files start with PK
-  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
-    throw new Error(
-      'Not a valid .xlsx workbook (Drive may have converted it). Save again after the latest update.',
-    )
-  }
+function isPlaceholderItem(item: TripItem): boolean {
+  return item.tags?.includes('placeholder') === true
+}
 
-  const wb = XLSX.read(bytes, { type: 'array', cellDates: true })
-  const scheduleSheet = findSheet(wb, 'Schedule')
-  if (!scheduleSheet) {
-    const names = (wb.SheetNames || []).join(', ') || '(none)'
-    throw new Error(`Missing Schedule sheet (found: ${names})`)
-  }
-  const tripSheet = findSheet(wb, 'Trip')
+function isHintRow(row: Record<string, unknown>): boolean {
+  const blob = Object.values(row)
+    .map((v) => String(v ?? '').toLowerCase())
+    .join(' ')
+  if (!blob.trim()) return true
+  const looksLikeHint =
+    /\brequired\b/.test(blob) ||
+    /\boptional\b/.test(blob) ||
+    /\byyyy\b/.test(blob) ||
+    /\bhh:mm\b/.test(blob) ||
+    /\bpreferred\b/.test(blob)
+  if (!looksLikeHint) return false
+  // Hint rows usually have no real title/date combo
+  const title = String(row.title ?? '').trim()
+  const date = excelDateToIso(row.date)
+  if (title && date && !/required|optional|yyyy|hh:mm/i.test(title)) return false
+  return true
+}
 
+function mapRawRow(raw: Record<string, unknown>): Record<string, unknown> {
+  const row: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    const nk = HEADER_ALIASES[normalizeHeader(k)]
+    if (nk) row[nk] = v
+  }
+  return row
+}
+
+function rowToItem(
+  row: Record<string, unknown>,
+  meta: TripMeta,
+  forceType?: ItemType,
+): TripItem | null {
+  const title = String(row.title ?? '').trim()
+  const date = excelDateToIso(row.date)
+  if (!title && !date) return null
+  if (isHintRow(row)) return null
+
+  const rowDate = date || meta.startDate
+  if (!rowDate) return null
+
+  const type = forceType ?? asType(row.type)
+  const rowEnd = sanitizeEndDate(rowDate, excelDateToIso(row.end_date))
+  const cost = parseCostLoose(row.cost)
+
+  try {
+    return sanitizeTripItem({
+      id: String(row.id || '').trim() || createId('X'),
+      type,
+      title: title || 'Untitled',
+      place: String(row.place ?? ''),
+      city: String(row.city ?? ''),
+      date: rowDate,
+      endDate: type === 'hotel' ? rowEnd || rowDate : rowEnd,
+      start: type === 'hotel' ? '' : excelTimeToHm(row.start),
+      end: type === 'hotel' ? '' : excelTimeToHm(row.end),
+      from: String(row.from ?? ''),
+      to: String(row.to ?? ''),
+      confirm: String(row.confirm ?? ''),
+      cost,
+      currency: normalizeCurrencyLoose(row.currency, meta.homeCurrency),
+      status: asStatus(row.status),
+      notes: String(row.notes ?? ''),
+      url: String(row.url ?? ''),
+      tags: parseTags(row.tags),
+      lat: parseLat(row.lat),
+      lon: parseLon(row.lon),
+      latTo: parseLat(row.lat_to),
+      lonTo: parseLon(row.lon_to),
+      wikidata: String(row.wikidata ?? ''),
+      osmId: String(row.osm_id ?? ''),
+      geocodeQuery: String(row.geocode_query ?? ''),
+      updatedAt: String(row.updated_at ?? ''),
+      enrichmentSummary: '',
+      enrichmentImage: '',
+      enrichmentSource: '',
+      routeCoords: [],
+      source: 'excel',
+    })
+  } catch {
+    return null
+  }
+}
+
+function parseSheetRows(sheet: XLSX.WorkSheet): Record<string, unknown>[] {
+  return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+    defval: '',
+    raw: true,
+  })
+}
+
+function parseMetaFromTripSheet(tripSheet: XLSX.WorkSheet | undefined): TripMeta {
   const metaMap: Record<string, string> = {}
   if (tripSheet) {
     const rows = XLSX.utils.sheet_to_json<(string | number)[]>(tripSheet, {
@@ -157,7 +430,9 @@ export function parseTripWorkbook(data: ArrayBuffer): {
         .trim()
         .toLowerCase()
         .replace(/\s+/g, '_')
-      if (!key) continue
+      if (!key || key === 'key' || key.startsWith('how_to') || key.startsWith('—')) continue
+      // Stop at how-to blurb
+      if (key.includes('fill_the') || key === 'howto' || key === 'how_to_use') break
       metaMap[key] = String(row[1] ?? '').trim()
     }
   }
@@ -167,121 +442,203 @@ export function parseTripWorkbook(data: ArrayBuffer): {
   let endDate = excelDateToIso(metaMap.end_date) || startDate
   if (endDate < startDate) endDate = startDate
 
-  const meta: TripMeta = {
+  return sanitizeTripMeta({
     name: (metaMap.name || 'Imported trip').trim() || 'Imported trip',
     startDate,
     endDate,
-    homeCurrency: normalizeCurrency(metaMap.home_currency || 'EUR'),
+    homeCurrency: normalizeCurrencyLoose(metaMap.home_currency || 'EUR', 'EUR'),
     timezoneNote: metaMap.timezone_note || 'All times are local',
     travelers: metaMap.travelers || '',
     notes: metaMap.notes || '',
-  }
-
-  const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(scheduleSheet, {
-    defval: '',
   })
-  if (rawRows.length > MAX_SCHEDULE_ROWS) {
-    throw new Error('Schedule too large')
-  }
+}
+
+function parseLegacySchedule(
+  scheduleSheet: XLSX.WorkSheet,
+  meta: TripMeta,
+): TripItem[] {
+  const rawRows = parseSheetRows(scheduleSheet)
+  if (rawRows.length > MAX_SCHEDULE_ROWS) throw new Error('Schedule too large')
 
   const items: TripItem[] = []
-
   for (const raw of rawRows) {
-    const row: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(raw)) {
-      const nk = HEADER_ALIASES[normalizeHeader(k)]
-      if (nk) row[nk] = v
-    }
-    const title = String(row.title ?? '').trim()
-    const date = excelDateToIso(row.date)
-    if (!title && !date) continue
+    const row = mapRawRow(raw)
+    const item = rowToItem(row, meta)
+    if (item) items.push(item)
+  }
+  return items
+}
 
-    const rowDate = date || meta.startDate
-    const rowEnd = sanitizeEndDate(rowDate, excelDateToIso(row.end_date))
-    const cost = parseNonNegativeNumber(row.cost)
+function parseV2Sheets(
+  wb: XLSX.WorkBook,
+  meta: TripMeta,
+): TripItem[] {
+  const items: TripItem[] = []
+  const stepsSheet = findSheet(wb, 'Steps')
+  const hotelsSheet = findSheet(wb, 'Hotels')
 
-    try {
-      items.push(
-        sanitizeTripItem({
-          id: String(row.id || '').trim() || createId('X'),
-          type: asType(row.type),
-          title: title || 'Untitled',
-          place: String(row.place ?? ''),
-          city: String(row.city ?? ''),
-          date: rowDate,
-          endDate: rowEnd,
-          start: excelTimeToHm(row.start),
-          end: excelTimeToHm(row.end),
-          from: String(row.from ?? ''),
-          to: String(row.to ?? ''),
-          confirm: String(row.confirm ?? ''),
-          cost,
-          currency: normalizeCurrency(String(row.currency ?? meta.homeCurrency)),
-          status: asStatus(row.status),
-          notes: String(row.notes ?? ''),
-          url: String(row.url ?? ''),
-          tags: parseTags(row.tags),
-          lat: parseLat(row.lat),
-          lon: parseLon(row.lon),
-          latTo: parseLat(row.lat_to),
-          lonTo: parseLon(row.lon_to),
-          wikidata: String(row.wikidata ?? ''),
-          osmId: String(row.osm_id ?? ''),
-          geocodeQuery: String(row.geocode_query ?? ''),
-          updatedAt: String(row.updated_at ?? ''),
-          enrichmentSummary: '',
-          enrichmentImage: '',
-          enrichmentSource: '',
-          routeCoords: [],
-          source: 'excel',
-        }),
-      )
-    } catch {
-      // skip invalid rows (allowlist)
+  if (stepsSheet) {
+    for (const raw of parseSheetRows(stepsSheet)) {
+      const row = mapRawRow(raw)
+      const item = rowToItem(row, meta)
+      if (!item) continue
+      // Hotel typed on Steps by mistake still OK
+      items.push(item)
     }
+  }
+
+  if (hotelsSheet) {
+    for (const raw of parseSheetRows(hotelsSheet)) {
+      const row = mapRawRow(raw)
+      const item = rowToItem(row, meta, 'hotel')
+      if (item) items.push(item)
+    }
+  }
+
+  if (items.length > MAX_SCHEDULE_ROWS) throw new Error('Schedule too large')
+  return items
+}
+
+export function parseTripWorkbook(data: ArrayBuffer): {
+  meta: TripMeta
+  items: TripItem[]
+} {
+  const bytes =
+    data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data as ArrayBuffer)
+  if (bytes.byteLength < 64) {
+    throw new Error('File is empty or corrupt — re-save the Excel from the app / Drive')
+  }
+  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+    throw new Error(
+      'Not a valid .xlsx workbook (Drive may have converted it). Save again after the latest update.',
+    )
+  }
+
+  const wb = XLSX.read(bytes, { type: 'array', cellDates: true })
+  const tripSheet = findSheet(wb, 'Trip')
+  const meta = parseMetaFromTripSheet(tripSheet)
+
+  const stepsSheet = findSheet(wb, 'Steps')
+  const hotelsSheet = findSheet(wb, 'Hotels')
+  const scheduleSheet = findSheet(wb, 'Schedule')
+
+  let items: TripItem[]
+  if (stepsSheet || hotelsSheet) {
+    items = parseV2Sheets(wb, meta)
+  } else if (scheduleSheet) {
+    items = parseLegacySchedule(scheduleSheet, meta)
+  } else {
+    const names = (wb.SheetNames || []).join(', ') || '(none)'
+    throw new Error(`Missing Steps or Schedule sheet (found: ${names})`)
   }
 
   return {
-    meta: sanitizeTripMeta(meta),
+    meta,
     items: sortItems(items),
   }
 }
 
-function itemToRow(item: TripItem): Record<string, string | number | null> {
-  return {
-    id: item.id,
-    date: item.date,
-    end_date: item.endDate || '',
-    start: item.start || '',
-    end: item.end || '',
-    type: item.type,
-    title: item.title,
-    place: item.place || '',
-    city: item.city || '',
-    from: item.from || '',
-    to: item.to || '',
-    confirm: item.confirm || '',
-    cost: item.cost,
-    currency: item.currency || '',
-    status: item.status,
-    notes: item.notes || '',
-    url: item.url || '',
-    tags: item.tags.join('; '),
-    lat: item.lat,
-    lon: item.lon,
-    lat_to: item.latTo,
-    lon_to: item.lonTo,
-    wikidata: item.wikidata || '',
-    osm_id: item.osmId || '',
-    geocode_query: item.geocodeQuery || '',
-    updated_at: item.updatedAt || nowIso(),
+function tagsJoined(item: TripItem): string {
+  return item.tags.filter((t) => t !== 'placeholder').join(', ')
+}
+
+function buildStepsAoA(items: TripItem[]): (string | number | null)[][] {
+  const rows: (string | number | null)[][] = [
+    [...STEPS_COLS],
+    [...STEPS_HINTS],
+  ]
+  for (const item of items) {
+    if (item.type === 'hotel' || isPlaceholderItem(item)) continue
+    rows.push([
+      item.date,
+      item.start || '',
+      item.end || '',
+      item.type,
+      item.title,
+      item.place || '',
+      item.city || '',
+      item.from || '',
+      item.to || '',
+      item.confirm || '',
+      item.cost,
+      item.currency || '',
+      item.status,
+      item.notes || '',
+      item.url || '',
+      tagsJoined(item),
+      item.lat,
+      item.lon,
+      item.latTo,
+      item.lonTo,
+    ])
   }
+  return rows
+}
+
+function buildHotelsAoA(items: TripItem[]): (string | number | null)[][] {
+  const rows: (string | number | null)[][] = [
+    [...HOTELS_COLS],
+    [...HOTELS_HINTS],
+  ]
+  for (const item of items) {
+    if (item.type !== 'hotel' || isPlaceholderItem(item)) continue
+    rows.push([
+      item.date,
+      item.endDate || item.date,
+      item.title,
+      item.place || '',
+      item.city || '',
+      item.confirm || '',
+      item.cost,
+      item.currency || '',
+      item.status,
+      item.notes || '',
+      item.url || '',
+      item.lat,
+      item.lon,
+    ])
+  }
+  return rows
+}
+
+function buildCashAoA(items: TripItem[]): (string | number | null)[][] {
+  const byType = new Map<string, number>()
+  const byCur = new Map<string, number>()
+  for (const item of items) {
+    if (isPlaceholderItem(item)) continue
+    if (item.status === 'cancelled') continue
+    if (item.cost == null || !Number.isFinite(item.cost)) continue
+    byType.set(item.type, (byType.get(item.type) ?? 0) + item.cost)
+    const cur = normalizeCurrency(item.currency || 'EUR')
+    byCur.set(cur, (byCur.get(cur) ?? 0) + item.cost)
+  }
+
+  const aoa: (string | number | null)[][] = [
+    ['Cash snapshot (export only — ignored when importing)'],
+    ['Amounts as entered (no FX conversion)'],
+    [],
+    ['By type', 'Total'],
+  ]
+  for (const [type, total] of [...byType.entries()].sort((a, b) => b[1] - a[1])) {
+    aoa.push([type, Math.round(total * 100) / 100])
+  }
+  if (!byType.size) aoa.push(['(none)', 0])
+
+  aoa.push([])
+  aoa.push(['By currency', 'Total'])
+  for (const [cur, total] of [...byCur.entries()].sort((a, b) => b[1] - a[1])) {
+    aoa.push([cur, Math.round(total * 100) / 100])
+  }
+  if (!byCur.size) aoa.push(['(none)', 0])
+
+  return aoa
 }
 
 export function buildTripWorkbook(trip: TripRecord): XLSX.WorkBook {
   const wb = XLSX.utils.book_new()
+  const items = sortItems(trip.items)
 
-  const tripAoA = [
+  const tripAoA: (string | number)[][] = [
     ['key', 'value'],
     ['name', trip.meta.name],
     ['start_date', trip.meta.startDate],
@@ -290,26 +647,22 @@ export function buildTripWorkbook(trip: TripRecord): XLSX.WorkBook {
     ['timezone_note', trip.meta.timezoneNote],
     ['travelers', trip.meta.travelers],
     ['notes', trip.meta.notes],
+    [],
+    ['How to use'],
+    [
+      'Edit the Steps sheet for day plans (sights, food, drives, flights). Use Hotels for stays. Cash is a read-only spend snapshot.',
+    ],
+    [
+      'Row 2 under each table shows Required/Optional and the preferred format. Import also accepts other common date/time styles.',
+    ],
+    ['Preferred date: YYYY-MM-DD · Preferred time: HH:MM (24h).'],
   ]
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(tripAoA), 'Trip')
 
-  const rows = sortItems(trip.items).map(itemToRow)
-  const schedule = XLSX.utils.json_to_sheet(rows, {
-    header: [...SCHEDULE_HEADERS],
-  })
-  XLSX.utils.book_append_sheet(wb, schedule, 'Schedule')
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildStepsAoA(items)), 'Steps')
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildHotelsAoA(items)), 'Hotels')
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildCashAoA(items)), 'Cash')
 
-  const legend = XLSX.utils.aoa_to_sheet([
-    ['Column / Value', 'Meaning'],
-    ['Schedule sheet', 'One row per event in chronological order — the sheet you keep up with'],
-    ['type values', ITEM_TYPES.join(', ')],
-    ['status values', ITEM_STATUSES.join(', ')],
-    ['from / to', 'For flights use IATA (TLV, CDG). For drives use place names'],
-    ['end_date', 'Hotel checkout or overnight flight/train arrival date'],
-    ['lat / lon', 'Optional; app fills on enrich/export'],
-    ['All times', 'Local wall clock — never UTC in this workbook'],
-  ])
-  XLSX.utils.book_append_sheet(wb, legend, 'Legend')
   return wb
 }
 
@@ -319,7 +672,6 @@ export function downloadWorkbook(wb: XLSX.WorkBook, filename: string) {
 
 /** Binary for Drive upload / programmatic import (same bytes as a downloaded .xlsx). */
 export function workbookToArrayBuffer(wb: XLSX.WorkBook): ArrayBuffer {
-  // In browsers SheetJS may return number[], ArrayBuffer, or a typed-array view.
   const written = XLSX.write(wb, {
     bookType: 'xlsx',
     type: 'array',
@@ -335,7 +687,6 @@ export function workbookToArrayBuffer(wb: XLSX.WorkBook): ArrayBuffer {
     copy = new Uint8Array(written as number[])
   }
 
-  // Detach a precise slice so callers never see a shared / oversized backing store.
   const sliced = copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength)
   return sliced instanceof ArrayBuffer ? sliced : new Uint8Array(copy).buffer
 }
@@ -353,7 +704,7 @@ export function tripToBlankTemplate(): XLSX.WorkBook {
       homeCurrency: 'EUR',
       timezoneNote: 'All times are local',
       travelers: '',
-      notes: 'Fill Schedule rows. Download from the app after edits for round-trip.',
+      notes: 'Fill Steps + Hotels. Cash is filled automatically on export.',
     },
     items: [
       {
@@ -397,8 +748,8 @@ export function tripToBlankTemplate(): XLSX.WorkBook {
         city: 'Paris',
         date: '2026-10-01',
         endDate: '2026-10-03',
-        start: '15:00',
-        end: '11:00',
+        start: '',
+        end: '',
         from: '',
         to: '',
         confirm: '',
@@ -406,6 +757,39 @@ export function tripToBlankTemplate(): XLSX.WorkBook {
         currency: 'EUR',
         status: 'planned',
         notes: '2 nights example',
+        url: '',
+        tags: [],
+        lat: null,
+        lon: null,
+        latTo: null,
+        lonTo: null,
+        wikidata: '',
+        osmId: '',
+        geocodeQuery: '',
+        updatedAt: '',
+        enrichmentSummary: '',
+        enrichmentImage: '',
+        enrichmentSource: '',
+        routeCoords: [],
+        source: 'excel',
+      },
+      {
+        id: 'S01',
+        type: 'sight',
+        title: 'Example sight',
+        place: '',
+        city: 'Paris',
+        date: '2026-10-02',
+        endDate: '',
+        start: '11:00',
+        end: '',
+        from: '',
+        to: '',
+        confirm: '',
+        cost: null,
+        currency: 'EUR',
+        status: 'planned',
+        notes: '',
         url: '',
         tags: [],
         lat: null,
