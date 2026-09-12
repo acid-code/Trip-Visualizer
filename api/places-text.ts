@@ -5,7 +5,6 @@
  */
 
 import { searchTextPlaceGoogle } from '../src/data/placesGoogle'
-import { serverGoogleMapsApiKey } from '../lib/serverGoogleKey'
 
 export const config = {
   maxDuration: 20,
@@ -46,6 +45,13 @@ function originAllowed(req: VercelReq): boolean {
   }
 }
 
+/** Inlined — Vercel does not reliably bundle ../lib into /api functions. */
+function resolveApiKey(bodyKey?: unknown): string {
+  const fromBody = String(bodyKey ?? '').trim()
+  if (fromBody.startsWith('AIza')) return fromBody
+  return String(process.env.GOOGLE_MAPS_API_KEY ?? '').trim()
+}
+
 export default async function handler(req: VercelReq, res: VercelRes) {
   res.setHeader('Cache-Control', 'no-store')
 
@@ -67,7 +73,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     unknown
   >
   const query = String(body.query || '').trim()
-  const apiKey = serverGoogleMapsApiKey(body.apiKey)
+  const apiKey = resolveApiKey(body.apiKey)
   const biasRaw = body.bias as { lat?: number; lon?: number; radiusM?: number } | undefined
   const bias =
     biasRaw &&

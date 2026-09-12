@@ -1,9 +1,8 @@
 /**
  * Lightweight probe: whether Places works via server-held GOOGLE_MAPS_API_KEY.
  * Never returns the key itself.
+ * (Helpers inlined — Vercel serverless does not reliably bundle ../lib imports.)
  */
-
-import { serverPlacesConfigured } from '../lib/serverGoogleKey'
 
 export const config = {
   maxDuration: 5,
@@ -19,6 +18,11 @@ type VercelRes = {
   setHeader: (name: string, value: string) => void
   json: (body: unknown) => void
   send: (body: string) => void
+}
+
+function placesConfigured(): boolean {
+  const key = String(process.env.GOOGLE_MAPS_API_KEY ?? '').trim()
+  return key.startsWith('AIza')
 }
 
 function header(req: VercelReq, name: string): string {
@@ -60,7 +64,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
       return
     }
 
-    res.status(200).json({ placesConfigured: serverPlacesConfigured() })
+    res.status(200).json({ placesConfigured: placesConfigured() })
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'maps-status failed'
     res.status(500).json({ error: msg, placesConfigured: false })

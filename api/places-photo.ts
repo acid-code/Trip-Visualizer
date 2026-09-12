@@ -1,9 +1,8 @@
 /**
  * Same-origin Place Photo proxy — keeps GOOGLE_MAPS_API_KEY off the client.
  * GET /api/places-photo?name=places/.../photos/...&maxWidthPx=640
+ * (Key resolution inlined — Vercel does not reliably bundle ../lib into /api.)
  */
-
-import { serverGoogleMapsApiKey } from '../lib/serverGoogleKey'
 
 export const config = {
   maxDuration: 20,
@@ -53,6 +52,10 @@ function queryParam(req: VercelReq, key: string): string {
 
 const PHOTO_NAME_RE = /^places\/[^/]+\/photos\/[^/]+$/
 
+function resolveApiKey(): string {
+  return String(process.env.GOOGLE_MAPS_API_KEY ?? '').trim()
+}
+
 export default async function handler(req: VercelReq, res: VercelRes) {
   res.setHeader('Cache-Control', 'public, max-age=86400')
 
@@ -74,7 +77,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     Math.max(Number(queryParam(req, 'maxWidthPx')) || 640, 1),
     1600,
   )
-  const apiKey = serverGoogleMapsApiKey()
+  const apiKey = resolveApiKey()
 
   if (!PHOTO_NAME_RE.test(name)) {
     res.status(400).json({ error: 'Invalid photo name' })

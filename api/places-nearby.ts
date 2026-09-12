@@ -7,7 +7,6 @@ import {
   searchNearbyPlacesGoogle,
   GOOGLE_NEARBY_MAX,
 } from '../src/data/placesGoogle'
-import { serverGoogleMapsApiKey } from '../lib/serverGoogleKey'
 
 export const config = {
   maxDuration: 30,
@@ -48,6 +47,13 @@ function originAllowed(req: VercelReq): boolean {
   }
 }
 
+/** Inlined — Vercel does not reliably bundle ../lib into /api functions. */
+function resolveApiKey(bodyKey?: unknown): string {
+  const fromBody = String(bodyKey ?? '').trim()
+  if (fromBody.startsWith('AIza')) return fromBody
+  return String(process.env.GOOGLE_MAPS_API_KEY ?? '').trim()
+}
+
 export default async function handler(req: VercelReq, res: VercelRes) {
   res.setHeader('Cache-Control', 'no-store')
 
@@ -75,7 +81,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     Number(body.maxResultCount) || GOOGLE_NEARBY_MAX,
     GOOGLE_NEARBY_MAX,
   )
-  const apiKey = serverGoogleMapsApiKey(body.apiKey)
+  const apiKey = resolveApiKey(body.apiKey)
 
   if (!apiKey || !apiKey.startsWith('AIza')) {
     res.status(400).json({ error: 'Google Maps API key required' })
