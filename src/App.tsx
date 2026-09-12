@@ -93,6 +93,7 @@ import {
   logClientInfo,
   subscribeClientLogs,
 } from './data/clientLogs'
+import { forceAppRefresh } from './updateCheck'
 import { sanitizeTripRecord } from './domain/types'
 import { useIsNarrow } from './ui/useIsNarrow'
 
@@ -2089,6 +2090,13 @@ function ClientLogsBlob() {
           Client logs
         </div>
         <div className="flex gap-1">
+          <button
+            type="button"
+            className={btn}
+            onClick={() => void forceAppRefresh()}
+          >
+            Force refresh
+          </button>
           <button
             type="button"
             className={btn}

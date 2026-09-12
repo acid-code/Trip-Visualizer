@@ -89,7 +89,7 @@ export async function fetchFxRates(): Promise<FxRates> {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.rates
 
   try {
-    const res = await fetch('https://api.frankfurter.app/latest')
+    const res = await fetch('https://api.frankfurter.dev/v1/latest')
     if (!res.ok) throw new Error(String(res.status))
     const json = (await res.json()) as {
       date?: string
