@@ -26,9 +26,11 @@ import {
   sampleTerrainMostDetailed,
   Cartographic,
   ConstantProperty,
+  CustomDataSource,
   EllipsoidGeodesic,
   Matrix4,
   Transforms,
+  type Entity,
   type EntityCluster,
 } from 'cesium'
 import type { TripItem, TripMeta } from '../domain/types'
@@ -82,7 +84,15 @@ export async function createTripViewer(
     terrainProvider: new EllipsoidTerrainProvider(),
     baseLayer: esriLayer(),
     requestRenderMode: false,
+    // 1 CSS pixel = 1 framebuffer pixel looks smeared on retina; render at device pixels.
+    useBrowserRecommendedResolution: false,
   })
+
+  viewer.useBrowserRecommendedResolution = false
+  viewer.resolutionScale = 1
+  if (viewer.scene.postProcessStages.fxaa) {
+    viewer.scene.postProcessStages.fxaa.enabled = false
+  }
 
   viewer.scene.globe.show = true
   viewer.scene.globe.enableLighting = false
@@ -92,7 +102,11 @@ export async function createTripViewer(
   viewer.camera.percentageChanged = 0.08
 
   configureTouchCameraControls(viewer)
-  configureEntityClustering(viewer)
+  const stepPins = new CustomDataSource(STEP_PIN_SOURCE)
+  await viewer.dataSources.add(stepPins)
+  // Only step pins cluster — routes, explore, and temp markers stay out of the count.
+  viewer.dataSourceDisplay.defaultDataSource.clustering.enabled = false
+  configureStepPinClustering(viewer, stepPins)
 
   // Known-good starting view (France / W Europe) before trip overview flies
   viewer.camera.setView({
@@ -175,61 +189,93 @@ function configureTouchCameraControls(viewer: Viewer) {
   canvas.addEventListener('touchmove', blockBrowserGesture, { passive: false })
 }
 
+const STEP_PIN_SOURCE = 'trip-step-pins'
+
+/** Larger, heavier type so globe labels stay readable after Cesium rasterizes them. */
+const STEP_LABEL_FONT = '700 16px "DM Sans","Segoe UI",system-ui,sans-serif'
+const SEQ_LABEL_FONT = '700 15px "DM Sans","Segoe UI",system-ui,sans-serif'
+const CLUSTER_LABEL_FONT = '700 18px "DM Sans","Segoe UI",system-ui,sans-serif'
+
+function stepPinDataSource(viewer: Viewer): CustomDataSource | undefined {
+  return viewer.dataSources.getByName(STEP_PIN_SOURCE)[0] as CustomDataSource | undefined
+}
+
+function isStepPinId(id: string): boolean {
+  if (!id.startsWith('trip:')) return false
+  if (id.endsWith(':route') || id.endsWith(':arc') || id.endsWith(':seq')) return false
+  return true
+}
+
+/** Unique step item id — :a / :b ends of the same leg count as one step. */
+function stepClusterKey(id: string): string | null {
+  if (!isStepPinId(id)) return null
+  return id.replace(/:[ab]$/i, '')
+}
+
+function eachTripEntity(viewer: Viewer, visit: (entity: Entity) => void) {
+  for (const entity of viewer.entities.values) {
+    if (String(entity.id).startsWith('trip:')) visit(entity)
+  }
+  const pins = stepPinDataSource(viewer)
+  if (pins) {
+    for (const entity of pins.entities.values) visit(entity)
+  }
+}
+
 /**
  * Merge overlapping step pins when zoomed out.
- * Labels are NOT clustered (point+label on one pin used to inflate counts and “stick”).
- * Clustering turns off when the camera is close so coincident pins can separate.
+ * Only the trip-step data source is clustered, so explore / temp / path dots
+ * cannot inflate the number. Labels are not clustered (point+label on one pin
+ * used to double-count). Clustering turns off when the camera is close.
  */
-function configureEntityClustering(viewer: Viewer) {
-  const cluster: EntityCluster = viewer.dataSourceDisplay.defaultDataSource.clustering
-  cluster.enabled = true
-  cluster.pixelRange = 28
+function configureStepPinClustering(viewer: Viewer, source: CustomDataSource) {
+  const cluster: EntityCluster = source.clustering
+  cluster.enabled = false
+  cluster.pixelRange = 40
   cluster.minimumClusterSize = 2
-  cluster.clusterBillboards = true
+  cluster.clusterBillboards = false
   cluster.clusterLabels = false
   cluster.clusterPoints = true
 
   const pinBuilder = new PinBuilder()
   const clusterIcon = pinBuilder
-    .fromColor(Color.fromCssColorString('#ff6b4a'), 48)
+    .fromColor(Color.fromCssColorString('#ff6b4a'), 56)
     .toDataURL()
 
   const onCluster: EntityCluster.newClusterCallback = (clusteredEntities, clusterObj) => {
     const pinIds = new Set<string>()
     for (const e of clusteredEntities) {
-      const id = String(e.id)
-      if (!id.startsWith('trip:')) continue
-      if (id.endsWith(':route') || id.endsWith(':arc') || id.endsWith(':seq')) continue
-      // Endpoint suffixes (:a / :b) count as the same stop when clustered
-      pinIds.add(id.replace(/:(a|b)$/i, ''))
+      const key = stepClusterKey(String(e.id))
+      if (key) pinIds.add(key)
     }
     const n = pinIds.size
-    // Point+label ghosts or mid-labels alone — don't paint a fake cluster badge
     if (n < 2) {
       clusterObj.billboard.show = false
       clusterObj.label.show = false
       return
     }
+    clusterObj.billboard.show = true
+    clusterObj.billboard.image = clusterIcon
+    clusterObj.billboard.verticalOrigin = VerticalOrigin.BOTTOM
+    clusterObj.billboard.disableDepthTestDistance = Number.POSITIVE_INFINITY
     clusterObj.label.show = true
     clusterObj.label.text = String(n)
-    clusterObj.label.font = '700 14px "DM Sans", Segoe UI, sans-serif'
+    clusterObj.label.font = CLUSTER_LABEL_FONT
     clusterObj.label.fillColor = Color.WHITE
-    clusterObj.label.outlineColor = Color.fromCssColorString('#9a3412')
-    clusterObj.label.outlineWidth = 3
+    clusterObj.label.outlineColor = Color.fromCssColorString('#7c2d12')
+    clusterObj.label.outlineWidth = 2
     clusterObj.label.style = LabelStyle.FILL_AND_OUTLINE
+    clusterObj.label.showBackground = true
+    clusterObj.label.backgroundColor = Color.fromCssColorString('#c2410c')
+    clusterObj.label.backgroundPadding = new Cartesian2(8, 4)
     clusterObj.label.verticalOrigin = VerticalOrigin.CENTER
     clusterObj.label.horizontalOrigin = HorizontalOrigin.CENTER
     clusterObj.label.disableDepthTestDistance = Number.POSITIVE_INFINITY
-    clusterObj.label.pixelOffset = new Cartesian2(0, 0)
-    clusterObj.billboard.show = true
-    clusterObj.billboard.image = clusterIcon
-    clusterObj.billboard.verticalOrigin = VerticalOrigin.CENTER
-    clusterObj.billboard.disableDepthTestDistance = Number.POSITIVE_INFINITY
-    clusterObj.billboard.id = clusterObj.label.id
+    clusterObj.label.pixelOffset = new Cartesian2(0, -24)
   }
   cluster.clusterEvent.addEventListener(onCluster)
+  cluster.enabled = true
 
-  // Only cluster when looking at a wide region — turn off early while zooming in.
   const CLUSTER_MIN_HEIGHT_M = 120_000
   const syncClusterByHeight = () => {
     try {
@@ -289,6 +335,7 @@ export async function applyIonTerrain(_viewer: Viewer, _ionToken: string) {
 export function clearTripEntities(viewer: Viewer) {
   const remove = viewer.entities.values.filter((e) => String(e.id).startsWith('trip:'))
   for (const e of remove) viewer.entities.remove(e)
+  stepPinDataSource(viewer)?.entities.removeAll()
 }
 
 function colorForDay(
@@ -393,9 +440,9 @@ function addSeqLabel(
     position: Cartesian3.fromDegrees(lon, lat, SURFACE_H),
     label: {
       text: badge,
-      font: '700 11px "DM Sans", Segoe UI, sans-serif',
+      font: SEQ_LABEL_FONT,
       fillColor: Color.WHITE,
-      outlineColor: Color.WHITE,
+      outlineColor: Color.fromCssColorString('#1c1917'),
       outlineWidth: 2,
       style: LabelStyle.FILL_AND_OUTLINE,
       verticalOrigin: VerticalOrigin.CENTER,
@@ -403,12 +450,10 @@ function addSeqLabel(
       heightReference: HeightReference.NONE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
       showBackground: true,
-      backgroundColor: color.withAlpha(0.9),
-      backgroundPadding: new Cartesian2(6, 4),
+      backgroundColor: color.withAlpha(0.95),
+      backgroundPadding: new Cartesian2(8, 5),
       show: true,
       distanceDisplayCondition: new DistanceDisplayCondition(0.0, 1.2e5),
-      // Prefer picking pins over badges
-      scale: 0.95,
     },
     description,
   })
@@ -427,7 +472,8 @@ function addBillboard(
   },
 ) {
   const selected = opts.selected
-  viewer.entities.add({
+  const collection = stepPinDataSource(viewer)?.entities ?? viewer.entities
+  collection.add({
     id: `trip:${sanitizeEntityId(item.id)}${opts.suffix ?? ''}`,
     name: item.title,
     position: Cartesian3.fromDegrees(lon, lat, 0),
@@ -438,23 +484,23 @@ function addBillboard(
       outlineWidth: selected ? 3 : 2,
       heightReference: HeightReference.NONE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      scaleByDistance: new NearFarScalar(5e3, 1.35, 2.5e6, 0.55),
+      scaleByDistance: new NearFarScalar(5e3, 1.35, 2.5e6, 0.7),
     },
     label: {
       text: selected ? item.title : opts.badge,
-      font: '600 13px "DM Sans", Segoe UI, sans-serif',
+      font: STEP_LABEL_FONT,
       fillColor: Color.fromCssColorString('#1c1917'),
       outlineColor: Color.WHITE,
-      outlineWidth: 3,
+      outlineWidth: 2,
       style: LabelStyle.FILL_AND_OUTLINE,
       verticalOrigin: VerticalOrigin.BOTTOM,
       horizontalOrigin: HorizontalOrigin.CENTER,
-      pixelOffset: new Cartesian2(0, -14),
+      pixelOffset: new Cartesian2(0, -16),
       heightReference: HeightReference.NONE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
       showBackground: true,
-      backgroundColor: Color.fromCssColorString('#fffaf3ee'),
-      backgroundPadding: new Cartesian2(8, 5),
+      backgroundColor: Color.fromCssColorString('#fffaf3'),
+      backgroundPadding: new Cartesian2(9, 5),
       show: true,
       distanceDisplayCondition: new DistanceDisplayCondition(0.0, 4.5e5),
     },
@@ -694,11 +740,11 @@ export function applySelectionHighlight(
   selectedId: string | null,
   focusedEntityId?: string | null,
 ) {
-  for (const entity of viewer.entities.values) {
+  eachTripEntity(viewer, (entity) => {
     const id = String(entity.id)
-    if (!id.startsWith('trip:')) continue
+    if (!id.startsWith('trip:')) return
     // Midpoint sequence badges stay as-is
-    if (id.endsWith(':seq')) continue
+    if (id.endsWith(':seq')) return
 
     const itemId = parseTripItemId(id)
     const isSelected = !!selectedId && itemId === selectedId
@@ -708,7 +754,7 @@ export function applySelectionHighlight(
     }
     if (entity.label) {
       const isPin = !id.endsWith(':arc') && !id.endsWith(':route')
-      if (!isPin) continue
+      if (!isPin) return
       const isFocused =
         focusedEntityId != null
           ? id === focusedEntityId
@@ -726,7 +772,7 @@ export function applySelectionHighlight(
       // Badges always remain visible on pins
       entity.label.show = new ConstantProperty(true)
     }
-  }
+  })
 }
 
 export function parseTripItemId(entityId: string): string {
@@ -1008,10 +1054,10 @@ export function syncTempPinEntities(
     },
     label: {
       text: label,
-      font: '600 13px "DM Sans", Segoe UI, sans-serif',
+      font: STEP_LABEL_FONT,
       fillColor: Color.fromCssColorString('#1c1917'),
       outlineColor: Color.WHITE,
-      outlineWidth: 3,
+      outlineWidth: 2,
       style: LabelStyle.FILL_AND_OUTLINE,
       verticalOrigin: VerticalOrigin.BOTTOM,
       horizontalOrigin: HorizontalOrigin.CENTER,
@@ -1019,8 +1065,8 @@ export function syncTempPinEntities(
       heightReference: HeightReference.NONE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
       showBackground: true,
-      backgroundColor: Color.fromCssColorString('#fff7edee'),
-      backgroundPadding: new Cartesian2(8, 5),
+      backgroundColor: Color.fromCssColorString('#fff7ed'),
+      backgroundPadding: new Cartesian2(9, 5),
       distanceDisplayCondition: new DistanceDisplayCondition(0.0, 4.5e5),
     },
   })
@@ -1056,7 +1102,7 @@ export function syncTempPinEntities(
         position: Cartesian3.fromDegrees(mid.lon, mid.lat, SURFACE_H),
         label: {
           text: roadLabel,
-          font: '700 11px "DM Sans", Segoe UI, sans-serif',
+          font: SEQ_LABEL_FONT,
           fillColor: Color.WHITE,
           outlineColor: Color.fromCssColorString('#1c1917'),
           outlineWidth: 3,
