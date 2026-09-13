@@ -1497,6 +1497,7 @@ export default function App() {
               activeId={activeId}
               onSelect={(id) => setActiveId(id)}
               onDelete={(id) => onDeleteTrip(id)}
+              onCreate={() => void onBlank()}
               onPrepareDelete={() => {
                 setPanelOpen(false)
                 setExploreOpen(false)
@@ -1618,7 +1619,6 @@ export default function App() {
                     enrichProgress={enrichProgress}
                     routesStatus={routesStatus}
                     onOpenExample={() => void onOpenExample()}
-                    onBlank={() => void onBlank()}
                     onImportFile={(f) => void onImportFile(f)}
                     onExport={() => void onExport()}
                     onExportToDrive={() => void onExportToDrive()}
@@ -1797,7 +1797,6 @@ export default function App() {
                     enrichProgress={enrichProgress}
                     routesStatus={routesStatus}
                     onOpenExample={() => void onOpenExample()}
-                    onBlank={() => void onBlank()}
                     onImportFile={(f) => void onImportFile(f)}
                     onExport={() => void onExport()}
                     onExportToDrive={() => void onExportToDrive()}
@@ -2194,7 +2193,6 @@ function DataPanel({
   enrichProgress,
   routesStatus,
   onOpenExample,
-  onBlank,
   onImportFile,
   onExport,
   onExportToDrive,
@@ -2221,7 +2219,6 @@ function DataPanel({
   enrichProgress: string | null
   routesStatus: string | null
   onOpenExample: () => void
-  onBlank: () => void
   onImportFile: (f: File) => void
   onExport: () => void
   onExportToDrive: () => void
@@ -2257,9 +2254,6 @@ function DataPanel({
       <ActionRow>
         <button type="button" className={btnPrimary} onClick={onOpenExample}>
           Open example
-        </button>
-        <button type="button" className={btn} onClick={onBlank}>
-          New trip
         </button>
       </ActionRow>
 

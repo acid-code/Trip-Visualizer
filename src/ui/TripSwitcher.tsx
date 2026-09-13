@@ -9,9 +9,11 @@ type Props = {
   onDelete: (id: string) => void | Promise<void>
   /** Close side panels / tongues before the confirm dialog shows. */
   onPrepareDelete?: () => void
+  /** Open the create-trip dialog. */
+  onCreate: () => void
 }
 
-export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDelete }: Props) {
+export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDelete, onCreate }: Props) {
   const [open, setOpen] = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -165,66 +167,97 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
       {open ? (
         <div
           id={listId}
-          className="absolute right-0 z-50 mt-1.5 w-[min(18rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-white/15 bg-[#0f1a24]/95 text-white shadow-2xl backdrop-blur-md"
+          className="absolute right-0 z-50 mt-1.5 w-[min(18rem,calc(100vw-1.5rem))] text-white"
           role="listbox"
         >
-          <div className="border-b border-white/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-orange-300/90">
-            Your trips
+          <div className="overflow-hidden rounded-t-2xl border border-b-0 border-white/15 bg-[#0f1a24]/95 shadow-2xl backdrop-blur-md">
+            <div className="border-b border-white/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-orange-300/90">
+              Your trips
+            </div>
+            <ul className="max-h-64 overflow-y-auto py-1">
+              {trips.length === 0 ? (
+                <li className="px-3 py-3 text-xs text-white/50">No trips yet — tap + to start one.</li>
+              ) : (
+                trips.map((t) => {
+                  const selected = t.id === activeId
+                  return (
+                    <li
+                      key={t.id}
+                      className={`group flex items-center gap-1 px-1.5 ${
+                        selected ? 'bg-white/10' : 'hover:bg-white/5'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className="min-w-0 flex-1 rounded-xl px-2.5 py-2.5 text-left"
+                        onClick={() => {
+                          onSelect(t.id)
+                          setOpen(false)
+                        }}
+                      >
+                        <div className="truncate text-sm font-medium">
+                          {t.isExample ? <span className="mr-1 text-orange-300">★</span> : null}
+                          {t.meta.name}
+                        </div>
+                        <div className="truncate text-[10px] text-white/50">
+                          {t.meta.startDate} → {t.meta.endDate}
+                          {t.isExample ? ' · sample' : ''}
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        className="mr-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/55 transition hover:border-red-400/40 hover:bg-red-500/25 hover:text-red-200"
+                        title={t.isExample ? 'Remove sample from list' : 'Delete trip'}
+                        aria-label={`Delete ${t.meta.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          requestDelete(t.id)
+                        }}
+                      >
+                        <TrashIcon className="h-5 w-5" />
+                      </button>
+                    </li>
+                  )
+                })
+              )}
+            </ul>
           </div>
-          <ul className="max-h-64 overflow-y-auto py-1">
-            {trips.length === 0 ? (
-              <li className="px-3 py-3 text-xs text-white/50">No trips yet — create one in Data.</li>
-            ) : (
-              trips.map((t) => {
-                const selected = t.id === activeId
-                return (
-                  <li
-                    key={t.id}
-                    className={`group flex items-center gap-1 px-1.5 ${
-                      selected ? 'bg-white/10' : 'hover:bg-white/5'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={selected}
-                      className="min-w-0 flex-1 rounded-xl px-2.5 py-2.5 text-left"
-                      onClick={() => {
-                        onSelect(t.id)
-                        setOpen(false)
-                      }}
-                    >
-                      <div className="truncate text-sm font-medium">
-                        {t.isExample ? <span className="mr-1 text-orange-300">★</span> : null}
-                        {t.meta.name}
-                      </div>
-                      <div className="truncate text-[10px] text-white/50">
-                        {t.meta.startDate} → {t.meta.endDate}
-                        {t.isExample ? ' · sample' : ''}
-                      </div>
-                    </button>
-                    <button
-                      type="button"
-                      className="mr-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/55 transition hover:border-red-400/40 hover:bg-red-500/25 hover:text-red-200"
-                      title={t.isExample ? 'Remove sample from list' : 'Delete trip'}
-                      aria-label={`Delete ${t.meta.name}`}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        requestDelete(t.id)
-                      }}
-                    >
-                      <TrashIcon className="h-5 w-5" />
-                    </button>
-                  </li>
-                )
-              })
-            )}
-          </ul>
+          <button
+            type="button"
+            className="flex h-[4.5rem] w-full items-start justify-center bg-[var(--coral)] pt-2.5 text-white shadow-[0_12px_28px_rgba(0,0,0,0.35)] transition hover:bg-[var(--coral-deep)]"
+            style={{ borderRadius: '0 0 50% 50% / 0 0 100% 100%' }}
+            title="New trip"
+            aria-label="Add new trip"
+            onClick={() => {
+              setOpen(false)
+              onCreate()
+            }}
+          >
+            <PlusIcon className="h-10 w-10" />
+          </button>
         </div>
       ) : null}
 
       {confirmModal}
     </div>
+  )
+}
+
+function PlusIcon({ className = 'h-8 w-8' }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <path d="M12 5v14M5 12h14" />
+    </svg>
   )
 }
 
