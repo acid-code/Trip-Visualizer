@@ -1491,12 +1491,13 @@ export default function App() {
               ) : null}
             </button>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-1">
+          <div className="flex max-w-full flex-nowrap items-center justify-end gap-1">
             <TripSwitcher
               trips={trips}
               activeId={activeId}
               onSelect={(id) => setActiveId(id)}
               onDelete={(id) => onDeleteTrip(id)}
+              onCreate={() => void onBlank()}
               onPrepareDelete={() => {
                 setPanelOpen(false)
                 setExploreOpen(false)
@@ -1506,14 +1507,14 @@ export default function App() {
               }}
             />
             <button
-              className="rounded-full bg-white/15 px-3 py-1 text-xs text-white backdrop-blur hover:bg-white/25"
+              className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-xs text-white backdrop-blur hover:bg-white/25"
               onClick={() => setOverviewToken((n) => n + 1)}
             >
               Overview
             </button>
             <button
               type="button"
-              className="rounded-full bg-orange-500/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-orange-400"
+              className="shrink-0 rounded-full bg-orange-500/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-orange-400"
               title="Feature tips"
               onClick={() => openFeatureGuide({ all: true })}
             >
@@ -1618,7 +1619,6 @@ export default function App() {
                     enrichProgress={enrichProgress}
                     routesStatus={routesStatus}
                     onOpenExample={() => void onOpenExample()}
-                    onBlank={() => void onBlank()}
                     onImportFile={(f) => void onImportFile(f)}
                     onExport={() => void onExport()}
                     onExportToDrive={() => void onExportToDrive()}
@@ -1797,7 +1797,6 @@ export default function App() {
                     enrichProgress={enrichProgress}
                     routesStatus={routesStatus}
                     onOpenExample={() => void onOpenExample()}
-                    onBlank={() => void onBlank()}
                     onImportFile={(f) => void onImportFile(f)}
                     onExport={() => void onExport()}
                     onExportToDrive={() => void onExportToDrive()}
@@ -2194,7 +2193,6 @@ function DataPanel({
   enrichProgress,
   routesStatus,
   onOpenExample,
-  onBlank,
   onImportFile,
   onExport,
   onExportToDrive,
@@ -2221,7 +2219,6 @@ function DataPanel({
   enrichProgress: string | null
   routesStatus: string | null
   onOpenExample: () => void
-  onBlank: () => void
   onImportFile: (f: File) => void
   onExport: () => void
   onExportToDrive: () => void
@@ -2257,9 +2254,6 @@ function DataPanel({
       <ActionRow>
         <button type="button" className={btnPrimary} onClick={onOpenExample}>
           Open example
-        </button>
-        <button type="button" className={btn} onClick={onBlank}>
-          New trip
         </button>
       </ActionRow>
 
