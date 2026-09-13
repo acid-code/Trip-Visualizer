@@ -64,6 +64,8 @@ export function TimelinePanel({
   const listRef = useRef<HTMLDivElement>(null)
   const prevDetailOpen = useRef(detailOpen)
   const prevDayFilter = useRef(dayFilter)
+  /** After remount, jump (don't animate) so Explore→Steps doesn't slide from day 1. */
+  const pendingInstantScroll = useRef(true)
   const sorted = sortItems(items).filter((i) => {
     if (dayFilter && !itemTouchesDay(i, dayFilter)) return false
     if (typeFilter && i.type !== typeFilter) return false
@@ -98,13 +100,15 @@ export function TimelinePanel({
     if (!firstId) return
 
     const align: 'center' | 'top' = horizontal ? 'center' : 'top'
+    const behavior: ScrollBehavior = pendingInstantScroll.current ? 'auto' : 'smooth'
+    pendingInstantScroll.current = false
     const run = () => {
       const root = listRef.current
       const el = root?.querySelector(
         `#${CSS.escape(`step-card-${firstId}`)}`,
       ) as HTMLElement | null
       if (!root || !el) return
-      scrollCardIntoView(root, el, horizontal, align)
+      scrollCardIntoView(root, el, horizontal, align, behavior)
     }
     const raf = requestAnimationFrame(() => {
       requestAnimationFrame(run)
@@ -127,11 +131,13 @@ export function TimelinePanel({
     const id = `step-card-${selectedId}`
     const align: 'center' | 'top' =
       !horizontal && detailOpen ? 'top' : 'center'
+    const behavior: ScrollBehavior = pendingInstantScroll.current ? 'auto' : 'smooth'
+    pendingInstantScroll.current = false
     const run = () => {
       const root = listRef.current
       const el = root?.querySelector(`#${CSS.escape(id)}`) as HTMLElement | null
       if (!root || !el) return
-      scrollCardIntoView(root, el, horizontal, align)
+      scrollCardIntoView(root, el, horizontal, align, behavior)
     }
     const raf = requestAnimationFrame(() => {
       requestAnimationFrame(run)
@@ -457,6 +463,7 @@ function scrollCardIntoView(
   el: HTMLElement,
   horizontal: boolean,
   align: 'center' | 'top',
+  behavior: ScrollBehavior = 'smooth',
 ) {
   const rootRect = root.getBoundingClientRect()
   const elRect = el.getBoundingClientRect()
@@ -468,7 +475,7 @@ function scrollCardIntoView(
     if (Math.abs(delta) < slop) return
     const max = Math.max(0, root.scrollWidth - root.clientWidth)
     const next = Math.max(0, Math.min(root.scrollLeft + delta, max))
-    root.scrollTo({ left: next, behavior: 'smooth' })
+    root.scrollTo({ left: next, behavior })
     return
   }
 
@@ -478,7 +485,7 @@ function scrollCardIntoView(
     if (Math.abs(delta) < slop) return
     const max = Math.max(0, root.scrollHeight - root.clientHeight)
     const next = Math.max(0, Math.min(root.scrollTop + delta, max))
-    root.scrollTo({ top: next, behavior: 'smooth' })
+    root.scrollTo({ top: next, behavior })
     return
   }
 
@@ -487,7 +494,7 @@ function scrollCardIntoView(
   if (Math.abs(delta) < slop) return
   const max = Math.max(0, root.scrollHeight - root.clientHeight)
   const next = Math.max(0, Math.min(root.scrollTop + delta, max))
-  root.scrollTo({ top: next, behavior: 'smooth' })
+  root.scrollTo({ top: next, behavior })
 }
 
 function DayPassageInsert({

@@ -523,6 +523,10 @@ export default function App() {
     await refresh()
     setActiveId(example.id)
     setOverviewToken((n) => n + 1)
+    setNavTab('timeline')
+    setPanelOpen(true)
+    setLowerMode('none')
+    setRouteWalk(null)
     setStatus('Opened example')
   }
 
@@ -700,6 +704,8 @@ export default function App() {
       return
     }
     clearTempPin()
+    setRouteWalk(null)
+    setMapFocusEndpoint(null)
     const item = stepById(id)
     if (item && isPlaceholderBase(item)) {
       openFillDayBase(item)
@@ -833,38 +839,31 @@ export default function App() {
   function selectFromMap(payload: MapSelectPayload) {
     // Trip pin / path — leave Explore; empty map taps do not close Explore
     if (exploreOpen) closeExplore()
-    // Selecting a step should show it in the Steps sheet (esp. on phone)
-    setNavTab('timeline')
-    setPanelOpen(true)
 
-    if (payload.kind === 'flight') {
+    if (payload.kind === 'flight' || payload.kind === 'route') {
+      // Keep the map clear so both ends of the path stay on screen while framing
+      setPanelOpen(false)
+      setNavTab('timeline')
       clearTempPin()
-      setRouteWalk({
-        kind: 'flights',
-        from: payload.from,
-        to: payload.to,
-        date: payload.date,
-        origin: payload.origin,
-        destination: payload.destination,
-        coords: payload.coords,
-      })
-      setMapFocusEndpoint(null)
-      setSelectedId(payload.itemId)
-      setAddContext(null)
-      setLowerMode('none')
-      setDetailExpanded(false)
-      return
-    }
-
-    if (payload.kind === 'route') {
-      clearTempPin()
-      setRouteWalk({
-        kind: 'route',
-        origin: payload.origin,
-        destination: payload.destination,
-        travelMode: payload.travelMode,
-        coords: payload.coords,
-      })
+      if (payload.kind === 'flight') {
+        setRouteWalk({
+          kind: 'flights',
+          from: payload.from,
+          to: payload.to,
+          date: payload.date,
+          origin: payload.origin,
+          destination: payload.destination,
+          coords: payload.coords,
+        })
+      } else {
+        setRouteWalk({
+          kind: 'route',
+          origin: payload.origin,
+          destination: payload.destination,
+          travelMode: payload.travelMode,
+          coords: payload.coords,
+        })
+      }
       setMapFocusEndpoint(null)
       const item = stepById(payload.itemId)
       if (item && isPlaceholderBase(item)) {
@@ -877,6 +876,10 @@ export default function App() {
       setDetailExpanded(false)
       return
     }
+
+    // Selecting a step pin should show it in the Steps sheet (esp. on phone)
+    setNavTab('timeline')
+    setPanelOpen(true)
     setRouteWalk(null)
     setMapFocusEndpoint(payload.endpoint)
     const item = stepById(payload.itemId)
@@ -1569,7 +1572,7 @@ export default function App() {
         } ${exploreOpen ? 'side-shell-explore' : ''}`}
       >
         {panelOpen || exploreOpen ? (
-          <div className="side-panel flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="side-panel relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {exploreOpen ? (
               <ExploreSheet
                 open
@@ -1584,8 +1587,17 @@ export default function App() {
                 onCloseDetail={closeExploreDetail}
                 onAddStep={addStepFromExplore}
               />
-            ) : (
-              <>
+            ) : null}
+
+            {/* Stay mounted under Explore — avoid display:none so scrollLeft/Top survive */}
+            <div
+              className={
+                exploreOpen
+                  ? 'pointer-events-none invisible absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-hidden'
+                  : 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'
+              }
+              aria-hidden={exploreOpen}
+            >
             <div className="flex items-center justify-between gap-2 border-b border-stone-200/80 px-3 py-2">
               <div className="text-xs font-semibold uppercase tracking-wide text-stone-400">
                 {navTab === 'timeline' ? 'Steps' : navTab === 'charts' ? 'Stats' : 'Data'}
@@ -1678,8 +1690,7 @@ export default function App() {
                 </div>
               ) : null}
             </div>
-              </>
-            )}
+            </div>
           </div>
         ) : null}
 
@@ -1760,8 +1771,19 @@ export default function App() {
                     phone
                   />
                 </div>
-              ) : navTab === 'timeline' && active ? (
-                <div className="px-2 pb-2 pt-2" data-coach="trip-steps">
+              ) : null}
+
+              {/* Keep Steps mounted under Explore — visibility:hidden keeps scroll position */}
+              {navTab === 'timeline' && active ? (
+                <div
+                  className={
+                    exploreOpen
+                      ? 'pointer-events-none invisible absolute inset-x-0 top-0 px-2 pb-2 pt-2'
+                      : 'px-2 pb-2 pt-2'
+                  }
+                  data-coach="trip-steps"
+                  aria-hidden={exploreOpen}
+                >
                   <TimelinePanel
                     meta={active.meta}
                     items={active.items}
@@ -1892,8 +1914,8 @@ export default function App() {
           } ${
             lowerMode === 'insert'
               ? isPhone
-                ? 'h-[70%]'
-                : 'h-[62%]'
+                ? 'h-[82%]'
+                : 'h-[70%]'
               : detailExpanded
                 ? isPhone
                   ? 'h-[62%]'

@@ -16,6 +16,7 @@ export type FeatureTipVisual =
   | 'drive'
   | 'edit-trip'
   | 'new-trip'
+  | 'hotel-stay'
 
 export type FeatureTip = {
   id: string
@@ -97,6 +98,12 @@ export const FEATURE_TIPS: FeatureTip[] = [
     title: 'Start a new trip',
     body: 'Open the trip menu at the top right, tap the + at the bottom, then give it a name and start/end dates. We’ll add a base spot for each day so the timeline is ready to fill.',
     visual: 'new-trip',
+  },
+  {
+    id: 'hotel-stay-span',
+    title: 'Hotels span every night',
+    body: 'Add a hotel once with check-in and check-out. The app treats it as your stay for every night in between — filter to a middle day and that hotel still shows up, even though check-in was earlier.',
+    visual: 'hotel-stay',
   },
 ]
 

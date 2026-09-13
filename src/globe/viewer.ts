@@ -830,6 +830,7 @@ export function flyToRouteCoords(
   viewer: Viewer,
   coords: [number, number][],
   onComplete?: () => void,
+  opts?: { uiPad?: number },
 ) {
   if (coords.length < 2) {
     const only = coords[0]
@@ -839,13 +840,15 @@ export function flyToRouteCoords(
   }
   const pts = coords.map(([lat, lon]) => Cartesian3.fromDegrees(lon, lat, 0))
   const sphere = BoundingSphere.fromPoints(pts)
+  // Extra pad so both ends stay clear of side/bottom chrome when Steps is open
+  const uiPad = opts?.uiPad ?? 1.55
   const range = Math.min(
-    Math.max(sphere.radius * 2.6, 900),
+    Math.max(sphere.radius * 2.6 * uiPad, 1400),
     MAX_CAMERA_HEIGHT_M * 0.9,
   )
   viewer.camera.flyToBoundingSphere(sphere, {
     duration: 1.15,
-    offset: new HeadingPitchRange(0, CesiumMath.toRadians(-38), range),
+    offset: new HeadingPitchRange(0, CesiumMath.toRadians(-42), range),
     complete: onComplete,
     cancel: onComplete,
   })
@@ -1121,7 +1124,7 @@ export function syncTempPinEntities(
   })
 }
 
-/** Project a lon/lat to canvas CSS pixels (for HTML walk button). */
+/** Project a lon/lat to canvas CSS pixels (for HTML walk / explore buttons). */
 export function lonLatToCanvasCss(
   viewer: Viewer,
   lon: number,
@@ -1131,10 +1134,11 @@ export function lonLatToCanvasCss(
   const windowPos = new Cartesian2()
   const ok = viewer.scene.cartesianToCanvasCoordinates(pos, windowPos)
   if (!ok) return null
-  const canvas = viewer.scene.canvas
-  const scaleX = canvas.clientWidth / Math.max(1, canvas.width)
-  const scaleY = canvas.clientHeight / Math.max(1, canvas.height)
-  return { x: windowPos.x * scaleX, y: windowPos.y * scaleY }
+  // Cesium's worldToWindowCoordinates already uses canvas.clientWidth/Height (CSS px).
+  // Do not scale by clientWidth/canvas.width — that doubles devicePixelRatio and
+  // pulls overlays toward the top-left.
+  if (!Number.isFinite(windowPos.x) || !Number.isFinite(windowPos.y)) return null
+  return { x: windowPos.x, y: windowPos.y }
 }
 
 /** Pin-select framing — phone stays farther out and raises the pin above the dock. */

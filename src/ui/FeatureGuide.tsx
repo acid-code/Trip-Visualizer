@@ -294,6 +294,54 @@ function TipFrame({ visual }: { visual: FeatureTipVisual }) {
             </div>
           </>
         ) : null}
+
+        {visual === 'hotel-stay' ? (
+          <>
+            <div className="absolute left-3 right-3 top-3 rounded-2xl border border-violet-300/40 bg-[#0f1a24]/90 p-3 shadow-lg backdrop-blur">
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-violet-500 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+                  hotel
+                </span>
+                <span className="text-sm font-semibold text-white">Hôtel des Arts</span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
+                <div className="rounded-xl bg-white/10 px-2 py-1.5 text-white/90">
+                  <div className="text-[8px] uppercase tracking-wide text-violet-200/80">Check-in</div>
+                  Oct 2
+                </div>
+                <div className="rounded-xl bg-white/10 px-2 py-1.5 text-white/90">
+                  <div className="text-[8px] uppercase tracking-wide text-violet-200/80">Check-out</div>
+                  Oct 5
+                </div>
+              </div>
+            </div>
+            <div className="absolute bottom-4 left-3 right-3 rounded-2xl border border-white/15 bg-[var(--paper)] p-3 text-[var(--ink)] shadow-xl">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+                Day filter
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {['Day 1', 'Day 2', 'Day 3', 'Day 4'].map((d, i) => (
+                  <span
+                    key={d}
+                    className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${
+                      i === 2
+                        ? 'bg-violet-500 text-white shadow'
+                        : 'bg-stone-100 text-stone-500'
+                    }`}
+                  >
+                    {d}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-dashed border-violet-300 bg-violet-50 px-2.5 py-2">
+                <span className="rounded-full bg-violet-500 px-1.5 py-0.5 text-[8px] font-bold uppercase text-white">
+                  hotel
+                </span>
+                <span className="text-[11px] font-medium text-stone-700">Still on Day 3 · stay continues</span>
+              </div>
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   )
