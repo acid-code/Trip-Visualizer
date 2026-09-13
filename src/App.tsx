@@ -87,7 +87,7 @@ import {
 import { DEFAULT_MAP_STACK, type MapStack } from './globe/viewer'
 import { firstOpenableStep } from './globe/viewer'
 import { EXAMPLE_TRIP_ID, exampleItems, exampleMeta } from './data/examples/france-south-loop'
-import { ensureDayStartBases, deleteStepAndPrune, isPlaceholderBase, itemTouchesDay, applyTripMetaRange, countTripDays } from './data/dayBases'
+import { ensureDayStartBases, deleteStepAndPrune, isPlaceholderBase, itemTouchesDay, applyTripMetaRange, countTripDays, widenMetaToItems } from './data/dayBases'
 import { normalizeCurrency } from './data/fx'
 import {
   isValidCoord,
@@ -335,8 +335,9 @@ export default function App() {
   }, [activeId])
 
   async function persist(next: TripRecord) {
-    const items = ensureDayStartBases(next.meta, next.items)
-    await saveTrip({ ...next, items })
+    const meta = widenMetaToItems(next.meta, next.items)
+    const items = ensureDayStartBases(meta, next.items)
+    await saveTrip({ ...next, meta, items })
     setTrips(await listTrips())
   }
 
@@ -1265,9 +1266,28 @@ export default function App() {
     })()
   }
 
+  function closeCoveringSheets() {
+    if (exploreOpen) closeExplore()
+    if (lowerMode !== 'none') {
+      setAddContext(null)
+      setLowerMode('none')
+      setDetailExpanded(false)
+    }
+  }
+
+  /** Bottom/side tongues: a covering sheet (detail, insert, explore) always
+   *  closes first so the tapped tab’s panel is visible — same for every button. */
   function onTongue(id: NavTab | 'insert') {
-    setPanelOpen(true)
     if (id === 'insert') {
+      if (exploreOpen) closeExplore()
+      if (lowerMode === 'insert') {
+        setAddContext(null)
+        setLowerMode('none')
+        setDetailExpanded(false)
+        setPanelOpen(true)
+        return
+      }
+      setPanelOpen(true)
       if (tempPin && isValidCoord(tempPin.lat, tempPin.lon)) {
         createStepFromTempPin()
         return
@@ -1275,12 +1295,22 @@ export default function App() {
       openInsert(null, null)
       return
     }
-    if (exploreOpen) closeExplore()
-    setNavTab(id)
-    if (id !== 'timeline') {
-      setLowerMode('none')
-      setAddContext(null)
+
+    const covering = lowerMode !== 'none' || exploreOpen
+    closeCoveringSheets()
+    if (covering) {
+      setNavTab(id)
+      setPanelOpen(true)
+      return
     }
+
+    if (panelOpen && navTab === id) {
+      setPanelOpen(false)
+      return
+    }
+
+    setNavTab(id)
+    setPanelOpen(true)
   }
 
   const filteredItems = useMemo(() => {
@@ -1673,18 +1703,7 @@ export default function App() {
                 className={`book-tongue ${activeTongue ? 'book-tongue-on' : ''} ${
                   t.id === 'insert' ? 'book-tongue-plus' : ''
                 } ${t.id === 'insert' && tempPin ? 'ring-2 ring-orange-400 ring-offset-1' : ''}`}
-                onClick={() => {
-                  if (
-                    panelOpen &&
-                    t.id !== 'insert' &&
-                    navTab === t.id &&
-                    !insertActive
-                  ) {
-                    setPanelOpen(false)
-                    return
-                  }
-                  onTongue(t.id)
-                }}
+                onClick={() => onTongue(t.id)}
                 title={
                   t.id === 'insert'
                     ? tempPin
@@ -1849,18 +1868,7 @@ export default function App() {
                   className={`book-tongue-bottom ${activeTongue ? 'book-tongue-on' : ''} ${
                     t.id === 'insert' ? 'book-tongue-bottom-plus' : ''
                   } ${t.id === 'insert' && tempPin ? 'ring-2 ring-orange-400' : ''}`}
-                  onClick={() => {
-                    if (
-                      panelOpen &&
-                      t.id !== 'insert' &&
-                      navTab === t.id &&
-                      !insertActive
-                    ) {
-                      setPanelOpen(false)
-                      return
-                    }
-                    onTongue(t.id)
-                  }}
+                  onClick={() => onTongue(t.id)}
                   title={
                   t.id === 'insert'
                     ? tempPin

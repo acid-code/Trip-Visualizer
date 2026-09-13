@@ -3,18 +3,7 @@ import { dayIndex } from './analytics'
 import { createId, sortItems } from './db'
 import { isIsoDate, requireIsoDate, sanitizeMetaDates } from './validate'
 
-const ARRIVAL_TYPES = new Set(['flight', 'train', 'bus', 'ferry', 'drive', 'hotel'])
 const MAX_TRIP_DAYS = 400
-
-function isDayBase(item: TripItem, day: string): boolean {
-  if (item.status === 'cancelled' || item.type === 'note') return false
-  if (item.type === 'hotel') {
-    if (item.date === day) return true
-    if (item.endDate && item.date < day && item.endDate >= day) return true
-    return false
-  }
-  return ARRIVAL_TYPES.has(item.type) && item.date === day
-}
 
 export function isPlaceholderBase(item: TripItem): boolean {
   return item.tags?.includes('day-base') === true && item.tags?.includes('placeholder') === true
@@ -89,15 +78,16 @@ function isRealStep(item: TripItem): boolean {
   return true
 }
 
-function touchesDay(item: TripItem, day: string): boolean {
-  return itemTouchesDay(item, day)
-}
-
 function dayHasRealSteps(items: TripItem[], day: string): boolean {
-  return items.some((i) => isRealStep(i) && touchesDay(i, day))
+  return items.some((i) => isRealStep(i) && itemTouchesDay(i, day))
 }
 
-/** Ensure every day starts with a hotel/sleep or transport arrival slot. */
+/**
+ * Seed a hotel/arrival placeholder only on days that have no real steps.
+ * Leftover placeholders on days that already have a real step (including a
+ * hotel stay covering that day) are dropped — otherwise moving a step onto a
+ * later day looks like the app inserted an extra "Day N base" after it.
+ */
 export function ensureDayStartBases(
   meta: TripMeta,
   items: TripItem[],
@@ -112,36 +102,45 @@ export function ensureDayStartBases(
     if (isIsoDate(item.endDate)) days.add(item.endDate)
   }
 
+  const withoutStale = sorted.filter((item) => {
+    if (!isPlaceholderBase(item)) return true
+    return !dayHasRealSteps(sorted, item.date)
+  })
+
   const extras: TripItem[] = []
   for (const day of [...days].sort()) {
-    const dayItems = sorted.filter(
-      (i) =>
-        i.status !== 'cancelled' &&
-        i.type !== 'note' &&
-        (i.date === day || (i.type === 'hotel' && i.endDate && i.date < day && i.endDate >= day)),
+    if (dayHasRealSteps(withoutStale, day)) continue
+    const alreadyPlaceholder = withoutStale.some(
+      (i) => i.date === day && isPlaceholderBase(i),
     )
-    const firstOfDay = sortItems(
-      sorted.filter((i) => i.date === day && i.status !== 'cancelled' && i.type !== 'note'),
-    )[0]
-
-    const hasBase =
-      (firstOfDay && isDayBase(firstOfDay, day)) ||
-      dayItems.some((i) => i.type === 'hotel' && isDayBase(i, day))
-
-    const alreadyPlaceholder = sorted.some(
-      (i) =>
-        i.date === day &&
-        i.tags?.includes('day-base') &&
-        i.tags?.includes('placeholder'),
-    )
-
-    if (!hasBase && !alreadyPlaceholder) {
+    if (!alreadyPlaceholder) {
       extras.push(emptyBase(day, dayIndex(meta, day), meta.homeCurrency))
     }
   }
 
-  if (!extras.length) return sorted
-  return sortItems([...sorted, ...extras])
+  if (!extras.length) return withoutStale
+  return sortItems([...withoutStale, ...extras])
+}
+
+/** Grow trip start/end so real steps that were moved outside the range stay in-range. */
+export function widenMetaToItems(meta: TripMeta, items: TripItem[]): TripMeta {
+  const dates = sanitizeMetaDates(meta.startDate, meta.endDate)
+  let startDate = dates.startDate
+  let endDate = dates.endDate
+  let changed = false
+  for (const item of items) {
+    if (!isRealStep(item)) continue
+    if (isIsoDate(item.date) && item.date < startDate) {
+      startDate = item.date
+      changed = true
+    }
+    const end = isIsoDate(item.endDate) ? item.endDate : item.date
+    if (isIsoDate(end) && end > endDate) {
+      endDate = end
+      changed = true
+    }
+  }
+  return changed ? { ...meta, startDate, endDate } : meta
 }
 
 /**
