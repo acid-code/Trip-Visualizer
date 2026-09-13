@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { TripRecord } from '../domain/types'
 
@@ -17,7 +17,11 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
   const [open, setOpen] = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [menuBox, setMenuBox] = useState<{ top: number; right: number; width: number } | null>(
+    null,
+  )
   const rootRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const listId = useId()
 
   const active = trips.find((t) => t.id === activeId) ?? null
@@ -26,7 +30,9 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
   useEffect(() => {
     if (!open || confirmId) return
     const onDoc = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (rootRef.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
@@ -38,6 +44,33 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
       window.removeEventListener('keydown', onKey)
     }
   }, [open, confirmId])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuBox(null)
+      return
+    }
+    const place = () => {
+      const el = rootRef.current
+      if (!el) return
+      const trigger = el.getBoundingClientRect()
+      const row = el.parentElement?.getBoundingClientRect() ?? trigger
+      const gutter = 12
+      // Align to the right of Overview / Tips (the row), not the trigger, so a
+      // long trip name cannot push the list past the left of the viewport.
+      const right = Math.max(gutter, window.innerWidth - row.right)
+      const available = Math.max(132, row.right - gutter)
+      const width = Math.min(176, available)
+      setMenuBox({ top: trigger.bottom + 6, right, width })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open, trips.length])
 
   useEffect(() => {
     if (!confirmId) return
@@ -129,10 +162,10 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
       : null
 
   return (
-    <div ref={rootRef} className="relative min-w-0 max-w-[12rem]">
+    <div ref={rootRef} className="relative min-w-0 max-w-[9.5rem]">
       <button
         type="button"
-        className="flex w-full max-w-full items-center gap-1.5 rounded-full border border-white/20 bg-black/45 py-1.5 pl-3 pr-2 text-left text-xs text-white shadow-sm backdrop-blur hover:bg-black/55"
+        className="flex w-full max-w-full items-center gap-1 rounded-full border border-white/20 bg-black/45 py-1 pl-2.5 pr-1.5 text-left text-xs text-white shadow-sm backdrop-blur hover:bg-black/55"
         aria-expanded={open}
         aria-controls={listId}
         onClick={() => {
@@ -164,81 +197,88 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
         </svg>
       </button>
 
-      {open ? (
-        <div
-          id={listId}
-          className="absolute right-0 z-50 mt-1.5 w-[min(12rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.25rem)] text-white"
-          role="listbox"
-        >
-          <div className="overflow-hidden rounded-t-2xl border border-b-0 border-white/15 bg-[#0f1a24]/95 shadow-2xl backdrop-blur-md">
-            <div className="border-b border-white/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-orange-300/90">
-              Your trips
-            </div>
-            <ul className="max-h-64 overflow-y-auto py-1">
-              {trips.length === 0 ? (
-                <li className="px-3 py-3 text-xs text-white/50">No trips yet — tap + to start one.</li>
-              ) : (
-                trips.map((t) => {
-                  const selected = t.id === activeId
-                  return (
-                    <li
-                      key={t.id}
-                      className={`group flex items-center gap-1 px-1.5 ${
-                        selected ? 'bg-white/10' : 'hover:bg-white/5'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={selected}
-                        className="min-w-0 flex-1 rounded-xl px-2.5 py-2.5 text-left"
-                        onClick={() => {
-                          onSelect(t.id)
-                          setOpen(false)
-                        }}
-                      >
-                        <div className="truncate text-sm font-medium">
-                          {t.isExample ? <span className="mr-1 text-orange-300">★</span> : null}
-                          {t.meta.name}
-                        </div>
-                        <div className="truncate text-[10px] text-white/50">
-                          {t.meta.startDate} → {t.meta.endDate}
-                          {t.isExample ? ' · sample' : ''}
-                        </div>
-                      </button>
-                      <button
-                        type="button"
-                        className="mr-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/55 transition hover:border-red-400/40 hover:bg-red-500/25 hover:text-red-200"
-                        title={t.isExample ? 'Remove sample from list' : 'Delete trip'}
-                        aria-label={`Delete ${t.meta.name}`}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          requestDelete(t.id)
-                        }}
-                      >
-                        <TrashIcon className="h-5 w-5" />
-                      </button>
+      {open && menuBox && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              ref={menuRef}
+              id={listId}
+              className="fixed z-[80] text-white"
+              style={{ top: menuBox.top, right: menuBox.right, width: menuBox.width }}
+              role="listbox"
+            >
+              <div className="overflow-hidden rounded-t-2xl border border-b-0 border-white/15 bg-[#0f1a24]/95 shadow-2xl backdrop-blur-md">
+                <div className="border-b border-white/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-orange-300/90">
+                  Your trips
+                </div>
+                <ul className="max-h-64 overflow-y-auto py-1">
+                  {trips.length === 0 ? (
+                    <li className="px-3 py-3 text-xs text-white/50">
+                      No trips yet — tap + to start one.
                     </li>
-                  )
-                })
-              )}
-            </ul>
-          </div>
-          <button
-            type="button"
-            className="flex h-9 w-full items-start justify-center bg-[var(--coral)] pt-1.5 text-white shadow-[0_8px_20px_rgba(0,0,0,0.3)] transition hover:bg-[var(--coral-deep)]"
-            style={{ borderRadius: '0 0 50% 50% / 0 0 100% 100%' }}
-            title="New trip"
-            aria-label="Add new trip"
-            onClick={() => {
-              setOpen(false)
-              onCreate()
-            }}
-          >
-            <PlusIcon className="h-5 w-5" />
-          </button>
-        </div>
-      ) : null}
+                  ) : (
+                    trips.map((t) => {
+                      const selected = t.id === activeId
+                      return (
+                        <li
+                          key={t.id}
+                          className={`group flex items-center gap-1 px-1.5 ${
+                            selected ? 'bg-white/10' : 'hover:bg-white/5'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={selected}
+                            className="min-w-0 flex-1 rounded-xl px-2.5 py-2.5 text-left"
+                            onClick={() => {
+                              onSelect(t.id)
+                              setOpen(false)
+                            }}
+                          >
+                            <div className="truncate text-sm font-medium">
+                              {t.isExample ? <span className="mr-1 text-orange-300">★</span> : null}
+                              {t.meta.name}
+                            </div>
+                            <div className="truncate text-[10px] text-white/50">
+                              {t.meta.startDate} → {t.meta.endDate}
+                              {t.isExample ? ' · sample' : ''}
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/55 transition hover:border-red-400/40 hover:bg-red-500/25 hover:text-red-200"
+                            title={t.isExample ? 'Remove sample from list' : 'Delete trip'}
+                            aria-label={`Delete ${t.meta.name}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              requestDelete(t.id)
+                            }}
+                          >
+                            <TrashIcon className="h-4 w-4" />
+                          </button>
+                        </li>
+                      )
+                    })
+                  )}
+                </ul>
+              </div>
+              <button
+                type="button"
+                className="flex h-7 w-full items-start justify-center bg-[var(--coral)] pt-1 text-white shadow-[0_8px_20px_rgba(0,0,0,0.3)] transition hover:bg-[var(--coral-deep)]"
+                style={{ borderRadius: '0 0 50% 50% / 0 0 100% 100%' }}
+                title="New trip"
+                aria-label="Add new trip"
+                onClick={() => {
+                  setOpen(false)
+                  onCreate()
+                }}
+              >
+                <PlusIcon className="h-4 w-4" />
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {confirmModal}
     </div>
