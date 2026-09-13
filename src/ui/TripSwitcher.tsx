@@ -129,10 +129,10 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
       : null
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="relative min-w-0 max-w-[12rem]">
       <button
         type="button"
-        className="flex max-w-[14rem] items-center gap-1.5 rounded-full border border-white/20 bg-black/45 py-1.5 pl-3 pr-2 text-left text-xs text-white shadow-sm backdrop-blur hover:bg-black/55"
+        className="flex w-full max-w-full items-center gap-1.5 rounded-full border border-white/20 bg-black/45 py-1.5 pl-3 pr-2 text-left text-xs text-white shadow-sm backdrop-blur hover:bg-black/55"
         aria-expanded={open}
         aria-controls={listId}
         onClick={() => {
@@ -167,7 +167,7 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
       {open ? (
         <div
           id={listId}
-          className="absolute right-0 z-50 mt-1.5 w-[min(18rem,calc(100vw-1.5rem))] text-white"
+          className="absolute right-0 z-50 mt-1.5 w-[min(12rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.25rem)] text-white"
           role="listbox"
         >
           <div className="overflow-hidden rounded-t-2xl border border-b-0 border-white/15 bg-[#0f1a24]/95 shadow-2xl backdrop-blur-md">
@@ -226,7 +226,7 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
           </div>
           <button
             type="button"
-            className="flex h-[4.5rem] w-full items-start justify-center bg-[var(--coral)] pt-2.5 text-white shadow-[0_12px_28px_rgba(0,0,0,0.35)] transition hover:bg-[var(--coral-deep)]"
+            className="flex h-9 w-full items-start justify-center bg-[var(--coral)] pt-1.5 text-white shadow-[0_8px_20px_rgba(0,0,0,0.3)] transition hover:bg-[var(--coral-deep)]"
             style={{ borderRadius: '0 0 50% 50% / 0 0 100% 100%' }}
             title="New trip"
             aria-label="Add new trip"
@@ -235,7 +235,7 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
               onCreate()
             }}
           >
-            <PlusIcon className="h-10 w-10" />
+            <PlusIcon className="h-5 w-5" />
           </button>
         </div>
       ) : null}

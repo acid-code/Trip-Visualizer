@@ -275,10 +275,10 @@ function TipFrame({ visual }: { visual: FeatureTipVisual }) {
                 <div className="px-2 py-1.5 text-[10px] text-white/70">Weekend in Lyon</div>
               </div>
               <div
-                className="flex h-9 items-start justify-center bg-[var(--coral)] pt-1 text-white shadow-xl"
+                className="flex h-6 items-start justify-center bg-[var(--coral)] pt-0.5 text-white shadow-xl"
                 style={{ borderRadius: '0 0 50% 50% / 0 0 100% 100%' }}
               >
-                <span className="text-lg font-semibold leading-none">+</span>
+                <span className="text-sm font-semibold leading-none">+</span>
               </div>
             </div>
             <div className="absolute bottom-4 left-4 right-4 rounded-2xl border border-white/15 bg-[var(--paper)] p-3 text-[var(--ink)] shadow-xl">
