@@ -95,7 +95,7 @@ export const FEATURE_TIPS: FeatureTip[] = [
   {
     id: 'new-trip',
     title: 'Start a new trip',
-    body: 'Open the Data tongue, tap New trip, then give it a name and start/end dates. We’ll add a base spot for each day so the timeline is ready to fill.',
+    body: 'Open the trip menu at the top right, tap the + at the bottom, then give it a name and start/end dates. We’ll add a base spot for each day so the timeline is ready to fill.',
     visual: 'new-trip',
   },
 ]

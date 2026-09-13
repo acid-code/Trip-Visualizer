@@ -262,35 +262,35 @@ function TipFrame({ visual }: { visual: FeatureTipVisual }) {
 
         {visual === 'new-trip' ? (
           <>
-            <div className="absolute left-2 top-1/2 flex -translate-y-1/2 flex-col gap-1">
-              {['Steps', 'Stats', 'Data'].map((label, i) => (
-                <div
-                  key={label}
-                  className={`rounded-r-lg px-2 py-1.5 text-[9px] font-semibold ${
-                    i === 2
-                      ? 'bg-[var(--coral)] text-white shadow'
-                      : 'bg-white/15 text-white/60'
-                  }`}
-                >
-                  {label}
+            <div className="absolute right-3 top-3 w-[9.5rem] text-white">
+              <div className="ml-auto flex max-w-[7rem] items-center justify-between rounded-full border border-white/20 bg-black/45 px-2.5 py-1 text-[9px]">
+                <span className="truncate">Provence loop</span>
+                <span className="text-white/60">▾</span>
+              </div>
+              <div className="mt-1.5 overflow-hidden rounded-t-xl border border-b-0 border-white/15 bg-[#0f1a24]/95 shadow-xl">
+                <div className="px-2 py-1 text-[8px] font-semibold uppercase tracking-wide text-orange-300/90">
+                  Your trips
                 </div>
-              ))}
+                <div className="border-t border-white/10 px-2 py-1.5 text-[10px]">Provence loop</div>
+                <div className="px-2 py-1.5 text-[10px] text-white/70">Weekend in Lyon</div>
+              </div>
+              <div
+                className="flex h-5 items-start justify-center bg-[var(--coral)] pt-0.5 text-white shadow-xl"
+                style={{ borderRadius: '0 0 50% 50% / 0 0 100% 100%' }}
+              >
+                <span className="text-xs font-semibold leading-none">+</span>
+              </div>
             </div>
-            <div className="absolute bottom-4 left-14 right-4 rounded-2xl border border-white/15 bg-[var(--paper)] p-3 text-[var(--ink)] shadow-xl">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-stone-400">
-                Data
+            <div className="absolute bottom-4 left-4 right-4 rounded-2xl border border-white/15 bg-[var(--paper)] p-3 text-[var(--ink)] shadow-xl">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--coral-deep)]">
+                New trip
               </div>
+              <div className="mt-1 h-2 w-2/3 rounded bg-stone-200" />
               <div className="mt-2 flex gap-2">
-                <div className="rounded-full bg-[var(--coral)] px-3 py-1.5 text-[10px] font-semibold text-white">
-                  New trip
-                </div>
-                <div className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-[10px] text-stone-500">
-                  Open example
-                </div>
+                <div className="h-6 flex-1 rounded-lg bg-stone-100" />
+                <div className="h-6 flex-1 rounded-lg bg-stone-100" />
               </div>
-              <div className="mt-3 rounded-xl border border-orange-200/80 bg-orange-50/80 px-2.5 py-2 text-[10px] text-stone-600">
-                Name · start · end → day bases ready
-              </div>
+              <div className="mt-2 text-[10px] text-stone-500">Name · start · end → day bases ready</div>
             </div>
           </>
         ) : null}
