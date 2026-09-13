@@ -14,6 +14,8 @@ export type FeatureTipVisual =
   | 'plus-save'
   | 'overview'
   | 'drive'
+  | 'edit-trip'
+  | 'new-trip'
 
 export type FeatureTip = {
   id: string
@@ -81,8 +83,20 @@ export const FEATURE_TIPS: FeatureTip[] = [
   {
     id: 'google-drive-sync',
     title: 'Google Drive backup',
-    body: 'In Data, connect Google once, then Save trip to Drive (trip-planer/folder). Open folder / Open opens Drive in the browser or app. Load switches to the matching trip and overwrites it only when the Drive file is newer than your local copy.',
+    body: 'In Data, connect Google once, then Save trip to Drive (trip-planer/folder). Renaming a trip renames that same Drive file on the next save. Open folder / Open opens Drive in the browser or app. Load switches to the matching trip and overwrites it only when the Drive file is newer than your local copy.',
     visual: 'drive',
+  },
+  {
+    id: 'edit-trip-meta',
+    title: 'Edit name & dates',
+    body: 'Tap the trip title in the top-right to rename the trip or change start/end dates. Each day gets a base spot; shrinking dates asks what to do with steps left outside.',
+    visual: 'edit-trip',
+  },
+  {
+    id: 'new-trip',
+    title: 'Start a new trip',
+    body: 'Open the Data tongue, tap New trip, then give it a name and start/end dates. We’ll add a base spot for each day so the timeline is ready to fill.',
+    visual: 'new-trip',
   },
 ]
 

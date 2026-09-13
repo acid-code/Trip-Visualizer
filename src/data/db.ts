@@ -14,6 +14,7 @@ import {
   exampleItems,
   exampleMeta,
 } from './examples/france-south-loop'
+import { sanitizeMetaDates } from './validate'
 
 interface TripDB extends DBSchema {
   trips: {
@@ -145,14 +146,20 @@ export async function duplicateTrip(source: TripRecord): Promise<TripRecord> {
   return copy
 }
 
-export async function createBlankTrip(): Promise<TripRecord> {
+export async function createBlankTrip(opts?: {
+  name?: string
+  startDate?: string
+  endDate?: string
+  homeCurrency?: string
+}): Promise<TripRecord> {
   const today = new Date().toISOString().slice(0, 10)
+  const dates = sanitizeMetaDates(opts?.startDate || today, opts?.endDate || opts?.startDate || today)
   const trip = makeTrip(
     {
-      name: 'New trip',
-      startDate: today,
-      endDate: today,
-      homeCurrency: 'EUR',
+      name: (opts?.name || '').trim() || 'New trip',
+      startDate: dates.startDate,
+      endDate: dates.endDate,
+      homeCurrency: opts?.homeCurrency || 'EUR',
       timezoneNote: 'All times are local',
       travelers: '',
       notes: '',

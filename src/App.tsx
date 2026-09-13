@@ -30,6 +30,7 @@ import {
   isGoogleDriveConnected,
   listTripWorkbooksOnDrive,
   rememberDriveFileForTrip,
+  forgetDriveFileForTrip,
   resolveDriveFolderOpenUrl,
   slugTripFileBase,
   tripNameSlugFromDriveFileName,
@@ -86,10 +87,9 @@ import {
 import { DEFAULT_MAP_STACK, type MapStack } from './globe/viewer'
 import { firstOpenableStep } from './globe/viewer'
 import { EXAMPLE_TRIP_ID, exampleItems, exampleMeta } from './data/examples/france-south-loop'
-import { ensureDayStartBases, deleteStepAndPrune, isPlaceholderBase, itemTouchesDay } from './data/dayBases'
+import { ensureDayStartBases, deleteStepAndPrune, isPlaceholderBase, itemTouchesDay, applyTripMetaRange, countTripDays } from './data/dayBases'
 import { normalizeCurrency } from './data/fx'
 import {
-  isIsoDate,
   isValidCoord,
   requireIsoDate,
   sanitizeMetaDates,
@@ -112,6 +112,15 @@ import {
 import { forceAppRefresh } from './updateCheck'
 import { sanitizeTripRecord } from './domain/types'
 import { useIsNarrow } from './ui/useIsNarrow'
+import {
+  TripMetaDialog,
+  defaultCreateDraft,
+  draftFromMeta,
+  type TripMetaDraft,
+} from './ui/TripMetaDialog'
+import { TripSwitcher } from './ui/TripSwitcher'
+import { TripStartCoach } from './ui/TripStartCoach'
+import type { RangeReconcileMode } from './data/dayBases'
 
 type NavTab = 'timeline' | 'charts' | 'settings'
 type LowerMode = 'none' | 'detail' | 'insert'
@@ -194,6 +203,10 @@ export default function App() {
   const [guideOpen, setGuideOpen] = useState(false)
   const [guideTips, setGuideTips] = useState<FeatureTip[]>([])
   const [seenTipIds, setSeenTipIds] = useState<Set<string>>(() => new Set())
+  const [tripDialog, setTripDialog] = useState<null | { mode: 'create' | 'edit'; draft: TripMetaDraft }>(
+    null,
+  )
+  const [startCoachOpen, setStartCoachOpen] = useState(false)
   const guideAutoShownRef = useRef(false)
   /** When true, keep the example trip alongside personal trips (user opened it explicitly). */
   const keepExampleRef = useRef(false)
@@ -513,10 +526,84 @@ export default function App() {
   }
 
   async function onBlank() {
-    const trip = await createBlankTrip()
-    await retireExampleTrip()
+    setTripDialog({ mode: 'create', draft: defaultCreateDraft() })
+  }
+
+  async function onDeleteTrip(id: string) {
+    const doomed = trips.find((t) => t.id === id)
+    const wasActive = activeId === id
+    await deleteTrip(id)
+    forgetDriveFileForTrip(id)
+    if (id === EXAMPLE_TRIP_ID) keepExampleRef.current = false
+
     await refresh()
-    setActiveId(trip.id)
+    if (wasActive) {
+      const nextList = await listTrips()
+      const next =
+        nextList.find((t) => !t.isExample && t.id !== EXAMPLE_TRIP_ID) ??
+        nextList[0] ??
+        null
+      setActiveId(next?.id ?? null)
+    }
+    setStatus(
+      doomed ? `Deleted “${doomed.meta.name}” from this device` : 'Trip deleted',
+    )
+  }
+
+  function openTripEdit() {
+    if (!active) return
+    setTripDialog({ mode: 'edit', draft: draftFromMeta(active.meta) })
+  }
+
+  async function onTripDialogSubmit(draft: TripMetaDraft, rangeMode: RangeReconcileMode) {
+    if (tripDialog?.mode === 'create') {
+      const trip = await createBlankTrip({
+        name: draft.name,
+        startDate: draft.startDate,
+        endDate: draft.endDate,
+      })
+      const withBases = applyTripMetaRange(
+        trip.meta,
+        trip.items,
+        draft,
+        'keep-outside',
+      )
+      await saveTrip({ ...trip, meta: withBases.meta, items: withBases.items })
+      await retireExampleTrip()
+      await refresh()
+      setActiveId(trip.id)
+      setOverviewToken((n) => n + 1)
+      setStatus(`Created “${withBases.meta.name}” · ${countDaysLabel(draft)}`)
+      setTripDialog(null)
+      setNavTab('timeline')
+      setPanelOpen(true)
+      setLowerMode('none')
+      setStartCoachOpen(true)
+      return
+    }
+
+    if (!active) {
+      setTripDialog(null)
+      return
+    }
+
+    const result = applyTripMetaRange(active.meta, active.items, draft, rangeMode)
+    await persist({ ...active, meta: result.meta, items: result.items })
+    setTripDialog(null)
+
+    let msg = `Updated “${result.meta.name}”`
+    if (result.removedCount > 0) {
+      msg += ` · removed ${result.removedCount} step${result.removedCount === 1 ? '' : 's'} outside the dates`
+    } else if (result.widened) {
+      msg += ' · dates widened to keep your existing steps'
+    }
+    setStatus(msg)
+  }
+
+  function countDaysLabel(draft: TripMetaDraft): string {
+    const { startDate, endDate } = sanitizeMetaDates(draft.startDate, draft.endDate)
+    const n = countTripDays(startDate, endDate)
+    return `${n} day${n === 1 ? '' : 's'} ready`
   }
 
   async function buildRoutes(trip: TripRecord) {
@@ -1276,6 +1363,7 @@ export default function App() {
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#0c1520] text-slate-100">
       {active ? (
+        <div className="absolute inset-0" data-coach="globe-map">
         <GlobeView
           items={filteredItems.length ? filteredItems : active.items}
           meta={active.meta}
@@ -1326,6 +1414,7 @@ export default function App() {
             void dropTempPinAt(pos)
           }}
         />
+        </div>
       ) : (
         <div className="flex h-full items-center justify-center text-slate-400">Loading…</div>
       )}
@@ -1340,7 +1429,7 @@ export default function App() {
               : 'left-14 top-[max(0.75rem,env(safe-area-inset-top))]'
         }`}
       >
-        <div className="pointer-events-auto">
+        <div className="pointer-events-auto" data-coach="map-search">
           <MapSearchBar
             busy={searchBusy}
             onSearch={(q) => void searchForPlace(q)}
@@ -1376,27 +1465,46 @@ export default function App() {
             <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-orange-300/90">
               Trip journal
             </div>
-            <h1 className="brand-mark truncate text-xl text-white drop-shadow">
-              {active?.meta.name ?? '…'}
-            </h1>
-            <p className="text-xs text-white/70 drop-shadow">
-              {active?.meta.startDate} → {active?.meta.endDate}
-              {active?.isExample ? ' · example' : ''}
-            </p>
+            <button
+              type="button"
+              className="group max-w-full text-right disabled:cursor-default"
+              onClick={() => openTripEdit()}
+              disabled={!active}
+              title="Tap to edit trip name and start/end dates"
+              aria-label={
+                active
+                  ? `Edit trip: ${active.meta.name}. Tap to change name and dates.`
+                  : 'No active trip'
+              }
+            >
+              <h1 className="brand-mark truncate text-xl text-white drop-shadow decoration-white/40 underline-offset-4 group-hover:underline group-disabled:no-underline">
+                {active?.meta.name ?? '…'}
+              </h1>
+              <p className="text-xs text-white/70 drop-shadow">
+                {active?.meta.startDate} → {active?.meta.endDate}
+                {active?.isExample ? ' · example' : ''}
+              </p>
+              {active ? (
+                <p className="text-[10px] text-white/45 group-hover:text-orange-200/90">
+                  Tap title to edit name &amp; dates
+                </p>
+              ) : null}
+            </button>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-1">
-            <select
-              className="max-w-44 rounded-full border border-white/20 bg-black/45 px-3 py-1.5 text-xs text-white backdrop-blur"
-              value={activeId ?? ''}
-              onChange={(e) => setActiveId(e.target.value)}
-            >
-              {trips.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.isExample ? '★ ' : ''}
-                  {t.meta.name}
-                </option>
-              ))}
-            </select>
+            <TripSwitcher
+              trips={trips}
+              activeId={activeId}
+              onSelect={(id) => setActiveId(id)}
+              onDelete={(id) => onDeleteTrip(id)}
+              onPrepareDelete={() => {
+                setPanelOpen(false)
+                setExploreOpen(false)
+                setExploreDetail(null)
+                setLowerMode('none')
+                setDetailExpanded(false)
+              }}
+            />
             <button
               className="rounded-full bg-white/15 px-3 py-1 text-xs text-white backdrop-blur hover:bg-white/25"
               onClick={() => setOverviewToken((n) => n + 1)}
@@ -1463,7 +1571,7 @@ export default function App() {
 
             <div className="min-h-0 flex-1 overflow-hidden">
               {navTab === 'timeline' && active ? (
-                <div className="h-full min-h-0 px-2 pb-2 pt-1">
+                <div className="h-full min-h-0 px-2 pb-2 pt-1" data-coach="trip-steps">
                   <TimelinePanel
                     meta={active.meta}
                     items={active.items}
@@ -1522,6 +1630,7 @@ export default function App() {
                       void buildRoutes(active)
                     }}
                     onAddDay={() => void addDay()}
+                    onEditTrip={() => openTripEdit()}
                     onShowTips={() => openFeatureGuide({ all: true })}
                     onStatus={setStatus}
                     setMapStack={(id) => {
@@ -1633,7 +1742,7 @@ export default function App() {
                   />
                 </div>
               ) : navTab === 'timeline' && active ? (
-                <div className="px-2 pb-2 pt-2">
+                <div className="px-2 pb-2 pt-2" data-coach="trip-steps">
                   <TimelinePanel
                     meta={active.meta}
                     items={active.items}
@@ -1700,6 +1809,7 @@ export default function App() {
                       void buildRoutes(active)
                     }}
                     onAddDay={() => void addDay()}
+                    onEditTrip={() => openTripEdit()}
                     onShowTips={() => openFeatureGuide({ all: true })}
                     onStatus={setStatus}
                     setMapStack={(id) => {
@@ -1851,6 +1961,19 @@ export default function App() {
         onClose={() => setGuideOpen(false)}
         onMarkSeen={(ids) => void markTipsSeen(ids)}
       />
+      <TripMetaDialog
+        open={!!tripDialog}
+        mode={tripDialog?.mode ?? 'create'}
+        initial={tripDialog?.draft ?? defaultCreateDraft()}
+        trip={tripDialog?.mode === 'edit' ? active : null}
+        onClose={() => setTripDialog(null)}
+        onSubmit={onTripDialogSubmit}
+      />
+      <TripStartCoach
+        open={startCoachOpen}
+        tripName={active?.meta.name}
+        onDismiss={() => setStartCoachOpen(false)}
+      />
     </div>
   )
 }
@@ -1963,7 +2086,8 @@ function DriveSyncPanel({
         Google Drive
       </div>
       <p className="mt-1 text-xs text-stone-600">
-        Saves Excel into <code className="rounded bg-white px-1">{DRIVE_FOLDER_NAME}/</code>. Load
+        Saves Excel into <code className="rounded bg-white px-1">{DRIVE_FOLDER_NAME}/</code>. Each
+        trip keeps one Drive file — renaming the trip renames that file on the next save. Load
         switches to the matching trip and overwrites it only when the Drive file is newer than your
         local copy. Open opens the folder or file in Google Drive. If an older save won’t open in
         Sheets, delete it and Save trip to Drive again.
@@ -2079,6 +2203,7 @@ function DataPanel({
   onEnrich,
   onRebuildRoutes,
   onAddDay,
+  onEditTrip,
   onShowTips,
   onStatus,
   setMapStack,
@@ -2105,6 +2230,7 @@ function DataPanel({
   onEnrich: () => void
   onRebuildRoutes: () => void
   onAddDay: () => void
+  onEditTrip: () => void
   onShowTips: () => void
   onStatus: (msg: string) => void
   setMapStack: (id: MapStack) => void
@@ -2133,7 +2259,7 @@ function DataPanel({
           Open example
         </button>
         <button type="button" className={btn} onClick={onBlank}>
-          New blank trip
+          New trip
         </button>
       </ActionRow>
 
@@ -2271,63 +2397,16 @@ function DataPanel({
           <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-400">
             Trip meta
           </div>
-          <input
-            className="mb-2 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5"
-            value={active.meta.name}
-            onChange={(e) => {
-              const name = e.target.value
-              void updateActive((t) => ({
-                ...t,
-                meta: { ...t.meta, name },
-              }))
-            }}
-            onBlur={(e) => {
-              const name = e.target.value.trim() || 'Untitled trip'
-              void updateActive((t) => ({
-                ...t,
-                meta: { ...t.meta, name },
-              }))
-            }}
-          />
-          <div className="mb-2 grid grid-cols-2 gap-2">
-            <label className="block text-xs text-stone-500">
-              Start date
-              <input
-                className="mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm"
-                type="date"
-                value={isIsoDate(active.meta.startDate) ? active.meta.startDate : ''}
-                required
-                onChange={(e) => {
-                  if (!e.target.value) return
-                  const dates = sanitizeMetaDates(e.target.value, active.meta.endDate)
-                  void updateActive((t) => ({
-                    ...t,
-                    meta: { ...t.meta, ...dates },
-                  }))
-                }}
-              />
-            </label>
-            <label className="block text-xs text-stone-500">
-              End date
-              <input
-                className="mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm"
-                type="date"
-                value={isIsoDate(active.meta.endDate) ? active.meta.endDate : ''}
-                min={
-                  isIsoDate(active.meta.startDate) ? active.meta.startDate : undefined
-                }
-                required
-                onChange={(e) => {
-                  if (!e.target.value) return
-                  const dates = sanitizeMetaDates(active.meta.startDate, e.target.value)
-                  void updateActive((t) => ({
-                    ...t,
-                    meta: { ...t.meta, ...dates },
-                  }))
-                }}
-              />
-            </label>
-          </div>
+          <button
+            type="button"
+            className={`${btn} mb-2 w-full justify-between`}
+            onClick={onEditTrip}
+          >
+            <span className="truncate font-medium text-stone-800">{active.meta.name}</span>
+            <span className="shrink-0 text-stone-400">
+              {active.meta.startDate} → {active.meta.endDate}
+            </span>
+          </button>
           <button type="button" className={`${btn} mb-2 w-full`} onClick={onAddDay}>
             + Add a day (extends end date)
           </button>
@@ -2363,6 +2442,7 @@ function DataPanel({
                 meta: { ...t.meta, notes: e.target.value },
               }))
             }
+            placeholder="Notes…"
           />
           <p className="mt-2 text-xs text-stone-500">
             Types: {ITEM_TYPES.join(', ')}. Excel uses Trip + Steps + Hotels + Cash — color-coded

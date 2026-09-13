@@ -464,6 +464,13 @@ export function getRememberedDriveFileForTrip(
   return readTripFileMap()[tripId] ?? null
 }
 
+export function forgetDriveFileForTrip(tripId: string): void {
+  const map = readTripFileMap()
+  if (!(tripId in map)) return
+  delete map[tripId]
+  writeTripFileMap(map)
+}
+
 export function getStoredDriveFolderId(): string | null {
   return readStoredFolderId()
 }
@@ -614,7 +621,7 @@ async function updateExistingDriveFile(
   return { fileName: data.name || fileName, fileId: data.id || fileId }
 }
 
-/** Upload workbook bytes into trip-planer/. Updates the same file when tripId was saved before. */
+/** Upload workbook bytes into trip-planer/. Updates the same Drive file for a tripId, renaming it when the trip name changes. */
 export async function uploadTripWorkbookToDrive(
   tripName: string,
   bytes: ArrayBuffer,
@@ -627,21 +634,30 @@ export async function uploadTripWorkbookToDrive(
 
   if (tripId) {
     const remembered = getRememberedDriveFileForTrip(tripId)
-    if (remembered && files.some((f) => f.id === remembered.fileId)) {
-      const updated = await updateExistingDriveFile(
-        remembered.fileId,
-        `${base}.xlsx`,
-        bytes,
-      )
-      rememberDriveFileForTrip(tripId, updated.fileId, updated.fileName)
-      return updated
+    if (remembered) {
+      // Prefer the remembered file id so renames keep overwriting the same Drive row.
+      const others = files.filter((f) => f.id !== remembered.fileId).map((f) => f.name)
+      const nextName = uniqueWorkbookName(base, others)
+      try {
+        const updated = await updateExistingDriveFile(remembered.fileId, nextName, bytes)
+        rememberDriveFileForTrip(tripId, updated.fileId, updated.fileName)
+        return updated
+      } catch {
+        // File may have been deleted in Drive — fall through to create / name match
+        forgetDriveFileForTrip(tripId)
+      }
     }
+
+    // Fallback: exact name match (first save from another browser, or lost local map)
     const byName = files.find((f) => f.name.toLowerCase() === `${base}.xlsx`)
     if (byName) {
       const updated = await updateExistingDriveFile(byName.id, byName.name, bytes)
       rememberDriveFileForTrip(tripId, updated.fileId, updated.fileName)
       return updated
     }
+
+    // Also match remembered old filename slug if still in the folder under a prior name
+    // (handled above via fileId). If map was lost, try matching trip-id is not on Drive.
   }
 
   const fileName = uniqueWorkbookName(

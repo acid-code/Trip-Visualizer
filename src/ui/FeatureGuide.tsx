@@ -232,6 +232,68 @@ function TipFrame({ visual }: { visual: FeatureTipVisual }) {
             </div>
           </>
         ) : null}
+
+        {visual === 'edit-trip' ? (
+          <>
+            <div className="absolute right-4 top-4 max-w-[11rem] rounded-2xl border border-orange-300/40 bg-black/50 px-3 py-2 text-right shadow-lg backdrop-blur">
+              <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-orange-300/90">
+                Trip journal
+              </div>
+              <div className="mt-0.5 font-[family-name:Fraunces,Georgia,serif] text-base text-white underline decoration-white/40 underline-offset-2">
+                Provence loop
+              </div>
+              <div className="text-[10px] text-white/65">Oct 1 → Oct 7</div>
+              <div className="mt-1.5 inline-block rounded-full bg-orange-500/90 px-2 py-0.5 text-[9px] font-semibold text-white">
+                Tap to edit
+              </div>
+            </div>
+            <div className="absolute bottom-4 left-4 right-4 rounded-2xl border border-white/15 bg-[var(--paper)] p-3 text-[var(--ink)] shadow-xl">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--coral-deep)]">
+                Trip details
+              </div>
+              <div className="mt-1 h-2 w-2/3 rounded bg-stone-200" />
+              <div className="mt-2 flex gap-2">
+                <div className="h-6 flex-1 rounded-lg bg-stone-100" />
+                <div className="h-6 flex-1 rounded-lg bg-stone-100" />
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {visual === 'new-trip' ? (
+          <>
+            <div className="absolute left-2 top-1/2 flex -translate-y-1/2 flex-col gap-1">
+              {['Steps', 'Stats', 'Data'].map((label, i) => (
+                <div
+                  key={label}
+                  className={`rounded-r-lg px-2 py-1.5 text-[9px] font-semibold ${
+                    i === 2
+                      ? 'bg-[var(--coral)] text-white shadow'
+                      : 'bg-white/15 text-white/60'
+                  }`}
+                >
+                  {label}
+                </div>
+              ))}
+            </div>
+            <div className="absolute bottom-4 left-14 right-4 rounded-2xl border border-white/15 bg-[var(--paper)] p-3 text-[var(--ink)] shadow-xl">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+                Data
+              </div>
+              <div className="mt-2 flex gap-2">
+                <div className="rounded-full bg-[var(--coral)] px-3 py-1.5 text-[10px] font-semibold text-white">
+                  New trip
+                </div>
+                <div className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-[10px] text-stone-500">
+                  Open example
+                </div>
+              </div>
+              <div className="mt-3 rounded-xl border border-orange-200/80 bg-orange-50/80 px-2.5 py-2 text-[10px] text-stone-600">
+                Name · start · end → day bases ready
+              </div>
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   )

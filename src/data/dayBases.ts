@@ -1,9 +1,10 @@
 import type { TripItem, TripMeta } from '../domain/types'
 import { dayIndex } from './analytics'
 import { createId, sortItems } from './db'
-import { isIsoDate, requireIsoDate } from './validate'
+import { isIsoDate, requireIsoDate, sanitizeMetaDates } from './validate'
 
 const ARRIVAL_TYPES = new Set(['flight', 'train', 'bus', 'ferry', 'drive', 'hotel'])
+const MAX_TRIP_DAYS = 400
 
 function isDayBase(item: TripItem, day: string): boolean {
   if (item.status === 'cancelled' || item.type === 'note') return false
@@ -74,7 +75,7 @@ function enumerateDays(start: string, end: string): string[] {
   const last = new Date(end + 'T12:00:00')
   if (Number.isNaN(cur.getTime()) || Number.isNaN(last.getTime())) return []
   // Cap runaway ranges (bad Excel / corrupted meta)
-  const maxDays = 400
+  const maxDays = MAX_TRIP_DAYS
   while (cur <= last && out.length < maxDays) {
     out.push(cur.toISOString().slice(0, 10))
     cur.setDate(cur.getDate() + 1)
@@ -210,4 +211,106 @@ export function deleteStepAndPrune(
     meta,
     items.filter((i) => i.id !== stepId),
   )
+}
+
+export function countTripDays(startDate: string, endDate: string): number {
+  return enumerateDays(startDate, endDate).length
+}
+
+function itemOutsideRange(item: TripItem, start: string, end: string): boolean {
+  if (!isIsoDate(item.date)) return false
+  if (item.type === 'hotel' && isIsoDate(item.endDate)) {
+    // Fully outside if stay ends before start or begins after end
+    return item.endDate < start || item.date > end
+  }
+  return item.date < start || item.date > end
+}
+
+/** Real (non-placeholder) steps that fall fully outside the proposed date range. */
+export function stepsOutsideRange(
+  items: TripItem[],
+  startDate: string,
+  endDate: string,
+): TripItem[] {
+  const { startDate: start, endDate: end } = sanitizeMetaDates(startDate, endDate)
+  return items.filter(
+    (i) =>
+      i.status !== 'cancelled' &&
+      !isPlaceholderBase(i) &&
+      itemOutsideRange(i, start, end),
+  )
+}
+
+export type RangeReconcileMode = 'keep-outside' | 'drop-outside'
+
+/**
+ * Apply a new trip name + date range.
+ * - Always drops placeholder bases outside the chosen window.
+ * - `keep-outside`: widen dates to include leftover real steps.
+ * - `drop-outside`: remove real steps (and clip hotels) that fall outside.
+ * Then re-seeds day-base placeholders for every day in range.
+ */
+export function applyTripMetaRange(
+  meta: TripMeta,
+  items: TripItem[],
+  next: { name: string; startDate: string; endDate: string },
+  mode: RangeReconcileMode = 'keep-outside',
+): { meta: TripMeta; items: TripItem[]; widened: boolean; removedCount: number } {
+  let dates = sanitizeMetaDates(next.startDate, next.endDate)
+  let nextItems = sortItems(items)
+  let removedCount = 0
+  let widened = false
+
+  // Always strip placeholder bases outside the chosen window
+  nextItems = nextItems.filter((i) => {
+    if (!isPlaceholderBase(i)) return true
+    if (!isIsoDate(i.date)) return false
+    return i.date >= dates.startDate && i.date <= dates.endDate
+  })
+
+  if (mode === 'drop-outside') {
+    const before = nextItems.length
+    nextItems = nextItems
+      .filter((i) => isPlaceholderBase(i) || !itemOutsideRange(i, dates.startDate, dates.endDate))
+      .map((i) => {
+        if (i.type !== 'hotel' || !isIsoDate(i.endDate)) return i
+        let date = i.date
+        let endDate = i.endDate
+        if (date < dates.startDate) date = dates.startDate
+        if (endDate > dates.endDate) endDate = dates.endDate
+        if (endDate < date) endDate = date
+        return { ...i, date, endDate }
+      })
+    removedCount = Math.max(0, before - nextItems.length)
+  } else {
+    // Widen to keep real steps that sit outside the typed dates
+    for (const i of nextItems) {
+      if (isPlaceholderBase(i) || i.status === 'cancelled') continue
+      if (!isIsoDate(i.date)) continue
+      if (i.date < dates.startDate) {
+        dates = { ...dates, startDate: i.date }
+        widened = true
+      }
+      const end = isIsoDate(i.endDate) ? i.endDate : i.date
+      if (end > dates.endDate) {
+        dates = { ...dates, endDate: end }
+        widened = true
+      }
+    }
+  }
+
+  const name = next.name.trim() || 'Untitled trip'
+  const metaOut: TripMeta = {
+    ...meta,
+    name,
+    startDate: dates.startDate,
+    endDate: dates.endDate,
+  }
+
+  return {
+    meta: metaOut,
+    items: ensureDayStartBases(metaOut, nextItems),
+    widened,
+    removedCount,
+  }
 }
