@@ -522,24 +522,41 @@ function addArc(
   color: Color,
   badge: string,
 ) {
-  const positions = [
-    Cartesian3.fromDegrees(lon1, lat1, SURFACE_H),
-    Cartesian3.fromDegrees(lon2, lat2, SURFACE_H),
-  ]
+  // Densify geodesic so the arc stays visible when zoomed toward one end
+  // (a bare 2-point polyline can look like “only the source pin” on phone).
+  const positions: Cartesian3[] = []
+  try {
+    const geo = new EllipsoidGeodesic(
+      Cartographic.fromDegrees(lon1, lat1),
+      Cartographic.fromDegrees(lon2, lat2),
+    )
+    const steps = 48
+    for (let i = 0; i <= steps; i++) {
+      const c = geo.interpolateUsingFraction(i / steps)
+      positions.push(
+        Cartesian3.fromRadians(c.longitude, c.latitude, SURFACE_H),
+      )
+    }
+  } catch {
+    positions.push(
+      Cartesian3.fromDegrees(lon1, lat1, SURFACE_H),
+      Cartesian3.fromDegrees(lon2, lat2, SURFACE_H),
+    )
+  }
   viewer.entities.add({
     id: `trip:${sanitizeEntityId(item.id)}:arc`,
     name: `${item.from} → ${item.to}`,
     polyline: {
       positions,
-      width: glow ? 4 : 3.5,
+      width: glow ? 5 : 4,
       clampToGround: false,
       material: glow
         ? new PolylineGlowMaterialProperty({
-            glowPower: 0.25,
+            glowPower: 0.28,
             color,
           })
         : new ColorMaterialProperty(color.withAlpha(0.95)),
-      arcType: ArcType.GEODESIC,
+      arcType: ArcType.NONE,
     },
     description: sanitizeEntityId(item.id),
   })
@@ -647,88 +664,104 @@ export function syncTripEntities(
     : new Map<string, { day: number; stepInDay: number }>()
 
   for (const item of items) {
-    if (item.status === 'cancelled' || item.type === 'note') continue
+    try {
+      if (item.status === 'cancelled' || item.type === 'note') continue
 
-    const hasFrom = isValidCoord(item.lat, item.lon)
-    const hasTo = isValidCoord(item.latTo, item.lonTo)
-    const order = orders.get(item.id)
-    const badge = stepBadge(order)
-    const color = colorForDay(meta, item.date, order?.day ?? 1)
-    const selected = selectedId === item.id
+      const hasFrom = isValidCoord(item.lat, item.lon)
+      const hasTo = isValidCoord(item.latTo, item.lonTo)
+      const order = orders.get(item.id)
+      const badge = stepBadge(order)
+      const color = colorForDay(meta, item.date, order?.day ?? 1)
+      const selected = selectedId === item.id
 
-    if (item.routeCoords && item.routeCoords.length > 1) {
-      addRoute(viewer, item, item.routeCoords, color, badge)
-      if (hasFrom)
+      if (item.routeCoords && item.routeCoords.length > 1) {
+        addRoute(viewer, item, item.routeCoords, color, badge)
+        if (hasFrom)
+          addBillboard(viewer, item, item.lon!, item.lat!, {
+            suffix: ':a',
+            badge,
+            color,
+            selected,
+          })
+        if (hasTo)
+          addBillboard(viewer, item, item.lonTo!, item.latTo!, {
+            suffix: ':b',
+            badge,
+            color,
+            selected,
+          })
+        continue
+      }
+
+      if (
+        hasFrom &&
+        hasTo &&
+        (item.type === 'flight' ||
+          item.type === 'train' ||
+          item.type === 'bus' ||
+          item.type === 'ferry' ||
+          item.type === 'drive')
+      ) {
+        addArc(
+          viewer,
+          item,
+          item.lon!,
+          item.lat!,
+          item.lonTo!,
+          item.latTo!,
+          item.type === 'flight',
+          color,
+          badge,
+        )
         addBillboard(viewer, item, item.lon!, item.lat!, {
           suffix: ':a',
           badge,
           color,
           selected,
         })
-      if (hasTo)
         addBillboard(viewer, item, item.lonTo!, item.latTo!, {
           suffix: ':b',
           badge,
           color,
           selected,
         })
-      continue
-    }
+        continue
+      }
 
-    if (
-      hasFrom &&
-      hasTo &&
-      (item.type === 'flight' ||
-        item.type === 'train' ||
-        item.type === 'bus' ||
-        item.type === 'ferry' ||
-        item.type === 'drive')
-    ) {
-      addArc(
-        viewer,
-        item,
-        item.lon!,
-        item.lat!,
-        item.lonTo!,
-        item.latTo!,
-        item.type === 'flight',
-        color,
-        badge,
-      )
-      addBillboard(viewer, item, item.lon!, item.lat!, {
-        suffix: ':a',
-        badge,
-        color,
-        selected,
-      })
-      addBillboard(viewer, item, item.lonTo!, item.latTo!, {
-        suffix: ':b',
-        badge,
-        color,
-        selected,
-      })
-      continue
-    }
-
-    if (hasFrom) {
-      addBillboard(viewer, item, item.lon!, item.lat!, {
-        badge,
-        color,
-        selected,
-      })
+      if (hasFrom) {
+        addBillboard(viewer, item, item.lon!, item.lat!, {
+          badge,
+          color,
+          selected,
+        })
+      } else if (hasTo) {
+        // Arrival-only leg still gets a pin (e.g. flight with destination geocoded first)
+        addBillboard(viewer, item, item.lonTo!, item.latTo!, {
+          suffix: ':b',
+          badge,
+          color,
+          selected,
+        })
+      }
+    } catch (err) {
+      console.warn('[globe] failed to draw step', item.id, err)
     }
   }
 
   for (const connector of connectors) {
-    const toOrder = connector.toItemId ? orders.get(connector.toItemId) : undefined
-    const fromOrder = connector.fromItemId
-      ? orders.get(connector.fromItemId)
-      : undefined
-    // Match pin numbering (day.step) — never use a global connector index
-    const badge = stepBadge(toOrder ?? fromOrder)
-    const day = toOrder?.day ?? fromOrder?.day ?? 1
-    const color = colorForDay(meta, connector.date, day)
-    addConnectorRoute(viewer, connector, color, badge)
+    try {
+      const toOrder = connector.toItemId ? orders.get(connector.toItemId) : undefined
+      const fromOrder = connector.fromItemId
+        ? orders.get(connector.fromItemId)
+        : undefined
+      // Match pin numbering (day.step) — never use a global connector index
+      const badge = stepBadge(toOrder ?? fromOrder)
+      const day = toOrder?.day ?? fromOrder?.day ?? 1
+      const color = colorForDay(meta, connector.date, day)
+      addConnectorRoute(viewer, connector, color, badge)
+    } catch (err) {
+      console.warn('[globe] failed to draw connector', connector.id, err)
+    }
   }
 
   applySelectionHighlight(viewer, selectedId ?? null)
@@ -1293,6 +1326,41 @@ export function flyToTripOverview(viewer: Viewer, items: TripItem[]) {
   viewer.camera.flyToBoundingSphere(sphere, {
     duration: 1.6,
     offset: new HeadingPitchRange(0, CesiumMath.toRadians(-40), range),
+  })
+}
+
+/** Frame a small set of stops (e.g. AI-added spots) without using the full trip. */
+export function flyToItemsOverview(
+  viewer: Viewer,
+  items: TripItem[],
+  opts?: { minRangeM?: number },
+) {
+  const pts: Cartesian3[] = []
+  for (const item of items) {
+    if (isValidCoord(item.lat, item.lon)) {
+      pts.push(Cartesian3.fromDegrees(item.lon!, item.lat!))
+    }
+    if (isValidCoord(item.latTo, item.lonTo)) {
+      pts.push(Cartesian3.fromDegrees(item.lonTo!, item.latTo!))
+    }
+  }
+  if (!pts.length) return
+  if (pts.length === 1) {
+    const only = items.find(
+      (i) => isValidCoord(i.lat, i.lon) || isValidCoord(i.latTo, i.lonTo),
+    )
+    if (only) flyToItem(viewer, only)
+    return
+  }
+  const sphere = BoundingSphere.fromPoints(pts)
+  const minRange = opts?.minRangeM ?? 8000
+  const range = Math.min(
+    Math.max(sphere.radius * 2.4, minRange),
+    MAX_CAMERA_HEIGHT_M * 0.75,
+  )
+  viewer.camera.flyToBoundingSphere(sphere, {
+    duration: 1.35,
+    offset: new HeadingPitchRange(0, CesiumMath.toRadians(-42), range),
   })
 }
 

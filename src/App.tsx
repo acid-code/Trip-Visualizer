@@ -59,6 +59,7 @@ import {
   isWalkAppPref,
   openExternalUrl,
   openWalkTarget,
+  travelModeForLeg,
   type MapsTravelMode,
   type WalkAppPref,
   type WalkLinkTarget,
@@ -70,6 +71,21 @@ import { ItemDrawer } from './ui/ItemDrawer'
 import { AddStepPanel, type AddContext } from './ui/AddStepPanel'
 import { MapSearchBar } from './ui/MapSearchBar'
 import { ExploreSheet } from './ui/ExploreSheet'
+import {
+  AiCoachSheet,
+  AiSparkIcon,
+  AI_COACH_BETA_TIP,
+  type AiCoachSessionRestore,
+} from './ui/AiCoachSheet'
+import { AiReviewChrome } from './ui/AiReviewChrome'
+import { formatDayChipLabel } from './data/aiCoach'
+import {
+  applyCoachPatch,
+  assertOtherDaysIntact,
+  earliestNewSpot,
+  newSpotsForOverview,
+} from './data/aiCoachPatch'
+import type { AiCoachOption } from './data/aiCoachTypes'
 import { FeatureGuide } from './ui/FeatureGuide'
 import {
   explorePlaceToItemType,
@@ -125,6 +141,16 @@ import type { RangeReconcileMode } from './data/dayBases'
 type NavTab = 'timeline' | 'charts' | 'settings'
 type LowerMode = 'none' | 'detail' | 'insert'
 
+type AiReviewState = {
+  beforeItems: TripItem[]
+  draftItems: TripItem[]
+  optionId: string
+  day: string
+  session: AiCoachSessionRestore
+  addedIds: string[]
+  error: string | null
+}
+
 export default function App() {
   const isPhone = useIsNarrow()
   const [trips, setTrips] = useState<TripRecord[]>([])
@@ -147,6 +173,8 @@ export default function App() {
   const [walkApp, setWalkApp] = useState<WalkAppPref>('maps')
   const [status, setStatus] = useState('')
   const [overviewToken, setOverviewToken] = useState(0)
+  const [subsetFitToken, setSubsetFitToken] = useState(0)
+  const [subsetFitItems, setSubsetFitItems] = useState<TripItem[]>([])
   const [enrichProgress, setEnrichProgress] = useState<string | null>(null)
   const [connectors, setConnectors] = useState<RouteConnector[]>([])
   const [routesStatus, setRoutesStatus] = useState<string | null>(null)
@@ -200,6 +228,11 @@ export default function App() {
   const [exploreDetail, setExploreDetail] = useState<ExplorePlace | null>(null)
   const [exploreFlyToken, setExploreFlyToken] = useState(0)
   const [exploreReturnToken, setExploreReturnToken] = useState(0)
+  const [aiOpen, setAiOpen] = useState(false)
+  const [aiRestore, setAiRestore] = useState<AiCoachSessionRestore | null>(null)
+  const [aiReview, setAiReview] = useState<AiReviewState | null>(null)
+  const [aiReviewBusy, setAiReviewBusy] = useState(false)
+  const [lastAiDay, setLastAiDay] = useState<string | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
   const [guideTips, setGuideTips] = useState<FeatureTip[]>([])
   const [seenTipIds, setSeenTipIds] = useState<Set<string>>(() => new Set())
@@ -219,9 +252,16 @@ export default function App() {
     [trips, activeId],
   )
 
+  /** Live trip view — draft items while AI review is open. */
+  const displayTrip = useMemo(() => {
+    if (!active) return null
+    if (!aiReview) return active
+    return { ...active, items: aiReview.draftItems }
+  }, [active, aiReview])
+
   const selected = useMemo(
-    () => active?.items.find((i) => i.id === selectedId) ?? null,
-    [active, selectedId],
+    () => displayTrip?.items.find((i) => i.id === selectedId) ?? null,
+    [displayTrip, selectedId],
   )
 
   const refresh = useCallback(async () => {
@@ -625,6 +665,8 @@ export default function App() {
       const prev = trip.items.find((p) => p.id === item.id)
       return (item.routeCoords?.length ?? 0) !== (prev?.routeCoords?.length ?? 0)
     })
+    // Always write hydrated geometry back into trip state when it changed so
+    // the globe’s item.routeCoords stay in sync with “Routes ready”.
     if (driveChanged) {
       await persist({ ...trip, items: withDrives })
     }
@@ -1009,10 +1051,55 @@ export default function App() {
       setLowerMode('detail')
       setDetailExpanded(true)
       setPanelOpen(true)
-      const onMap = isValidCoord(pinned.lat, pinned.lon)
-        ? ' · on the map'
-        : ' · no pin yet (check the address)'
-      setStatus(`Added “${pinned.title}”${onMap}`)
+
+      const isLeg = ['flight', 'train', 'bus', 'ferry', 'drive'].includes(pinned.type)
+      const hasFrom = isValidCoord(pinned.lat, pinned.lon)
+      const hasTo = isValidCoord(pinned.latTo, pinned.lonTo)
+
+      if (isLeg && hasFrom && hasTo) {
+        // Light up the full A→B path so flights/drives aren’t mistaken for a single pin
+        const coords: [number, number][] =
+          pinned.routeCoords && pinned.routeCoords.length > 1
+            ? pinned.routeCoords
+            : [
+                [pinned.lat!, pinned.lon!],
+                [pinned.latTo!, pinned.lonTo!],
+              ]
+        if (pinned.type === 'flight') {
+          setRouteWalk({
+            kind: 'flights',
+            from: pinned.from || pinned.title,
+            to: pinned.to || '',
+            date: pinned.date,
+            origin: { lat: pinned.lat!, lon: pinned.lon! },
+            destination: { lat: pinned.latTo!, lon: pinned.lonTo! },
+            coords,
+          })
+        } else {
+          setRouteWalk({
+            kind: 'route',
+            origin: { lat: pinned.lat!, lon: pinned.lon! },
+            destination: { lat: pinned.latTo!, lon: pinned.lonTo! },
+            travelMode: travelModeForLeg(pinned.type),
+            coords,
+          })
+        }
+        setMapFocusEndpoint(null)
+        setStatus(`Added “${pinned.title}” · path on the map`)
+      } else if (isLeg && hasFrom && !hasTo) {
+        setStatus(
+          `Added “${pinned.title}” · departure pinned — add a destination (To) for the path`,
+        )
+      } else if (isLeg && !hasFrom && hasTo) {
+        setStatus(
+          `Added “${pinned.title}” · arrival pinned — add an origin (From) for the path`,
+        )
+      } else {
+        const onMap = hasFrom
+          ? ' · on the map'
+          : ' · no pin yet (check the address)'
+        setStatus(`Added “${pinned.title}”${onMap}`)
+      }
       await buildRoutes(next)
     })()
   }
@@ -1101,7 +1188,11 @@ export default function App() {
   }
 
   function openExploreFromMap() {
-    if (!active) return
+    if (!active || aiReview) return
+    if (aiOpen) {
+      setAiOpen(false)
+      setAiRestore(null)
+    }
     let lat: number | null = null
     let lon: number | null = null
     let label = 'Here'
@@ -1271,6 +1362,10 @@ export default function App() {
 
   function closeCoveringSheets() {
     if (exploreOpen) closeExplore()
+    if (aiOpen && !aiReview) {
+      setAiOpen(false)
+      setAiRestore(null)
+    }
     if (lowerMode !== 'none') {
       setAddContext(null)
       setLowerMode('none')
@@ -1278,11 +1373,212 @@ export default function App() {
     }
   }
 
+  function openAiCoach() {
+    if (aiReview) return
+    if (exploreOpen) closeExplore()
+    setLowerMode('none')
+    setDetailExpanded(false)
+    setAddContext(null)
+    setAiOpen(true)
+    setPanelOpen(true)
+    setNavTab('timeline')
+  }
+
+  function closeAiCoach() {
+    const lastDay = lastAiDay || aiRestore?.day || dayFilter
+    setAiOpen(false)
+    setAiRestore(null)
+    setNavTab('timeline')
+    setPanelOpen(true)
+    if (lastDay) setDayFilter(lastDay)
+  }
+
+  function beginAiImplement(args: {
+    day: string
+    option: AiCoachOption
+    candidates: ExplorePlace[]
+    session: AiCoachSessionRestore
+  }) {
+    if (!active) return
+    const result = applyCoachPatch({
+      trip: active,
+      day: args.day,
+      patch: args.option.patch,
+      candidates: args.candidates,
+    })
+    if (!result.ok) {
+      setStatus(result.error)
+      return
+    }
+    const intact = assertOtherDaysIntact(active.items, result.items, args.day)
+    if (intact) {
+      setStatus(intact)
+      return
+    }
+    setAiOpen(false)
+    setAiReview({
+      beforeItems: active.items.map((i) => ({
+        ...i,
+        tags: [...(i.tags ?? [])],
+        routeCoords: i.routeCoords
+          ? i.routeCoords.map((c) => [...c] as [number, number])
+          : [],
+      })),
+      draftItems: result.items,
+      optionId: args.option.id,
+      day: args.day,
+      session: args.session,
+      addedIds: result.addedIds,
+      error: null,
+    })
+    setDayFilter(args.day)
+    setLastAiDay(args.day)
+    setTypeFilter(null)
+    setNavTab('timeline')
+    setPanelOpen(true)
+    setLowerMode('none')
+    setDetailExpanded(false)
+
+    const removedN = result.removedIds.length
+    const addedN = result.addedIds.length
+    if (removedN && !addedN) {
+      setStatus(
+        `Removed ${removedN} stop${removedN === 1 ? '' : 's'} — review the lighter day, then Save or Discard.`,
+      )
+    } else if (removedN) {
+      setStatus(
+        `Updated day (+${addedN} / −${removedN}). Review, then Save or Discard.`,
+      )
+    }
+
+    const newSpots = newSpotsForOverview(result.items, result.addedIds)
+    if (newSpots.length === 0) {
+      setSubsetFitItems([])
+      // Pure trim: clear selection so timeline shows the day without a stuck highlight
+      setSelectedId(
+        result.changedIds[0] ??
+          (removedN
+            ? null
+            : result.addedIds[0] ?? null),
+      )
+      if (removedN) {
+        setOverviewToken((n) => n + 1)
+      }
+    } else if (newSpots.length <= 2) {
+      const earliest = earliestNewSpot(result.items, result.addedIds)
+      setSubsetFitItems([])
+      setSelectedId(
+        earliest?.id ?? result.addedIds[0] ?? result.changedIds[0] ?? null,
+      )
+    } else {
+      setSelectedId(null)
+      setSubsetFitItems(newSpots)
+      setSubsetFitToken((n) => n + 1)
+    }
+
+    void (async () => {
+      const draftTrip = { ...active, items: result.items }
+      setRoutesStatus('Drawing AI day paths…')
+      try {
+        const withDrives = await hydrateDriveRoutes(draftTrip.items)
+        // Keep the full connector set in memory; the day filter + AI review
+        // scoping decides what the globe shows. Never replace with a day slice
+        // or discard/rebuild races leave the map with no paths.
+        const walks = await buildWalkingConnectors(withDrives)
+        setConnectors(walks)
+        setAiReview((prev) =>
+          prev
+            ? {
+                ...prev,
+                draftItems: withDrives,
+              }
+            : null,
+        )
+        if (newSpots.length > 2) {
+          const refreshed = newSpotsForOverview(withDrives, result.addedIds)
+          if (refreshed.length) {
+            setSubsetFitItems(refreshed)
+            setSubsetFitToken((n) => n + 1)
+          }
+        }
+      } finally {
+        setRoutesStatus(null)
+      }
+    })()
+  }
+
+  async function saveAiReview() {
+    if (!active || !aiReview) return
+    setAiReviewBusy(true)
+    const intact = assertOtherDaysIntact(
+      aiReview.beforeItems,
+      aiReview.draftItems,
+      aiReview.day,
+    )
+    if (intact) {
+      setAiReview((prev) => (prev ? { ...prev, error: intact } : null))
+      setAiReviewBusy(false)
+      return
+    }
+    const next = { ...active, items: aiReview.draftItems }
+    const session: AiCoachSessionRestore = {
+      ...aiReview.session,
+      appliedOptionIds: [
+        ...new Set([...aiReview.session.appliedOptionIds, aiReview.optionId]),
+      ],
+    }
+    const day = aiReview.day
+    await persist(next)
+    setAiReview(null)
+    setAiReviewBusy(false)
+    setAiRestore(session)
+    setAiOpen(true)
+    setDayFilter(day)
+    setNavTab('timeline')
+    setPanelOpen(true)
+    setStatus(`Saved AI changes · ${formatDayChipLabel(active.meta, day)}`)
+    routesForTripRef.current = null
+    await buildRoutes(next)
+  }
+
+  function discardAiReview() {
+    if (!aiReview) return
+    const session = aiReview.session
+    const day = aiReview.day
+    setAiReview(null)
+    setAiRestore(session)
+    setAiOpen(true)
+    setDayFilter(day)
+    setNavTab('timeline')
+    setPanelOpen(true)
+    setSelectedId(null)
+    setStatus('Discarded AI draft')
+    // Rebuild from the saved trip — do not blank connectors first (that made
+    // paths vanish if rebuild was slow or aborted).
+    routesForTripRef.current = null
+    if (active) void buildRoutes(active)
+  }
+
   /** Bottom/side tongues: a covering sheet (detail, insert, explore) always
    *  closes first so the tapped tab’s panel is visible — same for every button. */
-  function onTongue(id: NavTab | 'insert') {
+  function onTongue(id: NavTab | 'insert' | 'ai') {
+    if (aiReview) return
+
+    if (id === 'ai') {
+      if (aiOpen) {
+        closeAiCoach()
+        return
+      }
+      openAiCoach()
+      return
+    }
+
     if (id === 'insert') {
       if (exploreOpen) closeExplore()
+      if (aiOpen) {
+        setAiOpen(false)
+        setAiRestore(null)
+      }
       if (lowerMode === 'insert') {
         setAddContext(null)
         setLowerMode('none')
@@ -1299,7 +1595,7 @@ export default function App() {
       return
     }
 
-    const covering = lowerMode !== 'none' || exploreOpen
+    const covering = lowerMode !== 'none' || exploreOpen || aiOpen
     closeCoveringSheets()
     if (covering) {
       setNavTab(id)
@@ -1316,19 +1612,26 @@ export default function App() {
     setPanelOpen(true)
   }
 
-  const filteredItems = useMemo(() => {
-    if (!active) return []
-    return active.items.filter((i) => {
-      if (dayFilter && !itemTouchesDay(i, dayFilter)) return false
-      if (typeFilter && i.type !== typeFilter) return false
-      return true
-    })
-  }, [active, dayFilter, typeFilter])
+  /**
+   * Timeline can filter by day, but the globe should still draw the whole trip’s
+   * paths — unless we’re in AI review lock (day-scoped preview).
+   * A stuck day filter after Day Coach was hiding drives/walks on other days.
+   */
+  const mapItems = useMemo(() => {
+    if (!displayTrip) return []
+    if (aiReview && dayFilter) {
+      return displayTrip.items.filter((i) => itemTouchesDay(i, dayFilter))
+    }
+    return displayTrip.items
+  }, [displayTrip, aiReview, dayFilter])
 
   const visibleConnectors = useMemo(() => {
-    if (!dayFilter) return connectors
-    return connectors.filter((c) => c.date === dayFilter)
-  }, [connectors, dayFilter])
+    if (aiReview && dayFilter) {
+      return connectors.filter((c) => c.date === dayFilter)
+    }
+    // Normal browsing: always show all built walk/drive links on the globe
+    return connectors
+  }, [connectors, dayFilter, aiReview])
 
   const walkTarget = useMemo((): WalkLinkTarget | null => {
     if (tempPin && isValidCoord(tempPin.lat, tempPin.lon)) {
@@ -1398,14 +1701,16 @@ export default function App() {
       {active ? (
         <div className="absolute inset-0" data-coach="globe-map">
         <GlobeView
-          items={filteredItems.length ? filteredItems : active.items}
-          meta={active.meta}
+          items={mapItems}
+          meta={displayTrip?.meta ?? active.meta}
           connectors={visibleConnectors}
           selectedId={selectedId}
           mapStack={mapStack}
           googleKey={effectiveGoogleKey || undefined}
           ionToken={ionToken || undefined}
           overviewToken={overviewToken}
+          subsetFitToken={subsetFitToken}
+          subsetFitItems={subsetFitItems}
           tripFocusId={activeId}
           openingOriginOnly={isPhone}
           phoneFraming={isPhone}
@@ -1416,7 +1721,10 @@ export default function App() {
           onOpenWalk={() => {
             if (walkTarget) openWalkTarget(walkTarget)
           }}
-          onOpenExplore={() => openExploreFromMap()}
+          onOpenExplore={() => {
+            if (aiReview) return
+            openExploreFromMap()
+          }}
           onExploreSelect={(placeId) => {
             const place = explorePlaces.find((p) => p.id === placeId)
             if (place) selectExplorePlace(place)
@@ -1432,17 +1740,22 @@ export default function App() {
           exploreReturnToken={exploreReturnToken}
           onSelect={selectFromMap}
           onMapPress={() => {
-            // Keep Explore open on empty-map short press; close via tongues, step pin, X, or search
-            if (exploreOpen) return
+            if (aiReview) return
+            // Keep Explore / AI open on empty-map short press; close via tongues or X
+            if (exploreOpen || aiOpen) return
             setPanelOpen(false)
             setRouteWalk(null)
+            // Deselect step highlight (pin title / enlarged point)
+            highlightStep(null)
           }}
           onMapDoubleTap={() => {
-            if (exploreOpen) return
+            if (aiReview || exploreOpen || aiOpen) return
             if (tempPin) clearTempPin()
             setRouteWalk(null)
+            highlightStep(null)
           }}
           onLongPress={(pos) => {
+            if (aiReview) return
             setPanelOpen(false)
             void dropTempPinAt(pos)
           }}
@@ -1535,6 +1848,8 @@ export default function App() {
                 setPanelOpen(false)
                 setExploreOpen(false)
                 setExploreDetail(null)
+                setAiOpen(false)
+                setAiRestore(null)
                 setLowerMode('none')
                 setDetailExpanded(false)
               }}
@@ -1564,16 +1879,42 @@ export default function App() {
         </div>
       </header>
 
+      {aiReview && active ? (
+        <AiReviewChrome
+          dayLabel={formatDayChipLabel(active.meta, aiReview.day)}
+          busy={aiReviewBusy}
+          error={aiReview.error}
+          onDiscard={discardAiReview}
+          onSave={() => void saveAiReview()}
+        />
+      ) : null}
+
       {/* Desktop: left sidebar + side book tongues */}
       {!isPhone ? (
       <aside
         className={`side-shell absolute bottom-0 left-0 top-0 z-30 flex pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.5rem,env(safe-area-inset-left))] ${
-          panelOpen || exploreOpen ? 'side-shell-open' : 'side-shell-collapsed'
-        } ${exploreOpen ? 'side-shell-explore' : ''}`}
+          panelOpen || exploreOpen || aiOpen ? 'side-shell-open' : 'side-shell-collapsed'
+        } ${exploreOpen || aiOpen ? 'side-shell-explore' : ''}`}
       >
-        {panelOpen || exploreOpen ? (
+        {panelOpen || exploreOpen || aiOpen ? (
           <div className="side-panel relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            {exploreOpen ? (
+            {aiOpen && active && !aiReview ? (
+              <AiCoachSheet
+                open
+                meta={active.meta}
+                trip={active}
+                placesEnabled={placesEnabled}
+                googleApiKey={effectiveGoogleKey || undefined}
+                restore={aiRestore}
+                onClose={closeAiCoach}
+                onDayPicked={(d) => {
+                  setDayFilter(d)
+                  setLastAiDay(d)
+                }}
+                onImplement={beginAiImplement}
+              />
+            ) : null}
+            {exploreOpen && !aiOpen ? (
               <ExploreSheet
                 open
                 busy={exploreBusy}
@@ -1592,11 +1933,11 @@ export default function App() {
             {/* Stay mounted under Explore — avoid display:none so scrollLeft/Top survive */}
             <div
               className={
-                exploreOpen
+                exploreOpen || aiOpen
                   ? 'pointer-events-none invisible absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-hidden'
                   : 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'
               }
-              aria-hidden={exploreOpen}
+              aria-hidden={exploreOpen || aiOpen}
             >
             <div className="flex items-center justify-between gap-2 border-b border-stone-200/80 px-3 py-2">
               <div className="text-xs font-semibold uppercase tracking-wide text-stone-400">
@@ -1613,11 +1954,11 @@ export default function App() {
             </div>
 
             <div className="min-h-0 flex-1 overflow-hidden">
-              {navTab === 'timeline' && active ? (
+              {navTab === 'timeline' && displayTrip ? (
                 <div className="h-full min-h-0 px-2 pb-2 pt-1" data-coach="trip-steps">
                   <TimelinePanel
-                    meta={active.meta}
-                    items={active.items}
+                    meta={displayTrip.meta}
+                    items={displayTrip.items}
                     selectedId={selectedId}
                     dayFilter={dayFilter}
                     typeFilter={typeFilter}
@@ -1630,6 +1971,7 @@ export default function App() {
                     onDeleteStep={(id) => void deleteStep(id)}
                     layout="vertical"
                     detailOpen={lowerMode === 'detail'}
+                    lockMode={Boolean(aiReview)}
                   />
                 </div>
               ) : null}
@@ -1700,30 +2042,43 @@ export default function App() {
               { id: 'timeline' as const, label: 'Steps' },
               { id: 'charts' as const, label: 'Stats' },
               { id: 'insert' as const, label: '+' },
+              { id: 'ai' as const, label: 'AI' },
               { id: 'settings' as const, label: 'Data' },
             ] as const
           ).map((t) => {
             const activeTongue =
               t.id === 'insert'
                 ? insertActive
-                : navTab === t.id && !insertActive
+                : t.id === 'ai'
+                  ? aiOpen && !aiReview
+                  : navTab === t.id && !insertActive && !aiOpen
+            const disabled = Boolean(aiReview) && t.id !== 'timeline'
             return (
               <button
                 key={t.id}
                 type="button"
+                disabled={disabled}
                 className={`book-tongue ${activeTongue ? 'book-tongue-on' : ''} ${
                   t.id === 'insert' ? 'book-tongue-plus' : ''
-                } ${t.id === 'insert' && tempPin ? 'ring-2 ring-orange-400 ring-offset-1' : ''}`}
+                } ${t.id === 'ai' ? 'book-tongue-ai' : ''} ${
+                  t.id === 'insert' && tempPin ? 'ring-2 ring-orange-400 ring-offset-1' : ''
+                } ${disabled ? 'opacity-40' : ''}`}
                 onClick={() => onTongue(t.id)}
                 title={
                   t.id === 'insert'
                     ? tempPin
                       ? 'Save map pin as step'
                       : 'Insert step'
-                    : t.label
+                    : t.id === 'ai'
+                      ? AI_COACH_BETA_TIP
+                      : t.label
                 }
               >
-                {t.label}
+                {t.id === 'ai' ? (
+                  <AiSparkIcon className="book-tongue-ai-glyph" />
+                ) : (
+                  t.label
+                )}
               </button>
             )
           })}
@@ -1734,13 +2089,17 @@ export default function App() {
       {/* Phone: map-first — horizontal steps strip + bottom book tongues */}
       {isPhone ? (
         <div className="mobile-dock absolute inset-x-0 bottom-0 z-30 flex flex-col pb-[max(0.25rem,env(safe-area-inset-bottom))]">
-          {(panelOpen || exploreOpen) && lowerMode !== 'insert' ? (
+          {(panelOpen || exploreOpen || aiOpen) && lowerMode !== 'insert' ? (
             <div
               className={`mobile-panel relative mx-2 mb-1 flex flex-col overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
-                exploreOpen
+                aiOpen
+                  ? 'h-[min(68vh,30rem)]'
+                  : exploreOpen
                   ? exploreDetail
                     ? 'h-[min(62vh,26.5rem)]'
                     : 'h-[min(41vh,18.5rem)]'
+                  : aiReview
+                    ? 'h-[min(48vh,22rem)]'
                   : navTab === 'timeline'
                     ? 'max-h-[38vh]'
                     : navTab === 'settings' || navTab === 'charts'
@@ -1748,7 +2107,31 @@ export default function App() {
                       : 'max-h-[52vh]'
               }`}
             >
-              {exploreOpen ? (
+              {aiOpen && active && !aiReview ? (
+                <div
+                  className="h-[min(68vh,30rem)]"
+                  onTouchStart={(e) => e.stopPropagation()}
+                  onTouchMove={(e) => e.stopPropagation()}
+                >
+                  <AiCoachSheet
+                    open
+                    phone
+                    meta={active.meta}
+                    trip={active}
+                    placesEnabled={placesEnabled}
+                    googleApiKey={effectiveGoogleKey || undefined}
+                    restore={aiRestore}
+                    onClose={closeAiCoach}
+                    onDayPicked={(d) => {
+                      setDayFilter(d)
+                      setLastAiDay(d)
+                    }}
+                    onImplement={beginAiImplement}
+                  />
+                </div>
+              ) : null}
+
+              {exploreOpen && !aiOpen ? (
                 <div
                   className={
                     exploreDetail ? 'h-[min(62vh,26.5rem)]' : 'h-[min(41vh,18.5rem)]'
@@ -1774,19 +2157,19 @@ export default function App() {
               ) : null}
 
               {/* Keep Steps mounted under Explore — visibility:hidden keeps scroll position */}
-              {navTab === 'timeline' && active ? (
+              {navTab === 'timeline' && displayTrip ? (
                 <div
                   className={
-                    exploreOpen
+                    exploreOpen || aiOpen
                       ? 'pointer-events-none invisible absolute inset-x-0 top-0 px-2 pb-2 pt-2'
                       : 'px-2 pb-2 pt-2'
                   }
                   data-coach="trip-steps"
-                  aria-hidden={exploreOpen}
+                  aria-hidden={exploreOpen || aiOpen}
                 >
                   <TimelinePanel
-                    meta={active.meta}
-                    items={active.items}
+                    meta={displayTrip.meta}
+                    items={displayTrip.items}
                     selectedId={selectedId}
                     dayFilter={dayFilter}
                     typeFilter={typeFilter}
@@ -1798,11 +2181,12 @@ export default function App() {
                     onAddDay={() => void addDay()}
                     onDeleteStep={(id) => void deleteStep(id)}
                     layout="horizontal"
+                    lockMode={Boolean(aiReview)}
                   />
                 </div>
               ) : null}
 
-              {!exploreOpen && navTab === 'charts' && active ? (
+              {!exploreOpen && !aiOpen && navTab === 'charts' && active ? (
                 <div
                   className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] px-2 pb-2 pt-2"
                   onTouchStart={(e) => e.stopPropagation()}
@@ -1822,7 +2206,7 @@ export default function App() {
                 </div>
               ) : null}
 
-              {!exploreOpen && navTab === 'settings' ? (
+              {!exploreOpen && !aiOpen && navTab === 'settings' ? (
                 <div
                   className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] px-3 pb-3 pt-2 text-sm text-stone-800"
                   onTouchStart={(e) => e.stopPropagation()}
@@ -1875,30 +2259,45 @@ export default function App() {
                 { id: 'timeline' as const, label: 'Steps' },
                 { id: 'charts' as const, label: 'Stats' },
                 { id: 'insert' as const, label: '+' },
+                { id: 'ai' as const, label: 'AI' },
                 { id: 'settings' as const, label: 'Data' },
               ] as const
             ).map((t) => {
               const activeTongue =
                 t.id === 'insert'
                   ? insertActive
-                  : navTab === t.id && !insertActive && panelOpen
+                  : t.id === 'ai'
+                    ? aiOpen && !aiReview
+                    : navTab === t.id && !insertActive && panelOpen && !aiOpen
+              const disabled = Boolean(aiReview) && t.id !== 'timeline'
               return (
                 <button
                   key={t.id}
                   type="button"
+                  disabled={disabled}
                   className={`book-tongue-bottom ${activeTongue ? 'book-tongue-on' : ''} ${
                     t.id === 'insert' ? 'book-tongue-bottom-plus' : ''
-                  } ${t.id === 'insert' && tempPin ? 'ring-2 ring-orange-400' : ''}`}
+                  } ${t.id === 'ai' ? 'book-tongue-bottom-ai' : ''} ${
+                    t.id === 'insert' && tempPin ? 'ring-2 ring-orange-400' : ''
+                  } ${disabled ? 'opacity-40' : ''}`}
                   onClick={() => onTongue(t.id)}
                   title={
                   t.id === 'insert'
                     ? tempPin
                       ? 'Save map pin as step'
                       : 'Insert step'
-                    : t.label
+                    : t.id === 'ai'
+                      ? AI_COACH_BETA_TIP
+                      : t.label
                 }
                 >
-                  {t.label}
+                  {t.id === 'ai' ? (
+                    <span className="inline-flex justify-center">
+                      <AiSparkIcon className="mx-auto h-4 w-4" />
+                    </span>
+                  ) : (
+                    t.label
+                  )}
                 </button>
               )
             })}
@@ -1953,12 +2352,29 @@ export default function App() {
                   item={selected}
                   onClose={closeLower}
                   onChange={(item) => {
+                    if (aiReview) {
+                      if (!itemTouchesDay(item, aiReview.day)) return
+                      setAiReview((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              draftItems: sortItems(
+                                prev.draftItems.map((i) =>
+                                  i.id === item.id ? item : i,
+                                ),
+                              ),
+                            }
+                          : null,
+                      )
+                      return
+                    }
                     void updateActive((t) => ({
                       ...t,
                       items: sortItems(t.items.map((i) => (i.id === item.id ? item : i))),
                     }))
                   }}
                   onDelete={(id) => {
+                    if (aiReview) return
                     void deleteStep(id)
                   }}
                 />

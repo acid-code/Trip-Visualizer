@@ -198,7 +198,11 @@ export async function buildWalkingConnectors(
       if (firstAfterHotel) {
         const a = pointOf(morningHotel)
         const b = pointOf(firstAfterHotel)
-        if (a && b) addPair(date, morningHotel, firstAfterHotel, a, b, 8, 'walk')
+        if (a && b) {
+          const d = distKm(a, b)
+          if (d <= 8) addPair(date, morningHotel, firstAfterHotel, a, b, 8, 'walk')
+          else if (d <= 150) addPair(date, morningHotel, firstAfterHotel, a, b, 150, 'drive')
+        }
       }
     }
 
@@ -227,7 +231,9 @@ export async function buildWalkingConnectors(
         const a = anchorForDaySequence(from, 'arrive')
         const b = pointOf(to)
         if (!a || !b) continue
-        addPair(date, from, to, a, b, 12, 'walk')
+        const d = distKm(a, b)
+        if (d <= 12) addPair(date, from, to, a, b, 12, 'walk')
+        else if (d <= 150) addPair(date, from, to, a, b, 150, 'drive')
         continue
       }
 
@@ -235,7 +241,9 @@ export async function buildWalkingConnectors(
       const a = pointOf(from)
       const b = pointOf(to)
       if (!a || !b) continue
-      addPair(date, from, to, a, b, 8, 'walk')
+      const d = distKm(a, b)
+      if (d <= 8) addPair(date, from, to, a, b, 8, 'walk')
+      else if (d <= 150) addPair(date, from, to, a, b, 150, 'drive')
     }
 
     // Evening: last activity → hotel for the night (walk nearby, else drive path)

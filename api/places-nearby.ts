@@ -22,6 +22,7 @@ const FIELD_MASK = [
   'places.photos',
   'places.websiteUri',
   'places.googleMapsUri',
+  'places.regularOpeningHours',
 ].join(',')
 
 const INCLUDED_TYPES = [
@@ -69,6 +70,13 @@ type GooglePlace = {
   photos?: Array<{ name?: string }>
   websiteUri?: string
   googleMapsUri?: string
+  regularOpeningHours?: {
+    weekdayDescriptions?: string[]
+    periods?: Array<{
+      open?: { day?: number; hour?: number; minute?: number }
+      close?: { day?: number; hour?: number; minute?: number }
+    }>
+  }
 }
 
 function header(req: VercelReq, name: string): string {
@@ -175,6 +183,55 @@ function categoryFromTypes(primary: string, types: string[]): string {
   return 'other'
 }
 
+function parseGoogleHours(raw: GooglePlace['regularOpeningHours']): {
+  openingHours: string
+  openingPeriods?: Array<{
+    open: { day: number; hour: number; minute: number }
+    close?: { day: number; hour: number; minute: number }
+  }>
+} {
+  if (!raw) return { openingHours: '' }
+  const openingHours = (raw.weekdayDescriptions || [])
+    .map((d) => String(d || '').trim())
+    .filter(Boolean)
+    .join('; ')
+    .slice(0, 400)
+  const openingPeriods = []
+  for (const row of raw.periods || []) {
+    const o = row.open
+    if (!o || o.day == null || o.hour == null) continue
+    const day = Number(o.day)
+    const hour = Number(o.hour)
+    const minute = Number(o.minute ?? 0)
+    if (day < 0 || day > 6 || hour < 0 || hour > 23) continue
+    const period: {
+      open: { day: number; hour: number; minute: number }
+      close?: { day: number; hour: number; minute: number }
+    } = {
+      open: { day, hour, minute: Number.isFinite(minute) ? minute : 0 },
+    }
+    const c = row.close
+    if (c && c.day != null && c.hour != null) {
+      const cd = Number(c.day)
+      const ch = Number(c.hour)
+      const cm = Number(c.minute ?? 0)
+      if (cd >= 0 && cd <= 6 && ch >= 0 && ch <= 23) {
+        period.close = {
+          day: cd,
+          hour: ch,
+          minute: Number.isFinite(cm) ? cm : 0,
+        }
+      }
+    }
+    openingPeriods.push(period)
+  }
+  return {
+    openingHours:
+      openingHours || (openingPeriods.length ? 'Hours on file' : ''),
+    openingPeriods: openingPeriods.length ? openingPeriods : undefined,
+  }
+}
+
 function toPlace(gp: GooglePlace, anchor: { lat: number; lon: number }) {
   const lat = gp.location?.latitude
   const lon = gp.location?.longitude
@@ -191,6 +248,7 @@ function toPlace(gp: GooglePlace, anchor: { lat: number; lon: number }) {
     typeof gp.rating === 'number' && Number.isFinite(gp.rating)
       ? Math.round(gp.rating * 10) / 10
       : null
+  const hours = parseGoogleHours(gp.regularOpeningHours)
 
   return {
     id: `google:${placeId}`,
@@ -211,7 +269,8 @@ function toPlace(gp: GooglePlace, anchor: { lat: number; lon: number }) {
     cuisine: '',
     website: httpsUrl(gp.websiteUri || ''),
     menuUrl: '',
-    openingHours: '',
+    openingHours: hours.openingHours,
+    openingPeriods: hours.openingPeriods,
     address: clamp(gp.formattedAddress || '', 200),
     tags: {
       source: 'google',

@@ -57,7 +57,7 @@ function emptyBase(day: string, dayNum: number, currency: string): TripItem {
   }
 }
 
-function enumerateDays(start: string, end: string): string[] {
+export function enumerateDays(start: string, end: string): string[] {
   if (!isIsoDate(start) || !isIsoDate(end) || start > end) return []
   const out: string[] = []
   const cur = new Date(start + 'T12:00:00')
@@ -70,6 +70,11 @@ function enumerateDays(start: string, end: string): string[] {
     cur.setDate(cur.getDate() + 1)
   }
   return out
+}
+
+/** Calendar days in the trip meta window (inclusive). */
+export function listTripDays(meta: TripMeta): string[] {
+  return enumerateDays(meta.startDate, meta.endDate)
 }
 
 function isRealStep(item: TripItem): boolean {
