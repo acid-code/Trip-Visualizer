@@ -199,32 +199,8 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-4">
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-          {TYPE_META.map((t) => {
-            const on = type === t.type
-            return (
-              <button
-                key={t.type}
-                type="button"
-                onClick={() => setType(t.type)}
-                className={`rounded-2xl border px-2 py-3 text-center transition ${
-                  on
-                    ? 'border-transparent text-white shadow-md'
-                    : 'border-stone-200 bg-white text-stone-700 hover:border-orange-200'
-                }`}
-                style={on ? { background: TYPE_COLORS[t.type] } : undefined}
-              >
-                <div className="text-lg leading-none">{t.emoji}</div>
-                <div className="mt-1 text-[11px] font-semibold capitalize">{t.type}</div>
-                <div className={`mt-0.5 text-[10px] ${on ? 'text-white/80' : 'text-stone-400'}`}>
-                  {t.blurb}
-                </div>
-              </button>
-            )
-          })}
-        </div>
-
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-8">
+        {/* Name + dates first so the native date picker isn't buried under the fold */}
         <div className="rounded-2xl border border-stone-200 bg-white p-3 shadow-sm">
           <label className="block text-xs font-medium text-stone-500">
             Name *
@@ -293,9 +269,39 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
               </>
             )}
           </div>
+        </div>
 
+        <div>
+          <div className="mb-1.5 text-xs font-medium text-stone-500">Type</div>
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+            {TYPE_META.map((t) => {
+              const on = type === t.type
+              return (
+                <button
+                  key={t.type}
+                  type="button"
+                  onClick={() => setType(t.type)}
+                  className={`rounded-2xl border px-2 py-3 text-center transition ${
+                    on
+                      ? 'border-transparent text-white shadow-md'
+                      : 'border-stone-200 bg-white text-stone-700 hover:border-orange-200'
+                  }`}
+                  style={on ? { background: TYPE_COLORS[t.type] } : undefined}
+                >
+                  <div className="text-lg leading-none">{t.emoji}</div>
+                  <div className="mt-1 text-[11px] font-semibold capitalize">{t.type}</div>
+                  <div className={`mt-0.5 text-[10px] ${on ? 'text-white/80' : 'text-stone-400'}`}>
+                    {t.blurb}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-stone-200 bg-white p-3 shadow-sm">
           {!isLeg ? (
-            <div className="mt-3 space-y-2">
+            <div className="space-y-2">
               <label className="block text-xs font-medium text-stone-500">
                 Address or place
                 <input
@@ -316,7 +322,7 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
               </label>
             </div>
           ) : (
-            <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <label className="block text-xs font-medium text-stone-500">
                 From
                 <input

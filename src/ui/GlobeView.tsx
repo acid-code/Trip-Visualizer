@@ -755,7 +755,7 @@ export function GlobeView({
       : '-translate-y-[3.6rem]'
 
   return (
-    <>
+    <div className="absolute inset-0">
       <div ref={containerRef} className="absolute inset-0 touch-none" />
       <div className="pointer-events-none absolute inset-0 z-[5] overflow-hidden">
         <div
@@ -795,7 +795,7 @@ export function GlobeView({
           </div>
         </div>
       </div>
-    </>
+    </div>
   )
 }
 
