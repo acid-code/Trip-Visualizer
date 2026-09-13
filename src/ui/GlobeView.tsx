@@ -18,6 +18,7 @@ import {
   createTripViewer,
   flyToCoords,
   flyToItem,
+  flyToItemsOverview,
   flyToOpeningItem,
   flyToRouteCoords,
   flyToTripOverview,
@@ -73,6 +74,9 @@ type Props = {
   /** Second quick tap on empty map — e.g. clear temp pin */
   onMapDoubleTap?: () => void
   overviewToken?: number
+  /** When bumped, frame these items (AI new-spot overview) instead of the full trip. */
+  subsetFitToken?: number
+  subsetFitItems?: TripItem[]
   /** When this changes (e.g. active trip id), frame the first step for opening */
   tripFocusId?: string | null
   /** Phone: open flights on departure (leg A) instead of the full arc */
@@ -120,6 +124,8 @@ export function GlobeView({
   onMapPress,
   onMapDoubleTap,
   overviewToken,
+  subsetFitToken = 0,
+  subsetFitItems = [],
   tempPin = null,
   nearbyLinks = [],
   tempFlyToken = 0,
@@ -559,8 +565,12 @@ export function GlobeView({
   useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return
-    syncTripEntities(viewer, items, selectedId, connectors, meta)
-  }, [items, connectors, meta])
+    try {
+      syncTripEntities(viewer, items, selectedId, connectors, meta)
+    } catch (err) {
+      console.warn('[globe] syncTripEntities failed', err)
+    }
+  }, [items, connectors, meta, selectedId])
 
   useEffect(() => {
     const viewer = viewerRef.current
@@ -672,6 +682,15 @@ export function GlobeView({
     if (!viewer || overviewToken == null || overviewToken < 1) return
     flyToTripOverview(viewer, itemsRef.current)
   }, [overviewToken])
+
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!viewer || !subsetFitToken || subsetFitToken < 1) return
+    if (!subsetFitItems.length) return
+    flyToItemsOverview(viewer, subsetFitItems)
+    // Intentionally token-driven; items snapshot is taken at bump time from App.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subsetFitToken])
 
   useEffect(() => {
     const viewer = viewerRef.current

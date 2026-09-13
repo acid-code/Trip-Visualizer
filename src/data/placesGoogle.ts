@@ -8,6 +8,10 @@ import { distKm } from './routes'
 import { clampText, logClientError, safeHttpsUrl, sanitizeSecretInput } from './security'
 import { isValidCoord } from './validate'
 import type { ExploreCategory, ExplorePlace } from './explore'
+import {
+  periodsFromGoogleRegularHours,
+  weekdayTextFromGoogle,
+} from './openingHours'
 
 const PLACES_NEARBY = 'https://places.googleapis.com/v1/places:searchNearby'
 const PLACES_TEXT = 'https://places.googleapis.com/v1/places:searchText'
@@ -30,6 +34,7 @@ const FIELD_MASK = [
   'places.photos',
   'places.websiteUri',
   'places.googleMapsUri',
+  'places.regularOpeningHours',
 ].join(',')
 
 /** Types we care about — one request covers food / drink / sights / nature. */
@@ -65,6 +70,7 @@ type GooglePlace = {
   photos?: Array<{ name?: string }>
   websiteUri?: string
   googleMapsUri?: string
+  regularOpeningHours?: unknown
 }
 
 function categoryFromTypes(primary: string, types: string[]): ExploreCategory {
@@ -185,6 +191,10 @@ function googlePlaceToExplore(
     typeof gp.rating === 'number' && Number.isFinite(gp.rating)
       ? Math.round(gp.rating * 10) / 10
       : null
+  const openingPeriods = periodsFromGoogleRegularHours(gp.regularOpeningHours)
+  const openingHours =
+    weekdayTextFromGoogle(gp.regularOpeningHours) ||
+    (openingPeriods.length ? 'Hours on file' : '')
 
   return {
     id: `google:${placeId}`,
@@ -205,7 +215,8 @@ function googlePlaceToExplore(
     cuisine: '',
     website: safeHttpsUrl(gp.websiteUri || ''),
     menuUrl: '',
-    openingHours: '',
+    openingHours,
+    openingPeriods: openingPeriods.length ? openingPeriods : undefined,
     address: clampText(gp.formattedAddress || '', 200),
     tags: {
       source: 'google',

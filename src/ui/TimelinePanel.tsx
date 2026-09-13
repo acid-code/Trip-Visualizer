@@ -41,6 +41,8 @@ type Props = {
   layout?: 'vertical' | 'horizontal'
   /** When Detail is open on desktop, pin the selected card to the top of the list. */
   detailOpen?: boolean
+  /** AI review lock — browse only; no filter / insert / delete. */
+  lockMode?: boolean
 }
 
 export function TimelinePanel({
@@ -58,6 +60,7 @@ export function TimelinePanel({
   onDeleteStep,
   layout = 'vertical',
   detailOpen = false,
+  lockMode = false,
 }: Props) {
   const horizontal = layout === 'horizontal'
   const [confirmId, setConfirmId] = useState<string | null>(null)
@@ -78,6 +81,7 @@ export function TimelinePanel({
   // If a *new* map/list selection is hidden by filters, clear them so it can appear.
   // Do not run when the user is actively changing filters (that would undo the pick).
   useEffect(() => {
+    if (lockMode) return
     if (!selectedId) return
     const item = items.find((i) => i.id === selectedId)
     if (!item) return
@@ -88,7 +92,7 @@ export function TimelinePanel({
       onTypeFilter(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when selection changes
-  }, [selectedId, items])
+  }, [selectedId, items, lockMode])
 
   // When a day filter is chosen, jump the list to the first matching step.
   useEffect(() => {
@@ -181,7 +185,10 @@ export function TimelinePanel({
           })),
         ]}
         selectedId={dayFilter ?? ''}
-        onPick={(id) => onDayFilter(id || null)}
+        onPick={(id) => {
+          if (lockMode) return
+          onDayFilter(id || null)
+        }}
       />
       <FilterMenu
         label="Type"
@@ -201,9 +208,12 @@ export function TimelinePanel({
           })),
         ]}
         selectedId={typeFilter ?? ''}
-        onPick={(id) => onTypeFilter(id || null)}
+        onPick={(id) => {
+          if (lockMode) return
+          onTypeFilter(id || null)
+        }}
       />
-      {onAddDay ? (
+      {onAddDay && !lockMode ? (
         <button
           type="button"
           onClick={onAddDay}
@@ -231,11 +241,13 @@ export function TimelinePanel({
             : 'step-rail min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1'
         }
       >
-        <InsertControl
-          compact={horizontal}
-          label="Add at start"
-          onClick={() => onInsertBetween(null, sorted[0]?.id ?? null)}
-        />
+        {!lockMode ? (
+          <InsertControl
+            compact={horizontal}
+            label="Add at start"
+            onClick={() => onInsertBetween(null, sorted[0]?.id ?? null)}
+          />
+        ) : null}
 
         {sorted.map((item, idx) => {
           const active = selectedId === item.id
@@ -363,7 +375,7 @@ export function TimelinePanel({
                   ) : null}
                 </button>
 
-                {onDeleteStep ? (
+                {onDeleteStep && !lockMode ? (
                   <div
                     className={`absolute z-10 ${horizontal ? 'right-1 top-1' : 'right-2 top-2'}`}
                   >
@@ -411,7 +423,7 @@ export function TimelinePanel({
                 ) : null}
               </div>
 
-              {next && next.date !== item.date ? (
+              {!lockMode && next && next.date !== item.date ? (
                 <DayPassageInsert
                   compact={horizontal}
                   fromDay={dayIndex(meta, item.date)}
@@ -420,7 +432,7 @@ export function TimelinePanel({
                   toColor={dayColor(meta, next.date)}
                   onClick={() => onInsertBetween(item.id, next.id)}
                 />
-              ) : (
+              ) : !lockMode ? (
                 <InsertControl
                   compact={horizontal}
                   label={
@@ -430,7 +442,7 @@ export function TimelinePanel({
                   }
                   onClick={() => onInsertBetween(item.id, next?.id ?? null)}
                 />
-              )}
+              ) : null}
             </div>
           )
         })}

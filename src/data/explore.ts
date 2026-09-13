@@ -11,6 +11,10 @@ import {
   fetchGoogleNearbyViaProxy,
   GOOGLE_NEARBY_MAX,
 } from './placesGoogle'
+import {
+  periodsFromOsmHours,
+  type OpeningPeriod,
+} from './openingHours'
 
 export type ExploreCategory =
   | 'sights'
@@ -38,6 +42,8 @@ export type ExplorePlace = {
   /** Direct menu URL from OSM when tagged */
   menuUrl: string
   openingHours: string
+  /** Structured weekly periods when known (Google Nearby / parsed OSM). */
+  openingPeriods?: OpeningPeriod[]
   address: string
   tags: Record<string, string>
 }
@@ -255,6 +261,8 @@ function elementToPlace(
   if (!name) return null
 
   const osmId = `${el.type}/${el.id}`
+  const openingHours = clampText(tags.opening_hours || '', 120)
+  const osmPeriods = periodsFromOsmHours(openingHours)
   return {
     id: `osm:${osmId}`,
     name,
@@ -273,21 +281,32 @@ function elementToPlace(
     menuUrl: safeHttpsUrl(
       tags['website:menu'] || tags['contact:menu'] || tags.menu || '',
     ),
-    openingHours: clampText(tags.opening_hours || '', 120),
+    openingHours,
+    openingPeriods: osmPeriods?.length ? osmPeriods : undefined,
     address: clampText(addressFromTags(tags), 200),
     tags,
   }
 }
 
-function buildOverpassQuery(lat: number, lon: number, radiusM: number): string {
+function buildOverpassQuery(
+  lat: number,
+  lon: number,
+  radiusM: number,
+  categories?: ExploreCategory[],
+): string {
+  const cats =
+    categories?.length
+      ? categories
+      : (Object.keys(CATEGORY_QUERIES) as ExploreCategory[])
   const parts: string[] = []
-  for (const cat of Object.keys(CATEGORY_QUERIES) as ExploreCategory[]) {
-    for (const selector of CATEGORY_QUERIES[cat]) {
+  for (const cat of cats) {
+    for (const selector of CATEGORY_QUERIES[cat] ?? []) {
       parts.push(`${selector}(around:${radiusM},${lat},${lon});`)
     }
   }
+  const timeout = categories?.length && categories.length <= 3 ? 15 : 25
   return `
-[out:json][timeout:25];
+[out:json][timeout:${timeout}];
 // trip-worker explore — personal offline-first journal
 (
 ${parts.join('\n')}
@@ -516,6 +535,8 @@ export async function fetchNearbyExplore(
     onCacheHit?: (places: ExplorePlace[]) => void
     /** After a cache hit, still refresh in the background (default true). */
     refreshInBackground?: boolean
+    /** Limit OSM query size (Day Coach uses food/sights/nature only). */
+    categories?: ExploreCategory[]
   },
 ): Promise<ExplorePlace[]> {
   if (!isValidCoord(anchor.lat, anchor.lon)) return []
@@ -586,7 +607,12 @@ export async function fetchNearbyExplore(
     }
 
     const elements = await queryOverpass(
-      buildOverpassQuery(anchor.lat, anchor.lon, radiusM),
+      buildOverpassQuery(
+        anchor.lat,
+        anchor.lon,
+        radiusM,
+        opts?.categories,
+      ),
       opts?.signal,
     )
     if (opts?.signal?.aborted) return cacheHit ?? []
@@ -610,8 +636,17 @@ export async function fetchNearbyExplore(
     logClientInfo('explore', `OSM ok — ${fresh.length} places`)
     return fresh
   } catch (err) {
+    if (opts?.signal?.aborted) throw err
     if (cacheHit) return cacheHit
-    throw err
+    const msg =
+      err instanceof Error
+        ? err.message
+        : 'Nearby explore failed'
+    throw new Error(
+      /Failed to fetch|network|ECONN|ENOTFOUND|timed out|Cannot reach/i.test(msg)
+        ? `Nearby search unreachable (${msg}). Check that Vite is serving /api/places-nearby and /api/overpass, and that this machine can reach Google Places / Overpass.`
+        : msg,
+    )
   }
 }
 

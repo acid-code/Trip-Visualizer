@@ -161,8 +161,34 @@ textarea {
   min-height: 0;
 }
 
+.book-tongue-ai {
+  writing-mode: horizontal-tb;
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 0.35rem 0.4rem;
+  border-radius: 0 1.1rem 0.35rem 0;
+  min-height: 0;
+  color: #6d28d9;
+  background: linear-gradient(145deg, #f5f3ff 0%, #ede9fe 55%, #fae8ff 100%);
+  border-color: #ddd6fe;
+  border-left-color: transparent;
+}
+
+.book-tongue-ai.book-tongue-on {
+  color: #fff;
+  background: linear-gradient(145deg, #7c3aed 0%, #6d28d9 55%, #a855f7 100%);
+  border-color: #6d28d9;
+  border-left-color: transparent;
+}
+
+.book-tongue-ai-glyph {
+  display: block;
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
 @supports not (writing-mode: sideways-lr) {
-  .book-tongue:not(.book-tongue-plus) {
+  .book-tongue:not(.book-tongue-plus):not(.book-tongue-ai) {
     writing-mode: vertical-rl;
     text-orientation: mixed;
     transform: none;
@@ -229,6 +255,25 @@ textarea {
   text-transform: none;
   border-radius: 999px 999px 0 0;
   padding: 0.35rem 0.4rem 0.3rem;
+}
+
+.book-tongue-bottom-ai {
+  flex: 0.55;
+  letter-spacing: 0;
+  text-transform: none;
+  border-radius: 1.1rem 0.35rem 0 0;
+  padding: 0.35rem 0.4rem 0.3rem;
+  color: #6d28d9;
+  background: linear-gradient(145deg, #f5f3ff 0%, #ede9fe 55%, #fae8ff 100%);
+  border-color: #ddd6fe;
+  border-bottom-color: transparent;
+}
+
+.book-tongue-bottom-ai.book-tongue-on {
+  color: #fff;
+  background: linear-gradient(145deg, #7c3aed 0%, #6d28d9 55%, #a855f7 100%);
+  border-color: #6d28d9;
+  border-bottom-color: transparent;
 }
 
 .step-rail {

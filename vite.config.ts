@@ -163,17 +163,36 @@ function placesDevProxy(): Plugin {
         const { searchNearbyPlacesGoogle, GOOGLE_NEARBY_MAX } = await import(
           './src/data/placesGoogle'
         )
-        const places = await searchNearbyPlacesGoogle({
-          lat: Number(body.lat),
-          lon: Number(body.lon),
-          radiusM: Number(body.radiusM) || 1500,
-          maxResultCount: Math.min(
-            Number(body.maxResultCount) || GOOGLE_NEARBY_MAX,
-            GOOGLE_NEARBY_MAX,
-          ),
-          apiKey,
-        })
-        return { places }
+        const ac = new AbortController()
+        const timer = setTimeout(() => ac.abort(), 18_000)
+        try {
+          const places = await searchNearbyPlacesGoogle({
+            lat: Number(body.lat),
+            lon: Number(body.lon),
+            radiusM: Number(body.radiusM) || 1500,
+            maxResultCount: Math.min(
+              Number(body.maxResultCount) || GOOGLE_NEARBY_MAX,
+              GOOGLE_NEARBY_MAX,
+            ),
+            apiKey,
+            signal: ac.signal,
+          })
+          return { places }
+        } catch (err) {
+          if (err instanceof Error && err.name === 'AbortError') {
+            throw new Error(
+              'Google Places timed out — check network or Places API (New) enablement',
+            )
+          }
+          if (err instanceof Error && /Failed to fetch|fetch failed|ECONN|ENOTFOUND/i.test(err.message)) {
+            throw new Error(
+              'Cannot reach Google Places from this machine (network/firewall/DNS)',
+            )
+          }
+          throw err
+        } finally {
+          clearTimeout(timer)
+        }
       })
 
       handle('/api/places-text', async (body) => {
@@ -194,6 +213,106 @@ function placesDevProxy(): Plugin {
         const place = await searchTextPlaceGoogle({ query, apiKey, bias })
         return { place }
       })
+
+      // Same multi-mirror Overpass handler as Vercel (Vite http-proxy only hit one host).
+      server.middlewares.use('/api/overpass', (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204
+          res.end()
+          return
+        }
+        if (req.method !== 'POST') {
+          next()
+          return
+        }
+        const chunks: Buffer[] = []
+        req.on('data', (c) => chunks.push(c as Buffer))
+        req.on('end', () => {
+          void (async () => {
+            try {
+              const raw = Buffer.concat(chunks).toString('utf8')
+              const handler = (await import('./api/overpass')).default
+              const fakeRes = {
+                statusCode: 200,
+                status(code: number) {
+                  this.statusCode = code
+                  return this
+                },
+                setHeader(name: string, value: string) {
+                  res.setHeader(name, value)
+                },
+                json(payload: unknown) {
+                  res.statusCode = this.statusCode
+                  res.setHeader('Content-Type', 'application/json')
+                  res.end(JSON.stringify(payload))
+                },
+                send(payload: string) {
+                  res.statusCode = this.statusCode
+                  res.end(payload)
+                },
+              }
+              await handler({ method: 'POST', body: raw }, fakeRes)
+            } catch (err) {
+              res.statusCode = 502
+              res.setHeader('Content-Type', 'application/json')
+              res.end(
+                JSON.stringify({
+                  error: err instanceof Error ? err.message : 'Overpass proxy failed',
+                }),
+              )
+            }
+          })()
+        })
+      })
+
+      server.middlewares.use('/api/ai-coach', (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204
+          res.end()
+          return
+        }
+        if (req.method !== 'POST') {
+          next()
+          return
+        }
+        const chunks: Buffer[] = []
+        req.on('data', (c) => chunks.push(c as Buffer))
+        req.on('end', () => {
+          void (async () => {
+            try {
+              const raw = Buffer.concat(chunks).toString('utf8')
+              const body = JSON.parse(raw || '{}') as Record<string, unknown>
+              const handler = (await import('./api/ai-coach')).default
+              const fakeRes = {
+                statusCode: 200,
+                status(code: number) {
+                  this.statusCode = code
+                  return this
+                },
+                setHeader() {},
+                json(payload: unknown) {
+                  res.statusCode = this.statusCode
+                  res.setHeader('Content-Type', 'application/json')
+                  res.end(JSON.stringify(payload))
+                },
+                send(payload: string) {
+                  res.statusCode = this.statusCode
+                  res.end(payload)
+                },
+              }
+              await handler({ method: 'POST', body, headers: req.headers as never }, fakeRes)
+            } catch (err) {
+              res.statusCode = 502
+              res.setHeader('Content-Type', 'application/json')
+              res.end(
+                JSON.stringify({
+                  error: err instanceof Error ? err.message : 'AI coach failed',
+                }),
+              )
+            }
+          })()
+        })
+      })
     },
   }
 }
@@ -203,6 +322,9 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   if (env.GOOGLE_MAPS_API_KEY) {
     process.env.GOOGLE_MAPS_API_KEY = env.GOOGLE_MAPS_API_KEY
+  }
+  if (env.GEMINI_API_KEY) {
+    process.env.GEMINI_API_KEY = env.GEMINI_API_KEY
   }
 
   return {
@@ -287,22 +409,7 @@ export default defineConfig(({ mode }) => {
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     },
-    proxy: {
-      '/api/overpass': {
-        target: 'https://overpass-api.de',
-        changeOrigin: true,
-        rewrite: () => '/api/interpreter',
-        configure: (proxy) => {
-          proxy.on('proxyReq', (proxyReq) => {
-            proxyReq.setHeader(
-              'User-Agent',
-              'trip-worker/0.1 (personal offline-first trip journal)',
-            )
-            proxyReq.setHeader('Accept', 'application/json')
-          })
-        },
-      },
-    },
+    // /api/overpass is handled in placesDevProxy (multi-mirror), not http-proxy.
   },
   preview: {
     port: 4173,
