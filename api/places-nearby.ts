@@ -30,6 +30,7 @@ const INCLUDED_TYPES = [
   'cafe',
   'bakery',
   'bar',
+  'winery',
   'museum',
   'art_gallery',
   'tourist_attraction',
@@ -42,6 +43,8 @@ const INCLUDED_TYPES = [
   'zoo',
   'amusement_park',
   'aquarium',
+  'beach',
+  'marina',
   'lodging',
 ]
 
@@ -160,7 +163,7 @@ function categoryFromTypes(primary: string, types: string[]): string {
     t === 'food'
 
   const isDrinkType = (t: string) =>
-    t === 'bar' || t === 'night_club' || t === 'pub'
+    t === 'bar' || t === 'night_club' || t === 'pub' || t === 'winery'
 
   if (p && isFoodType(p)) return 'food'
   if (p && isDrinkType(p)) return 'drink'
@@ -171,7 +174,8 @@ function categoryFromTypes(primary: string, types: string[]): string {
   if (all.some(isLodgingType)) return 'hotel'
   if (all.some(isFoodType)) return 'food'
   if (all.some(isDrinkType)) return 'drink'
-  if (has('park') || has('campground') || has('national_park') || has('natural_feature')) {
+  if (has('vineyard')) return 'drink'
+  if (has('park') || has('campground') || has('national_park') || has('natural_feature') || has('beach') || has('marina')) {
     return 'nature'
   }
   if (

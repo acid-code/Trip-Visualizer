@@ -43,6 +43,7 @@ const INCLUDED_TYPES = [
   'cafe',
   'bakery',
   'bar',
+  'winery',
   'museum',
   'art_gallery',
   'tourist_attraction',
@@ -55,6 +56,8 @@ const INCLUDED_TYPES = [
   'zoo',
   'amusement_park',
   'aquarium',
+  'beach',
+  'marina',
   'lodging',
 ]
 
@@ -96,7 +99,7 @@ function categoryFromTypes(primary: string, types: string[]): ExploreCategory {
     t === 'food'
 
   const isDrinkType = (t: string) =>
-    t === 'bar' || t === 'night_club' || t === 'pub'
+    t === 'bar' || t === 'night_club' || t === 'pub' || t === 'winery'
 
   // Prefer primaryType — hotel restaurants often also list lodging
   if (p && isFoodType(p)) return 'food'
@@ -109,11 +112,14 @@ function categoryFromTypes(primary: string, types: string[]): ExploreCategory {
   if (all.some(isLodgingType)) return 'hotel'
   if (all.some(isFoodType)) return 'food'
   if (all.some(isDrinkType)) return 'drink'
+  if (has('vineyard')) return 'drink'
   if (
     has('park') ||
     has('campground') ||
     has('national_park') ||
-    has('natural_feature')
+    has('natural_feature') ||
+    has('beach') ||
+    has('marina')
   ) {
     return 'nature'
   }

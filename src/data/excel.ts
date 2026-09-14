@@ -314,6 +314,8 @@ function rowToItem(
       lonTo: parseLon(row.lon_to),
       wikidata: String(row.wikidata ?? ''),
       osmId: String(row.osm_id ?? ''),
+      rating: null,
+      googleMapsUri: '',
       geocodeQuery: String(row.geocode_query ?? ''),
       updatedAt: String(row.updated_at ?? ''),
       enrichmentSummary: '',

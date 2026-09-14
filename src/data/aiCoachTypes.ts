@@ -30,6 +30,8 @@ export type AiCoachPatchRemoveStep = {
 export type AiCoachPatchAddDrive = {
   /** Existing day item to depart from (dealership, hotel, arrival). */
   fromItemId?: string
+  /** Previous stop added in this same patch (candidate id) — for chained day trips. */
+  fromCandidateId?: string
   toCandidateId: string
   start?: string
   end?: string

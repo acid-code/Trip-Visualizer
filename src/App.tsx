@@ -89,6 +89,7 @@ import type { AiCoachOption } from './data/aiCoachTypes'
 import { FeatureGuide } from './ui/FeatureGuide'
 import {
   explorePlaceToItemType,
+  explorePlaceTripMeta,
   fetchNearbyExplore,
   type ExplorePlace,
 } from './data/explore'
@@ -900,8 +901,12 @@ export default function App() {
     if (exploreOpen) closeExplore()
 
     if (payload.kind === 'flight' || payload.kind === 'route') {
-      // Keep the map clear so both ends of the path stay on screen while framing
-      setPanelOpen(false)
+      // Keep Steps open during AI review so Save/Discard stay usable with the list
+      if (!aiReview) {
+        setPanelOpen(false)
+      } else {
+        setPanelOpen(true)
+      }
       setNavTab('timeline')
       clearTempPin()
       if (payload.kind === 'flight') {
@@ -926,7 +931,7 @@ export default function App() {
       setMapFocusEndpoint(null)
       const item = stepById(payload.itemId)
       if (item && isPlaceholderBase(item)) {
-        openFillDayBase(item)
+        if (!aiReview) openFillDayBase(item)
         return
       }
       setSelectedId(payload.itemId)
@@ -943,7 +948,7 @@ export default function App() {
     setMapFocusEndpoint(payload.endpoint)
     const item = stepById(payload.itemId)
     if (item && isPlaceholderBase(item)) {
-      openFillDayBase(item)
+      if (!aiReview) openFillDayBase(item)
       return
     }
     clearTempPin()
@@ -1216,6 +1221,8 @@ export default function App() {
       lonTo: null,
       wikidata: '',
       osmId: tempPin.osmId || '',
+      rating: null,
+      googleMapsUri: '',
       geocodeQuery: tempPin.query || tempPin.address || title,
       updatedAt: nowIso(),
       enrichmentSummary: tempPin.address || '',
@@ -1383,6 +1390,7 @@ export default function App() {
   function addStepFromExplore(place: ExplorePlace) {
     if (!active || !exploreAnchor) return
     const date = requireIsoDate(exploreAnchor.date, todayIso())
+    const gmeta = explorePlaceTripMeta(place)
     const item: TripItem = {
       id: createId('S'),
       type: explorePlaceToItemType(place),
@@ -1408,11 +1416,13 @@ export default function App() {
       lonTo: null,
       wikidata: place.wikidata || '',
       osmId: place.osmId || '',
+      rating: gmeta.rating,
+      googleMapsUri: gmeta.googleMapsUri,
       geocodeQuery: place.name,
       updatedAt: nowIso(),
       enrichmentSummary: place.summary || place.address || '',
       enrichmentImage: place.images[0] || '',
-      enrichmentSource: place.wikidata ? 'Wikidata' : 'OpenStreetMap',
+      enrichmentSource: gmeta.enrichmentSource,
       routeCoords: [],
       source: 'app',
     }
@@ -1549,14 +1559,19 @@ export default function App() {
 
     void (async () => {
       const draftTrip = { ...active, items: result.items }
+      const reviewDay = args.day
       setRoutesStatus('Drawing AI day paths…')
       try {
         const withDrives = await hydrateDriveRoutes(draftTrip.items)
-        // Keep the full connector set in memory; the day filter + AI review
-        // scoping decides what the globe shows. Never replace with a day slice
-        // or discard/rebuild races leave the map with no paths.
-        const walks = await buildWalkingConnectors(withDrives)
-        setConnectors(walks)
+        // Only rebuild walks for the coached day (merge) so nearby sight walks
+        // show up quickly in review without re-routing the whole trip.
+        const dayWalks = await buildWalkingConnectors(withDrives, undefined, {
+          onlyDates: [reviewDay],
+        })
+        setConnectors((prev) => [
+          ...prev.filter((c) => c.date !== reviewDay),
+          ...dayWalks,
+        ])
         setAiReview((prev) =>
           prev
             ? {
@@ -1633,7 +1648,14 @@ export default function App() {
   /** Bottom/side tongues: a covering sheet (detail, insert, explore) always
    *  closes first so the tapped tab’s panel is visible — same for every button. */
   function onTongue(id: NavTab | 'insert' | 'ai') {
-    if (aiReview) return
+    // AI review lock: only allow reopening Steps (other tongues stay disabled)
+    if (aiReview) {
+      if (id === 'timeline') {
+        setNavTab('timeline')
+        setPanelOpen(true)
+      }
+      return
+    }
 
     if (id === 'ai') {
       if (aiOpen) {
@@ -1684,25 +1706,23 @@ export default function App() {
   }
 
   /**
-   * Timeline can filter by day, but the globe should still draw the whole trip’s
-   * paths — unless we’re in AI review lock (day-scoped preview).
-   * A stuck day filter after Day Coach was hiding drives/walks on other days.
+   * Day filter scopes both the timeline and the globe. AI review also sets a
+   * day filter for the draft preview. Overview clears the filter (see header).
    */
   const mapItems = useMemo(() => {
     if (!displayTrip) return []
-    if (aiReview && dayFilter) {
+    if (dayFilter) {
       return displayTrip.items.filter((i) => itemTouchesDay(i, dayFilter))
     }
     return displayTrip.items
-  }, [displayTrip, aiReview, dayFilter])
+  }, [displayTrip, dayFilter])
 
   const visibleConnectors = useMemo(() => {
-    if (aiReview && dayFilter) {
+    if (dayFilter) {
       return connectors.filter((c) => c.date === dayFilter)
     }
-    // Normal browsing: always show all built walk/drive links on the globe
     return connectors
-  }, [connectors, dayFilter, aiReview])
+  }, [connectors, dayFilter])
 
   const walkTarget = useMemo((): WalkLinkTarget | null => {
     if (tempPin && isValidCoord(tempPin.lat, tempPin.lon)) {
@@ -1927,7 +1947,11 @@ export default function App() {
             />
             <button
               className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-xs text-white backdrop-blur hover:bg-white/25"
-              onClick={() => setOverviewToken((n) => n + 1)}
+              onClick={() => {
+                // During AI draft lock, keep the coached day scoped on the map.
+                if (!aiReview) setDayFilter(null)
+                setOverviewToken((n) => n + 1)
+              }}
             >
               Overview
             </button>
@@ -1964,10 +1988,10 @@ export default function App() {
       {!isPhone ? (
       <aside
         className={`side-shell absolute bottom-0 left-0 top-0 z-30 flex pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.5rem,env(safe-area-inset-left))] ${
-          panelOpen || exploreOpen || aiOpen ? 'side-shell-open' : 'side-shell-collapsed'
+          panelOpen || exploreOpen || aiOpen || aiReview ? 'side-shell-open' : 'side-shell-collapsed'
         } ${exploreOpen || aiOpen ? 'side-shell-explore' : ''}`}
       >
-        {panelOpen || exploreOpen || aiOpen ? (
+        {panelOpen || exploreOpen || aiOpen || aiReview ? (
           <div className="side-panel relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {aiOpen && active && !aiReview ? (
               <AiCoachSheet
@@ -2016,9 +2040,13 @@ export default function App() {
               </div>
               <button
                 type="button"
-                className="rounded-full px-2 py-1 text-xs text-stone-500 hover:bg-stone-100"
-                onClick={() => setPanelOpen(false)}
-                title="Collapse panel"
+                className="rounded-full px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 disabled:opacity-40"
+                onClick={() => {
+                  if (aiReview) return
+                  setPanelOpen(false)
+                }}
+                disabled={Boolean(aiReview)}
+                title={aiReview ? 'Steps stay open while reviewing AI changes' : 'Collapse panel'}
               >
                 ‹ Map
               </button>
@@ -2160,7 +2188,7 @@ export default function App() {
       {/* Phone: map-first — horizontal steps strip + bottom book tongues */}
       {isPhone ? (
         <div className="mobile-dock absolute inset-x-0 bottom-0 z-30 flex flex-col pb-[max(0.25rem,env(safe-area-inset-bottom))]">
-          {(panelOpen || exploreOpen || aiOpen) && lowerMode !== 'insert' ? (
+          {(panelOpen || exploreOpen || aiOpen || aiReview) && lowerMode !== 'insert' ? (
             <div
               className={`mobile-panel relative mx-2 mb-1 flex flex-col overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
                 aiOpen

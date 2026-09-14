@@ -22,6 +22,7 @@ import type {
   AiCoachOptionKind,
   AiCoachRequestBody,
 } from './aiCoachTypes'
+import { chainDrivesForSteps } from './aiCoachPatch'
 
 const TIME_HM = /^([01]?\d|2[0-3]):([0-5]\d)$/
 
@@ -30,6 +31,9 @@ export type CoachIntent = {
   fun: boolean
   drive: boolean
   food: boolean
+  wine: boolean
+  water: boolean
+  city: boolean
   views: boolean
   trim: boolean
   pace: boolean
@@ -94,21 +98,38 @@ export function isThinDay(items: TripItem[], day: string): boolean {
 
 export function detectCoachIntent(userMessage: string): CoachIntent {
   const m = userMessage.toLowerCase()
-  const fill = /fill|plan\s*(the\s*)?day|day\s*plan|itinerary|full\s*day|empty\s*day|what\s*to\s*do/i.test(
-    m,
-  )
-  const fun =
-    /fun|activit|sight|museum|hike|walk|explore|thing to do|things to do|something to do|must.?see|highlight|attraction/i.test(
+  const water =
+    /\b(beach|beaches|lake|lakes|sea|ocean|river|rivers|canal|lagoon|cove|bay|fjord|waterfront|waterside|lakeside|seaside|coast|coastal|marina|harbour|harbor|swim|swimming|boat|boating|kayak|canoe|paddle|plage|lac|mer|calanque|promenade)\b|near\s+(the\s+)?water|by\s+(the\s+)?water|water\s*(day|activit|side)|bord\s+de\s+l['’ ]?eau|au\s+bord\s+de/i.test(
       m,
     )
+  const fill =
+    /fill|plan\s*(the\s*)?day|day\s*plan|itinerary|full\s*day|whole\s*day|empty\s*day|what\s*to\s*do|populate/i.test(
+      m,
+    ) ||
+    (water && /\bday\b|plan|itinerary|fill|explore/.test(m))
+  const fun =
+    /fun|activit|sight|museum|hike|walk|explore|thing to do|things to do|something to do|must.?see|highlight|attraction|sightseeing/i.test(
+      m,
+    ) || water
   const drive =
     /drive|car|road\s*trip|scenic|provence|countryside|day\s*trip|take the car|luberon|tuscany|amalfi/i.test(
+      m,
+    )
+  const wine =
+    /\bwine\b|winery|wineries|vineyard|cave\s*(à|a)\s*vin|dégust|degustat|enoteca|weinprobe/i.test(
       m,
     )
   const food =
     /eat|food|lunch|dinner|breakfast|restaurant|nice\s*meal|cuisine|caf[eé]|coffee|romantic|pub|bar/i.test(
       m,
-    )
+    ) || wine // wine day still wants meal slots nearby, but wine is not “food mode” alone
+  const city =
+    /city|urban|downtown|old\s*town|centro|centre|museum|gallery|boulevard|plaza|square|quartier|neighborhood|neighbourhood/i.test(
+      m,
+    ) ||
+    (/explore|sight|sightseeing|things to do|activit|fun|fill|plan/.test(m) &&
+      !water &&
+      !/provence|countryside|village|vineyard|luberon|tuscany|chianti|amalfi/i.test(m))
   const views = /view|lookout|panorama|belvedere|viewpoint|scenic\s*stop|pit\s*stop/i.test(
     m,
   )
@@ -123,12 +144,28 @@ export function detectCoachIntent(userMessage: string): CoachIntent {
     !fun &&
     !drive &&
     !food &&
+    !wine &&
+    !water &&
+    !city &&
     !views &&
     !trim &&
     !pace &&
     (/help|improve|suggest|idea|option|recommend|anything|something|^$/i.test(m) ||
       m.trim().length < 12)
-  return { fill, fun, drive, food, views, trim, pace, latePub, generic }
+  return {
+    fill,
+    fun,
+    drive,
+    food,
+    wine,
+    water,
+    city,
+    views,
+    trim,
+    pace,
+    latePub,
+    generic,
+  }
 }
 
 export function diagnoseDay(
@@ -221,10 +258,94 @@ function isPubPlace(p: ExplorePlace): boolean {
   )
 }
 
+function isWinePlace(p: ExplorePlace): boolean {
+  const b = placeBlob(p)
+  return (
+    /winery|vineyard|wine\s*tast|wine\s*cellar|cave|enoteca|domaine|ch[aâ]teau/.test(
+      b,
+    ) ||
+    (p.category === 'drink' && /wine|vin/.test(b))
+  )
+}
+
+function isWaterPlace(p: ExplorePlace): boolean {
+  const b = placeBlob(p)
+  const primary = (p.tags.primaryType || '').toLowerCase()
+  return (
+    primary === 'beach' ||
+    primary === 'marina' ||
+    /beach|plage|marina|harbour|harbor|waterfront|lakeside|seaside|promenade|pier|quay|quai|jetty|calanque|cove|bay|lake|lac\b|river|canal|lagoon|aquarium|boat\s*tour|ferry\s*terminal|swimming|kayak|canoe|paddle|surf|coast|seaside|bord\s+de\s+l/.test(
+      b,
+    ) ||
+    (p.category === 'nature' &&
+      /water|beach|lake|sea|river|coast|marina|harbour|harbor/.test(b))
+  )
+}
+
+function isSeafoodPlace(p: ExplorePlace): boolean {
+  const b = placeBlob(p)
+  return /seafood|fish|oyster|shellfish|poisson|fruits?\s*de\s*mer|sushi|sashimi|ceviche|lobster|crab|moule|bouillabaisse|poissonnerie/.test(
+    b,
+  )
+}
+
+/** Coarse cuisine bucket so lunch/dinner aren’t both pizzerias. */
+function cuisineFamily(p: ExplorePlace): string {
+  const b = placeBlob(p)
+  if (/pizza|pizzer/.test(b)) return 'pizza'
+  if (isSeafoodPlace(p)) return 'seafood'
+  if (/burger|steak|grill|bbq|barbecue|brasserie/.test(b)) return 'grill'
+  if (/sushi|ramen|noodle|thai|chinese|japanese|vietnamese|korean|asian|pho|dim\s*sum/.test(b))
+    return 'asian'
+  if (/indian|curry|tandoor|biryani/.test(b)) return 'indian'
+  if (/mexican|taco|burrito|tapas|spanish|paella/.test(b)) return 'iberian'
+  if (/italian|trattoria|pasta|ristorante|osteria/.test(b)) return 'italian'
+  if (/french|bistro|proven[cç]al|gastronom/.test(b)) return 'french'
+  if (/cafe|café|bakery|coffee|patisserie|pâtisserie/.test(b)) return 'cafe'
+  if (isPubPlace(p)) return 'pub'
+  const cuisine = (p.tags.cuisine || '').toLowerCase().trim()
+  if (cuisine) return cuisine.split(/[;,]/)[0]!.slice(0, 24)
+  return 'other'
+}
+
 function isDinnerPlace(p: ExplorePlace): boolean {
   if (p.category !== 'food' && p.category !== 'drink') return false
   if (isCafePlace(p)) return false
   return true
+}
+
+function optionHasSight(
+  o: AiCoachOption,
+  byId: Map<string, ExplorePlace>,
+): boolean {
+  return (o.patch.addSteps ?? []).some((s) => {
+    const c = byId.get(s.candidateId)
+    return Boolean(
+      c &&
+        (c.category === 'sights' || c.category === 'nature') &&
+        !isWinePlace(c),
+    )
+  })
+}
+
+function optionHasWine(
+  o: AiCoachOption,
+  byId: Map<string, ExplorePlace>,
+): boolean {
+  return (o.patch.addSteps ?? []).some((s) => {
+    const c = byId.get(s.candidateId)
+    return Boolean(c && isWinePlace(c))
+  })
+}
+
+function optionHasWater(
+  o: AiCoachOption,
+  byId: Map<string, ExplorePlace>,
+): boolean {
+  return (o.patch.addSteps ?? []).some((s) => {
+    const c = byId.get(s.candidateId)
+    return Boolean(c && isWaterPlace(c))
+  })
 }
 
 function rankFood(a: ExplorePlace, b: ExplorePlace): number {
@@ -253,6 +374,23 @@ export function resolveDayAnchor(
       lat: hotel.lat!,
       lon: hotel.lon!,
       label: hotel.title || hotel.place || 'Hotel',
+    }
+  }
+
+  // Night-before stay that still covers this morning (checkout today / later)
+  const overnight = items.find(
+    (i) =>
+      i.type === 'hotel' &&
+      !isPlaceholderBase(i) &&
+      isValidCoord(i.lat, i.lon) &&
+      i.date < day &&
+      (!i.endDate || i.endDate >= day),
+  )
+  if (overnight) {
+    return {
+      lat: overnight.lat!,
+      lon: overnight.lon!,
+      label: overnight.title || overnight.place || 'Hotel',
     }
   }
 
@@ -374,10 +512,84 @@ function preferOpenAt(
   return open.length ? [...open, ...unknown] : unknown.length ? unknown : list
 }
 
+function placeDedupeKey(p: {
+  name: string
+  lat: number
+  lon: number
+}): string {
+  const name = p.name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+  return `${name}|${p.lat.toFixed(3)}|${p.lon.toFixed(3)}`
+}
+
 function mergePlaces(into: Map<string, ExplorePlace>, list: ExplorePlace[]) {
-  for (const p of list) {
-    if (!into.has(p.id)) into.set(p.id, p)
+  const byKey = new Map<string, string>()
+  for (const [id, p] of into) {
+    byKey.set(placeDedupeKey(p), id)
   }
+  for (const p of list) {
+    const key = placeDedupeKey(p)
+    const existingId = byKey.get(key)
+    if (!existingId) {
+      into.set(p.id, p)
+      byKey.set(key, p.id)
+      continue
+    }
+    if (existingId === p.id) {
+      into.set(p.id, p)
+      continue
+    }
+    // Same venue from Google + OSM (or double Nearby) — keep the richer record
+    const prev = into.get(existingId)!
+    const score = (x: ExplorePlace) =>
+      (x.tags.source === 'google' ? 4 : 0) +
+      (x.rating != null ? 2 : 0) +
+      (x.images.length ? 1 : 0) +
+      (x.openingPeriods?.length ? 1 : 0)
+    if (score(p) > score(prev)) {
+      into.delete(existingId)
+      into.set(p.id, p)
+      byKey.set(key, p.id)
+    }
+  }
+}
+
+/** Collapse duplicate candidate ids / same venue within one option. */
+function dedupeAddStepsByPlace(
+  steps: NonNullable<AiCoachOption['patch']['addSteps']>,
+  byId: Map<string, ExplorePlace>,
+): NonNullable<AiCoachOption['patch']['addSteps']> {
+  const seenIds = new Set<string>()
+  const seenKeys = new Set<string>()
+  const out: NonNullable<AiCoachOption['patch']['addSteps']> = []
+  for (const s of steps) {
+    if (seenIds.has(s.candidateId)) continue
+    const place = byId.get(s.candidateId)
+    if (place) {
+      const key = placeDedupeKey(place)
+      if (seenKeys.has(key)) continue
+      seenKeys.add(key)
+    }
+    seenIds.add(s.candidateId)
+    out.push(s)
+  }
+  return out
+}
+
+function uniquePlaceCount(
+  steps: NonNullable<AiCoachOption['patch']['addSteps']>,
+  byId: Map<string, ExplorePlace>,
+): number {
+  const keys = new Set<string>()
+  for (const s of steps) {
+    const p = byId.get(s.candidateId)
+    keys.add(p ? placeDedupeKey(p) : s.candidateId)
+  }
+  return keys.size
 }
 
 function sampleDrivePoints(
@@ -500,6 +712,80 @@ async function resolveRegionAnchors(
   return out
 }
 
+/**
+ * Free-form area recommendations: Text Search near the day hotel/city, then
+ * Nearby around those hits. Works for cities and countryside — not Provence-only.
+ */
+async function resolveAreaRecommendationAnchors(
+  anchor: { lat: number; lon: number; label: string },
+  intent: CoachIntent,
+  fill: 'empty' | 'partial' | 'full',
+  opts?: {
+    signal?: AbortSignal
+    useGooglePlaces?: boolean
+    googleApiKey?: string
+  },
+): Promise<Array<{ lat: number; lon: number; label: string }>> {
+  if (!opts?.useGooglePlaces) return []
+  const area = (anchor.label || 'here').trim()
+  const queries: string[] = []
+  if (intent.fun || intent.fill || intent.city || fill === 'empty') {
+    queries.push(`things to do near ${area}`)
+    queries.push(`best sightseeing near ${area}`)
+  }
+  if (intent.city || intent.fun) {
+    queries.push(`museum or historic site near ${area}`)
+  }
+  if (intent.water) {
+    queries.push(`beach or waterfront near ${area}`)
+    queries.push(`lake or marina near ${area}`)
+    queries.push(`things to do by the water near ${area}`)
+  }
+  if (intent.wine) queries.push(`winery or wine tasting near ${area}`)
+  if (intent.food || fill === 'empty') {
+    queries.push(
+      intent.water
+        ? `seafood restaurant near ${area}`
+        : `highly rated restaurant near ${area}`,
+    )
+  }
+  if (intent.views || intent.drive) {
+    queries.push(`viewpoint or scenic lookout near ${area}`)
+  }
+  if (!queries.length) queries.push(`popular attractions near ${area}`)
+
+  const out: Array<{ lat: number; lon: number; label: string }> = []
+  const seen = new Set<string>()
+  try {
+    const { fetchGoogleTextViaProxy } = await import('./placesGoogle')
+    for (const q of queries.slice(0, intent.water ? 5 : 4)) {
+      if (opts.signal?.aborted) break
+      try {
+        const hit = await fetchGoogleTextViaProxy({
+          query: q,
+          apiKey: opts.googleApiKey,
+          bias: { lat: anchor.lat, lon: anchor.lon, radiusM: 40_000 },
+          signal: opts.signal,
+        })
+        if (!hit || !isValidCoord(hit.lat, hit.lon)) continue
+        const key = `${hit.lat.toFixed(3)},${hit.lon.toFixed(3)}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push({
+          lat: hit.lat,
+          lon: hit.lon,
+          label: hit.name || q,
+        })
+      } catch (err) {
+        logClientError('ai-coach-area-text', err)
+      }
+    }
+  } catch (err) {
+    logClientError('ai-coach-area-import', err)
+  }
+  return out
+}
+
 function buildPlanningHints(
   items: TripItem[],
   day: string,
@@ -524,6 +810,12 @@ function buildPlanningHints(
     hints.push(
       'Empty/skeleton day: help fill THIS day. Prefer a full-day itinerary with café + fun sight + lunch + dinner when asked to fill/plan/fun.',
     )
+    const bases = dayItemsForCoach(items, day).filter(isPlaceholderBase)
+    if (bases.length) {
+      hints.push(
+        `Day-base placeholder(s) on this day (${bases.map((b) => `${b.title}→${b.id}`).join('; ')}): when adding real stops, include removeSteps for those ids OR the app will convert the base into your first new stop. Do not leave an empty “Day N base” hotel shell beside real plans.`,
+      )
+    }
   } else if (diagnosis.fillLevel === 'partial') {
     hints.push(
       'Partly filled: offer 3 light alternative tweaks — do NOT rebuild the whole day.',
@@ -539,11 +831,30 @@ function buildPlanningHints(
       'Empty drive day: addDrives + viewpoint + destination + meals. Prefer destination/along_route over airport food.',
     )
   }
-  if (intent.fun || intent.fill) {
+  if (intent.fun || intent.fill || intent.city || diagnosis.fillLevel === 'empty') {
     hints.push(
-      'Fill/fun: include sights or nature — never only a morning café. Activity ≠ restaurant.',
+      'Fill/fun/city/sights: EVERY option that adds stops must include ≥1 sights or nature candidate — never lunch+dinner alone. Prefer 2 sights on a full-day fill. Works for cities and countryside alike.',
     )
   }
+  if (intent.wine) {
+    hints.push(
+      'Wine tasting: add ONE winery/wine-cellar stop when asked — as part of a normal day (with sights/meals if fill/fun), not a “wine-only” day mode. Never reuse the tasting venue as café/sight/dinner.',
+    )
+  }
+  if (intent.water) {
+    hints.push(
+      'Water day: prioritize beach / lake / marina / waterfront / harbour / coastal promenade candidates (sights or nature). Include at least one water-oriented stop. Prefer seafood or waterfront dining when available — do not serve lunch and dinner as two pizzerias.',
+    )
+  }
+  const avoided = avoidedPlaceNames(items, day)
+  if (avoided.length) {
+    hints.push(
+      `Star-shaped / multi-day base: do NOT reuse places already planned on other days of this trip. Avoid: ${avoided.join('; ')}. Pick fresh candidates for THIS day.`,
+    )
+  }
+  hints.push(
+    'Travel: compact city days — hops under ~3 km are walks (no addDrives); open countryside / Provence-style days — use addDrives even for ~2 km village hops. Always addDrives for farther out-of-town stops.',
+  )
   if (intent.food) {
     hints.push(
       'Food: café ~09:00, lunch ~13:00, dinner/pub ~19:30 near where they will be.',
@@ -587,6 +898,9 @@ function buildPlanningHints(
   )
   hints.push(
     'When clarifications include Original request / Coach asked / User replied, resolve short answers like “first one” against Coach asked, then return options — do not re-ask.',
+  )
+  hints.push(
+    'Never schedule the same candidate/place twice on this day at different times — each stop must be a distinct candidate id.',
   )
   hints.push(
     'Return 1–3 solid options (quality over quantity). One strong option is fine.',
@@ -666,19 +980,52 @@ export async function gatherCoachCandidates(
         await safeExplore(anchor, 3500, 20, ['sights', 'nature']),
       )
     }
-    if (intent.food || intent.latePub || fill === 'empty') {
+    if (intent.food || intent.latePub || intent.wine || fill === 'empty') {
       mergePlaces(
         byId,
-        await safeExplore(anchor, 2200, 16, ['food', 'drink']),
+        await safeExplore(anchor, intent.wine ? 8000 : 2200, intent.wine ? 24 : 16, [
+          'food',
+          'drink',
+        ]),
+      )
+    }
+    if (intent.wine) {
+      mergePlaces(
+        byId,
+        await safeExplore(anchor, 12000, 20, ['drink']),
+      )
+    }
+    if (intent.water) {
+      mergePlaces(
+        byId,
+        await safeExplore(anchor, 18_000, 28, ['sights', 'nature']),
+      )
+      mergePlaces(
+        byId,
+        await safeExplore(anchor, 10_000, 16, ['food', 'drink']),
       )
     }
   }
 
-  const regions = await resolveRegionAnchors(
-    msg,
-    anchor ? { lat: anchor.lat, lon: anchor.lon } : null,
-    opts,
-  )
+  const regions = [
+    ...(await resolveRegionAnchors(
+      msg,
+      anchor ? { lat: anchor.lat, lon: anchor.lon } : null,
+      opts,
+    )),
+  ]
+  if (anchor) {
+    const areaAnchors = await resolveAreaRecommendationAnchors(
+      anchor,
+      intent,
+      fill,
+      opts,
+    )
+    for (const a of areaAnchors) {
+      if (regions.some((r) => awaitableDist(r, a).distKm < 1.5)) continue
+      regions.push(a)
+    }
+  }
   for (const region of regions) {
     if (opts?.signal?.aborted) break
     const found = await safeExplore(region, 5500, regionLimit)
@@ -712,6 +1059,46 @@ export async function gatherCoachCandidates(
     }
   }
 
+  // Thin local pool → widen Nearby radius so the coach isn't forced to reuse the same pins
+  if (anchor && !opts?.signal?.aborted) {
+    const widenSteps: Array<{
+      radiusM: number
+      limit: number
+      categories?: ExplorePlace['category'][]
+    }> = [
+      { radiusM: 5000, limit: 28 },
+      { radiusM: 8000, limit: 36 },
+      { radiusM: 12_000, limit: 40 },
+      { radiusM: 18_000, limit: 48 },
+      {
+        radiusM: 25_000,
+        limit: 56,
+        categories: ['sights', 'nature', 'food', 'drink'],
+      },
+    ]
+    for (const step of widenSteps) {
+      if (opts?.signal?.aborted) break
+      if (
+        !coachPoolNeedsWiderSearch(
+          [...byId.values()],
+          intent,
+          fill,
+        )
+      ) {
+        break
+      }
+      mergePlaces(
+        byId,
+        await safeExplore(
+          anchor,
+          step.radiusM,
+          step.limit,
+          step.categories,
+        ),
+      )
+    }
+  }
+
   const list = [...byId.values()]
   if (anchor) {
     for (const p of list) {
@@ -719,12 +1106,33 @@ export async function gatherCoachCandidates(
     }
   }
 
-  const usable = list.filter((p) => {
+  const dayContent = dayItemsForCoach(items, day).filter(
+    (i) =>
+      i.status !== 'cancelled' &&
+      !isPlaceholderBase(i) &&
+      i.type !== 'drive' &&
+      i.type !== 'note',
+  )
+
+  const fresh = list.filter((p) => {
     if (p.category === 'hotel') return false
+    if (placeAlreadyOnDay(p, dayContent)) return false
+    if (placeAlreadyOnTrip(p, items, day)) return false
     const hint = summarizeOpenSlots(day, p.openingPeriods, p.openingHours)
     return hint !== 'closed all typical slots'
   })
-  const ranked = usable.length ? usable : list.filter((p) => p.category !== 'hotel')
+  // Soft fallback: if star-trip exclusion emptied the pool, allow other-day places last
+  const reused =
+    fresh.length >= 6
+      ? []
+      : list.filter((p) => {
+          if (p.category === 'hotel') return false
+          if (placeAlreadyOnDay(p, dayContent)) return false
+          if (!placeAlreadyOnTrip(p, items, day)) return false
+          const hint = summarizeOpenSlots(day, p.openingPeriods, p.openingHours)
+          return hint !== 'closed all typical slots'
+        })
+  const ranked = [...fresh, ...reused]
 
   // Prefer sights earlier in the list for fun/fill so Gemini sees them
   if (intent.fun || intent.fill) {
@@ -739,6 +1147,104 @@ export async function gatherCoachCandidates(
     ranked.sort((a, b) => a.distKm - b.distKm)
   }
   return ranked.slice(0, 56)
+}
+
+function placeAlreadyOnDay(
+  place: ExplorePlace,
+  dayItems: TripItem[],
+): boolean {
+  const name = place.name.trim().toLowerCase()
+  for (const i of dayItems) {
+    if (
+      isValidCoord(i.lat, i.lon) &&
+      Math.abs(i.lat! - place.lat) < 1.2e-3 &&
+      Math.abs(i.lon! - place.lon) < 1.2e-3
+    ) {
+      return true
+    }
+    const title = (i.title || '').trim().toLowerCase()
+    if (name && title && (title === name || title.includes(name) || name.includes(title))) {
+      // Avoid matching very short shared words
+      if (name.length >= 4 && title.length >= 4) return true
+    }
+  }
+  return false
+}
+
+/** Content stops on other calendar days — for star-shaped multi-night hotel bases. */
+function tripContentOnOtherDays(
+  items: TripItem[],
+  exceptDay: string,
+): TripItem[] {
+  return items.filter(
+    (i) =>
+      i.status !== 'cancelled' &&
+      !isPlaceholderBase(i) &&
+      i.type !== 'drive' &&
+      i.type !== 'note' &&
+      i.type !== 'hotel' &&
+      i.type !== 'flight' &&
+      i.date !== exceptDay,
+  )
+}
+
+function placeAlreadyOnTrip(
+  place: ExplorePlace,
+  items: TripItem[],
+  exceptDay: string,
+): boolean {
+  return placeAlreadyOnDay(place, tripContentOnOtherDays(items, exceptDay))
+}
+
+function avoidedPlaceNames(items: TripItem[], exceptDay: string, max = 10): string[] {
+  const names: string[] = []
+  const seen = new Set<string>()
+  for (const i of tripContentOnOtherDays(items, exceptDay)) {
+    const n = (i.title || i.place || '').trim()
+    if (!n) continue
+    const key = n.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    names.push(n)
+    if (names.length >= max) break
+  }
+  return names
+}
+
+function coachPoolNeedsWiderSearch(
+  places: ExplorePlace[],
+  intent: CoachIntent,
+  fill: 'empty' | 'partial' | 'full',
+): boolean {
+  const unique = new Set(
+    places.filter((p) => p.category !== 'hotel').map(placeDedupeKey),
+  )
+  const sights = places.filter(
+    (p) =>
+      (p.category === 'sights' || p.category === 'nature') && !isWinePlace(p),
+  ).length
+  const food = places.filter(
+    (p) => p.category === 'food' && !isWinePlace(p),
+  ).length
+  const drink = places.filter(
+    (p) => p.category === 'drink' && !isWinePlace(p),
+  ).length
+  const wine = places.filter(isWinePlace).length
+  const water = places.filter(isWaterPlace).length
+  const total = unique.size
+
+  if (intent.wine && (wine < 1 || sights < 2 || food < 2 || total < 6)) {
+    return true
+  }
+  if (intent.water && (water < 1 || sights < 2 || food < 2 || total < 6)) {
+    return true
+  }
+  if (intent.fill || intent.fun || fill === 'empty') {
+    // Full-day plans need distinct sights + meals — not one winery three times
+    return sights < 3 || food < 2 || total < 8
+  }
+  if (intent.food || intent.latePub) return food + drink < 5 || total < 6
+  return total < 6
 }
 
 export function buildCoachRequestBody(args: {
@@ -758,11 +1264,11 @@ export function buildCoachRequestBody(args: {
     const placeholder = isPlaceholderBase(i)
     const vehicle = isVehicleStop(i)
     const canRemove =
-      !placeholder &&
-      !vehicle &&
-      ['sight', 'restaurant', 'activity', 'note', 'other', 'city', 'drive'].includes(
-        i.type,
-      )
+      placeholder ||
+      (!vehicle &&
+        ['sight', 'restaurant', 'activity', 'note', 'other', 'city', 'drive'].includes(
+          i.type,
+        ))
     return {
       id: i.id,
       type: i.type,
@@ -826,9 +1332,9 @@ function sanitizeTime(t: unknown): string | undefined {
 }
 
 function isRemovableDayItem(i: AiCoachDayItem): boolean {
-  if (i.isPlaceholder || i.isVehicleStop) return false
+  if (i.isVehicleStop) return false
+  if (i.isPlaceholder || i.canRemove === true) return true
   if (i.canRemove === false) return false
-  if (i.canRemove === true) return true
   return ['sight', 'restaurant', 'activity', 'note', 'other', 'city', 'drive'].includes(
     i.type,
   )
@@ -928,10 +1434,15 @@ function sanitizeOption(
         return null
       }
       const fromItemId = String(r.fromItemId ?? '').trim()
+      const fromCandidateId = String(r.fromCandidateId ?? '').trim()
       return {
         toCandidateId,
         fromItemId:
           fromItemId && dayItemIds.has(fromItemId) ? fromItemId : undefined,
+        fromCandidateId:
+          fromCandidateId && candidateIds.has(fromCandidateId)
+            ? fromCandidateId
+            : undefined,
         start,
         end,
       }
@@ -1105,13 +1616,18 @@ export function localHeuristicOptions(
   const fill =
     body.dayFillLevel ?? (body.thinDay ? 'empty' : 'partial')
   const day = body.day
-  const foodAll = preferOpenAt(
+  // Keep wineries out of meal/sight slots — they're reserved for tasting stops
+  const mealPool = preferOpenAt(
     candidates
-      .filter((c) => c.category === 'food' || c.category === 'drink')
+      .filter(
+        (c) =>
+          (c.category === 'food' || c.category === 'drink') && !isWinePlace(c),
+      )
       .sort(rankFood),
     day,
     '13:00',
   )
+  const foodAll = mealPool
   const cafes = preferOpenAt(foodAll.filter(isCafePlace), day, '09:00')
   const pubs = preferOpenAt(foodAll.filter(isPubPlace), day, '21:00')
   const dinners = preferOpenAt(
@@ -1128,13 +1644,29 @@ export function localHeuristicOptions(
   )
   const sights = preferOpenAt(
     candidates
-      .filter((c) => c.category === 'sights' || c.category === 'nature')
-      .sort(rankSight),
+      .filter(
+        (c) =>
+          (c.category === 'sights' || c.category === 'nature') &&
+          !isWinePlace(c),
+      )
+      .sort((a, b) => {
+        if (intent.water) {
+          const aw = isWaterPlace(a) ? 1 : 0
+          const bw = isWaterPlace(b) ? 1 : 0
+          if (aw !== bw) return bw - aw
+        }
+        return rankSight(a, b)
+      }),
     day,
     '11:00',
   )
   const sightsFar = sights.filter((c) => c.distKm >= 8)
   const sightsNear = sights.filter((c) => c.distKm < 8)
+  const waters = preferOpenAt(
+    candidates.filter(isWaterPlace).sort(rankSight),
+    day,
+    '11:00',
+  )
   const views = preferOpenAt(
     candidates
       .filter((c) =>
@@ -1144,10 +1676,77 @@ export function localHeuristicOptions(
     day,
     '16:00',
   )
+  const wines = preferOpenAt(
+    candidates.filter(isWinePlace).sort(rankFood),
+    day,
+    '15:00',
+  )
 
   const vehicle = body.dayItems.find((i) => i.isVehicleStop)
-  const fromId = vehicle?.id
+  const hotel = body.dayItems.find((i) => i.type === 'hotel')
+  const fromId = vehicle?.id ?? hotel?.id
   const options: AiCoachOption[] = []
+  const dayPlaceholders = body.dayItems.filter((i) => i.isPlaceholder)
+  const clearBases = (): NonNullable<AiCoachOption['patch']['removeSteps']> =>
+    dayPlaceholders.map((p) => ({ itemId: p.id }))
+
+  function withClearedBases(patch: AiCoachOption['patch']): AiCoachOption['patch'] {
+    if (!dayPlaceholders.length) return patch
+    const existing = patch.removeSteps ?? []
+    const seen = new Set(existing.map((r) => r.itemId))
+    const extra = clearBases().filter((r) => !seen.has(r.itemId))
+    if (!extra.length) return patch
+    return { ...patch, removeSteps: [...existing, ...extra] }
+  }
+
+  function openAreaTravel(): boolean {
+    return (
+      intent.drive ||
+      Boolean(vehicle) ||
+      /provence|luberon|tuscany|countryside|vineyard|winery|village/i.test(
+        body.userMessage,
+      ) ||
+      candidates.some((c) => c.distKm >= 8)
+    )
+  }
+
+  /** Stop→stop drives (not a star from the hotel). */
+  function drivesForFarSteps(
+    steps: NonNullable<AiCoachOption['patch']['addSteps']>,
+  ): NonNullable<AiCoachOption['patch']['addDrives']> {
+    return chainDrivesForSteps(steps, candidates, {
+      dayItems: [],
+      fromItemId: fromId,
+      openArea: openAreaTravel(),
+    })
+  }
+
+  function patchWithDrives(
+    steps: NonNullable<AiCoachOption['patch']['addSteps']>,
+  ): AiCoachOption['patch'] {
+    const byId = new Map(candidates.map((c) => [c.id, c]))
+    const uniqueSteps = dedupeAddStepsByPlace(steps, byId)
+    const addDrives = drivesForFarSteps(uniqueSteps)
+    return withClearedBases({
+      addSteps: uniqueSteps,
+      ...(addDrives.length ? { addDrives } : {}),
+    })
+  }
+
+  function pushUnique(
+    steps: NonNullable<AiCoachOption['patch']['addSteps']>,
+    used: Set<string>,
+    place: ExplorePlace | undefined,
+    start: string,
+    note: string,
+  ) {
+    if (!place) return
+    const key = placeDedupeKey(place)
+    if (used.has(place.id) || used.has(key)) return
+    used.add(place.id)
+    used.add(key)
+    steps.push({ candidateId: place.id, start, note })
+  }
 
   function pickMeals(preferFar: boolean) {
     const used = new Set<string>()
@@ -1159,14 +1758,43 @@ export function localHeuristicOptions(
       pool.find((c) => isCafePlace(c)) ||
       pool.find((c) => c.category === 'food')
     if (cafe) used.add(cafe.id)
-    const lunch =
-      lunches.find((c) => !used.has(c.id)) ||
-      pool.find((c) => c.category === 'food' && !isCafePlace(c) && !used.has(c.id))
+
+    const lunchPool = [
+      ...(intent.water
+        ? pool.filter((c) => isSeafoodPlace(c) && !used.has(c.id))
+        : []),
+      ...lunches.filter((c) => !used.has(c.id)),
+      ...pool.filter(
+        (c) => c.category === 'food' && !isCafePlace(c) && !used.has(c.id),
+      ),
+    ]
+    const lunch = lunchPool[0]
     if (lunch) used.add(lunch.id)
-    const dinner =
-      dinners.find((c) => !used.has(c.id) && (c.rating ?? 0) >= 4) ||
-      pubs.find((c) => !used.has(c.id)) ||
-      dinners.find((c) => !used.has(c.id))
+    const lunchFamily = lunch ? cuisineFamily(lunch) : ''
+
+    const dinnerPool = [
+      ...(intent.water
+        ? pool.filter(
+            (c) =>
+              isSeafoodPlace(c) &&
+              !used.has(c.id) &&
+              cuisineFamily(c) !== lunchFamily,
+          )
+        : []),
+      ...dinners.filter(
+        (c) =>
+          !used.has(c.id) &&
+          cuisineFamily(c) !== lunchFamily &&
+          (c.rating ?? 0) >= 4,
+      ),
+      ...dinners.filter(
+        (c) => !used.has(c.id) && cuisineFamily(c) !== lunchFamily,
+      ),
+      ...pubs.filter((c) => !used.has(c.id) && cuisineFamily(c) !== lunchFamily),
+      ...dinners.filter((c) => !used.has(c.id)),
+      ...pubs.filter((c) => !used.has(c.id)),
+    ]
+    const dinner = dinnerPool[0]
     if (dinner) used.add(dinner.id)
     const nightcap = intent.latePub
       ? pubs.find((c) => !used.has(c.id))
@@ -1227,17 +1855,10 @@ export function localHeuristicOptions(
           kind: 'itinerary',
           summary: `Drive toward ${dest.name} with meals timed to the route.`,
           rationale: 'Empty drive day: vehicle → scenic stop → destination → meals.',
-          patch: {
-            addDrives: [
-              {
-                fromItemId: fromId,
-                toCandidateId: pit?.id || dest.id,
-                start: '10:00',
-                end: '10:40',
-              },
-            ],
+          patch: withClearedBases({
             addSteps,
-          },
+            addDrives: drivesForFarSteps(addSteps),
+          }),
         })
       }
       // Stay-local alternative
@@ -1275,7 +1896,7 @@ export function localHeuristicOptions(
               ? `Local day around ${fun.name}`
               : 'Keep the day closer to your start.',
             rationale: 'Alternative to driving far — useful if energy is low.',
-            patch: { addSteps: steps },
+            patch: patchWithDrives(steps),
           })
         }
       }
@@ -1289,74 +1910,203 @@ export function localHeuristicOptions(
             .map((v) => v.name)
             .join(' & ')}`,
           rationale: 'Drive-day alternative focused on views.',
-          patch: {
-            addSteps: views.slice(0, 2).map((p, i) => ({
+          patch: patchWithDrives(
+            views.slice(0, 2).map((p, i) => ({
               candidateId: p.id,
               start: i === 0 ? '10:30' : '16:00',
             })),
-          },
+          ),
         })
+      }
+    }
+
+    if (intent.water) {
+      const waterMain = waters[0] || sights.find(isWaterPlace)
+      const water2 =
+        waters.find(
+          (w) =>
+            w.id !== waterMain?.id &&
+            (!waterMain || placeDedupeKey(w) !== placeDedupeKey(waterMain)),
+        ) ||
+        sights.find(
+          (s) =>
+            isWaterPlace(s) &&
+            s.id !== waterMain?.id &&
+            (!waterMain || placeDedupeKey(s) !== placeDedupeKey(waterMain)),
+        )
+      const meals = pickMeals(Boolean(waterMain && waterMain.distKm >= 6))
+      if (waterMain) {
+        const waterSteps: NonNullable<AiCoachOption['patch']['addSteps']> = []
+        const used = new Set<string>([waterMain.id, placeDedupeKey(waterMain)])
+        pushUnique(waterSteps, used, meals.cafe, '09:00', 'Morning café')
+        pushUnique(waterSteps, used, waterMain, '10:45', 'By the water')
+        pushUnique(waterSteps, used, meals.lunch, '13:00', 'Lunch')
+        pushUnique(
+          waterSteps,
+          used,
+          water2,
+          '16:00',
+          'Waterfront / lakeside stop',
+        )
+        pushUnique(
+          waterSteps,
+          used,
+          meals.dinner,
+          '19:30',
+          meals.dinner && isSeafoodPlace(meals.dinner)
+            ? 'Seafood dinner'
+            : meals.dinner && isPubPlace(meals.dinner)
+              ? 'Evening pub'
+              : 'Dinner',
+        )
+        const byIdLocal = new Map(candidates.map((c) => [c.id, c]))
+        if (uniquePlaceCount(waterSteps, byIdLocal) >= 2) {
+          options.push({
+            id: 'local-water-day',
+            label: 'Day by the water',
+            kind: 'itinerary',
+            summary: water2
+              ? `${waterMain.name} + ${water2.name}`
+              : `Time by the water at ${waterMain.name}`,
+            rationale:
+              'Water ask: beach/lake/marina/waterfront stops with varied meals (not two pizzerias).',
+            patch: patchWithDrives(waterSteps),
+          })
+        }
+      }
+    }
+
+    if (intent.wine) {
+      const tasting = wines[0]
+      const fun =
+        sightsNear.find((s) => s.id !== tasting?.id) ||
+        sights.find((s) => s.id !== tasting?.id) ||
+        views.find((v) => v.id !== tasting?.id)
+      const fun2 =
+        sights.find(
+          (s) =>
+            s.id !== fun?.id &&
+            s.id !== tasting?.id &&
+            (!fun || placeDedupeKey(s) !== placeDedupeKey(fun)),
+        ) ||
+        views.find((v) => v.id !== fun?.id && v.id !== tasting?.id)
+      const meals = pickMeals(Boolean(tasting && tasting.distKm >= 5))
+      // Full sightseeing/fill day with a tasting stop — not a dedicated “wine day” mode
+      const pairWithDay =
+        intent.fill || intent.fun || intent.city || intent.generic
+      if (tasting) {
+        const wineSteps: NonNullable<AiCoachOption['patch']['addSteps']> = []
+        const used = new Set<string>([tasting.id, placeDedupeKey(tasting)])
+        if (pairWithDay || fill === 'empty') {
+          pushUnique(wineSteps, used, meals.cafe, '09:00', 'Morning café')
+          pushUnique(wineSteps, used, fun, '10:30', 'Sightseeing')
+          pushUnique(wineSteps, used, meals.lunch, '12:30', 'Lunch')
+        }
+        wineSteps.push({
+          candidateId: tasting.id,
+          start: '15:00',
+          note: 'Wine tasting',
+        })
+        if (pairWithDay || fill === 'empty') {
+          pushUnique(wineSteps, used, fun2, '17:00', 'Afternoon sight')
+          pushUnique(
+            wineSteps,
+            used,
+            meals.dinner,
+            '19:30',
+            meals.dinner && isPubPlace(meals.dinner)
+              ? 'Evening pub'
+              : 'Dinner',
+          )
+        }
+        const byId = new Map(candidates.map((c) => [c.id, c]))
+        const distinct = uniquePlaceCount(wineSteps, byId)
+        const wantFull = pairWithDay || fill === 'empty'
+        if (distinct >= (wantFull ? 2 : 1)) {
+          options.push({
+            id: 'local-wine-day',
+            label:
+              wantFull && distinct >= 2
+                ? intent.city
+                  ? 'City day + tasting'
+                  : 'Fill day + tasting'
+                : 'Wine tasting',
+            kind: 'itinerary',
+            summary:
+              fun && wantFull && distinct >= 2
+                ? `${fun.name} + tasting at ${tasting.name}`
+                : `Wine tasting at ${tasting.name}`,
+            rationale:
+              'Wine as one stop in a normal sightseeing/meal day — distinct places only.',
+            patch: patchWithDrives(wineSteps),
+          })
+        }
       }
     }
 
     if (intent.fill || intent.fun || intent.generic || intent.food || !body.userMessage.trim()) {
       const meals = pickMeals(false)
-      const fun = sightsNear[0] || sights[0] || views[0] || sightsFar[0]
-      const fun2 = sights.find((s) => s.id !== fun?.id) || views.find((v) => v.id !== fun?.id)
+      const fun =
+        (intent.water ? waters[0] : null) ||
+        sightsNear[0] ||
+        sights[0] ||
+        views[0] ||
+        sightsFar[0]
+      const fun2 =
+        (intent.water
+          ? waters.find(
+              (w) =>
+                w.id !== fun?.id &&
+                (!fun || placeDedupeKey(w) !== placeDedupeKey(fun)),
+            )
+          : null) ||
+        sights.find(
+          (s) => s.id !== fun?.id && (!fun || placeDedupeKey(s) !== placeDedupeKey(fun)),
+        ) ||
+        views.find((v) => v.id !== fun?.id)
+      const wantActivity =
+        intent.fill || intent.fun || intent.generic || intent.wine || intent.water || !intent.food
       const fillSteps: NonNullable<AiCoachOption['patch']['addSteps']> = []
-      if (meals.cafe) {
-        fillSteps.push({
-          candidateId: meals.cafe.id,
-          start: '09:00',
-          note: 'Morning café',
-        })
+      const used = new Set<string>()
+      if (meals.cafe) pushUnique(fillSteps, used, meals.cafe, '09:00', 'Morning café')
+      if (fun && wantActivity) {
+        pushUnique(fillSteps, used, fun, '10:30', 'Fun thing in the area')
       }
-      if (fun && (intent.fill || intent.fun || intent.generic || !intent.food)) {
-        fillSteps.push({
-          candidateId: fun.id,
-          start: '10:30',
-          note: 'Fun thing in the area',
-        })
-      }
-      if (meals.lunch) {
-        fillSteps.push({
-          candidateId: meals.lunch.id,
-          start: '13:00',
-          note: 'Lunch',
-        })
-      }
-      if (fun2 && (intent.fill || intent.fun || intent.generic)) {
-        fillSteps.push({
-          candidateId: fun2.id,
-          start: '15:30',
-          note: 'Afternoon activity',
-        })
+      if (meals.lunch) pushUnique(fillSteps, used, meals.lunch, '13:00', 'Lunch')
+      if (fun2 && (intent.fill || intent.fun || intent.generic || intent.wine || intent.water)) {
+        pushUnique(fillSteps, used, fun2, '15:30', 'Afternoon activity')
       }
       if (meals.dinner) {
-        fillSteps.push({
-          candidateId: meals.dinner.id,
-          start: '19:30',
-          note: isPubPlace(meals.dinner) ? 'High-rated pub' : 'Dinner',
-        })
+        pushUnique(
+          fillSteps,
+          used,
+          meals.dinner,
+          '19:30',
+          isPubPlace(meals.dinner) ? 'High-rated pub' : 'Dinner',
+        )
       }
       if (meals.nightcap) {
-        fillSteps.push({
-          candidateId: meals.nightcap.id,
-          start: '21:15',
-          note: 'Pub after dinner',
-        })
+        pushUnique(fillSteps, used, meals.nightcap, '21:15', 'Pub after dinner')
       }
-      if (fillSteps.length >= 2) {
+      const byId = new Map(candidates.map((c) => [c.id, c]))
+      if (
+        fillSteps.length >= 2 &&
+        uniquePlaceCount(fillSteps, byId) >= 2
+      ) {
         options.push({
           id: 'local-fill-day',
-          label: 'Fill the day',
+          label: intent.water
+            ? 'Day by the water'
+            : intent.city
+              ? 'City day out'
+              : 'Fill the day',
           kind: 'itinerary',
-          summary: fun
+          summary: fun && wantActivity
             ? `Café, ${fun.name}, lunch & dinner`
             : 'Café, lunch and dinner arc',
           rationale:
-            'Empty-day fill with café + activity + meals — not café alone.',
-          patch: { addSteps: fillSteps },
+            'Empty-day fill with café + activity + meals — distinct places only.',
+          patch: patchWithDrives(fillSteps),
         })
       }
 
@@ -1367,20 +2117,18 @@ export function localHeuristicOptions(
           kind: 'highlight',
           summary: `${sights[0].name} & ${sights[1].name}`,
           rationale: 'Two top sights/nature stops if you want activity-first.',
-          patch: {
-            addSteps: [
-              {
-                candidateId: sights[0].id,
-                start: '10:30',
-                note: 'Must-see',
-              },
-              {
-                candidateId: sights[1].id,
-                start: '15:00',
-                note: 'Second highlight',
-              },
-            ],
-          },
+          patch: patchWithDrives([
+            {
+              candidateId: sights[0].id,
+              start: '10:30',
+              note: 'Must-see',
+            },
+            {
+              candidateId: sights[1].id,
+              start: '15:00',
+              note: 'Second highlight',
+            },
+          ]),
         })
       } else if (sights[0]) {
         options.push({
@@ -1389,40 +2137,44 @@ export function localHeuristicOptions(
           kind: 'highlight',
           summary: `Activity: ${sights[0].name}`,
           rationale: 'Single strong sight/nature stop.',
-          patch: {
-            addSteps: [
-              {
-                candidateId: sights[0].id,
-                start: '11:00',
-                note: 'Must-see',
-              },
-            ],
-          },
+          patch: patchWithDrives([
+            {
+              candidateId: sights[0].id,
+              start: '11:00',
+              note: 'Must-see',
+            },
+          ]),
         })
       }
 
-      if (intent.food || intent.generic || intent.fill) {
-        const meals = pickMeals(false)
+      // Meal-only shelf only when the ask is food-focused (not fill/fun/sights)
+      if (
+        (intent.food || intent.generic) &&
+        !intent.fill &&
+        !intent.fun &&
+        !intent.wine
+      ) {
+        const mealsOnly = pickMeals(false)
         const mealSteps: NonNullable<AiCoachOption['patch']['addSteps']> = []
-        if (meals.cafe) {
+        if (mealsOnly.cafe) {
           mealSteps.push({
-            candidateId: meals.cafe.id,
+            candidateId: mealsOnly.cafe.id,
             start: '09:00',
             note: 'Morning café',
           })
         }
-        if (meals.lunch) {
+        if (mealsOnly.lunch) {
           mealSteps.push({
-            candidateId: meals.lunch.id,
+            candidateId: mealsOnly.lunch.id,
             start: '13:00',
             note: 'Lunch',
           })
         }
-        if (meals.dinner) {
+        if (mealsOnly.dinner) {
           mealSteps.push({
-            candidateId: meals.dinner.id,
+            candidateId: mealsOnly.dinner.id,
             start: '19:30',
-            note: isPubPlace(meals.dinner) ? 'Pub' : 'Dinner',
+            note: isPubPlace(mealsOnly.dinner) ? 'Pub' : 'Dinner',
           })
         }
         if (mealSteps.length >= 2) {
@@ -1437,7 +2189,7 @@ export function localHeuristicOptions(
               )
               .join(' · '),
             rationale: 'Food-only arc for an empty day (3 meal stops).',
-            patch: { addSteps: mealSteps },
+            patch: patchWithDrives(mealSteps),
           })
         }
       }
@@ -1455,16 +2207,42 @@ export function localHeuristicOptions(
           kind: 'highlight',
           summary: `Fun in the area: ${pick.name}`,
           rationale: 'Partly filled day — sights/nature only for activity asks.',
-          patch: {
-            addSteps: [
-              {
-                candidateId: pick.id,
-                start: idx === 0 ? '11:00' : '15:30',
-                note: 'Fun thing in the area',
-              },
-            ],
-          },
+          patch: patchWithDrives([
+            {
+              candidateId: pick.id,
+              start: idx === 0 ? '11:00' : '15:30',
+              note: 'Fun thing in the area',
+            },
+          ]),
         })
+      })
+    }
+
+    if (intent.wine && wines[0]) {
+      const tasting = wines[0]
+      const sight = sightsNear[0] || sights[0]
+      const wineSteps: NonNullable<AiCoachOption['patch']['addSteps']> = []
+      if (sight && (intent.fun || intent.fill)) {
+        wineSteps.push({
+          candidateId: sight.id,
+          start: '11:00',
+          note: 'Sight before tasting',
+        })
+      }
+      wineSteps.push({
+        candidateId: tasting.id,
+        start: '15:00',
+        note: 'Wine tasting',
+      })
+      options.push({
+        id: 'local-wine-partial',
+        label: `Taste at ${tasting.name}`.slice(0, 40),
+        kind: 'highlight',
+        summary: sight
+          ? `${sight.name} + ${tasting.name}`
+          : `Wine tasting: ${tasting.name}`,
+        rationale: 'Partial-day wine add; pairs with a sight when asked.',
+        patch: patchWithDrives(wineSteps),
       })
     }
 
@@ -1523,7 +2301,7 @@ export function localHeuristicOptions(
           kind: 'food',
           summary: `Add ${gapSteps.length} missing meal stop${gapSteps.length > 1 ? 's' : ''}.`,
           rationale: 'Only plugs café/lunch/dinner gaps on a partial day.',
-          patch: { addSteps: gapSteps.slice(0, 3) },
+          patch: patchWithDrives(gapSteps.slice(0, 3)),
         })
       }
     }
@@ -1535,9 +2313,7 @@ export function localHeuristicOptions(
         kind: 'viewpoint',
         summary: views[0].name,
         rationale: 'Scenic add without rebuilding the day.',
-        patch: {
-          addSteps: [{ candidateId: views[0].id, start: '16:00' }],
-        },
+        patch: patchWithDrives([{ candidateId: views[0].id, start: '16:00' }]),
       })
     }
 
@@ -1696,7 +2472,7 @@ export function localHeuristicOptions(
         explorePlaceToItemType(a) === 'restaurant' ? 'food' : 'highlight',
       summary: a.summary || `${a.distKm.toFixed(1)} km away`,
       rationale: 'Grounded add matching the ask.',
-      patch: { addSteps: [{ candidateId: a.id, start: '11:00' }] },
+      patch: patchWithDrives([{ candidateId: a.id, start: '11:00' }]),
     })
     if (b) {
       options.push({
@@ -1706,12 +2482,60 @@ export function localHeuristicOptions(
           explorePlaceToItemType(b) === 'restaurant' ? 'food' : 'highlight',
         summary: b.summary || `${b.distKm.toFixed(1)} km away`,
         rationale: 'Second alternative stop.',
-        patch: { addSteps: [{ candidateId: b.id, start: '15:00' }] },
+        patch: patchWithDrives([{ candidateId: b.id, start: '15:00' }]),
       })
     }
   }
 
-  return diversifyByKind(dedupeOptions(options), 5)
+  const withBasesCleared =
+    fill === 'empty' && dayPlaceholders.length
+      ? options.map((o) => {
+          if (!(o.patch.addSteps?.length || o.patch.addDrives?.length)) return o
+          return { ...o, patch: withClearedBases(o.patch) }
+        })
+      : options
+
+  return diversifyByKind(dedupeOptions(withBasesCleared), 5)
+}
+
+function optionIsMealOnly(
+  o: AiCoachOption,
+  byId: Map<string, ExplorePlace>,
+): boolean {
+  const steps = o.patch.addSteps ?? []
+  if (!steps.length) return false
+  return steps.every((s) => {
+    const c = byId.get(s.candidateId)
+    return Boolean(c && (c.category === 'food' || c.category === 'drink'))
+  })
+}
+
+/** Empty day or explicit fill/fun ⇒ user expects more than a single stop. */
+function wantsFullDayPlan(
+  body: AiCoachRequestBody,
+  intent: CoachIntent,
+): boolean {
+  const fill =
+    body.dayFillLevel ?? (body.thinDay ? 'empty' : 'partial')
+  return (
+    intent.fill ||
+    intent.fun ||
+    intent.water ||
+    fill === 'empty' ||
+    intent.generic
+  )
+}
+
+function pickOpenCandidate(
+  pool: ExplorePlace[],
+  used: Set<string>,
+  day: string,
+  hm: string,
+): ExplorePlace | undefined {
+  return (
+    pool.find((p) => !used.has(p.id) && placeOpenFor(p, day, hm)) ||
+    pool.find((p) => !used.has(p.id))
+  )
 }
 
 function repairJunkOptions(
@@ -1720,21 +2544,69 @@ function repairJunkOptions(
   options: AiCoachOption[],
 ): AiCoachOption[] {
   const intent = detectCoachIntent(body.userMessage)
-  if (!intent.fun && !intent.fill) return options
   const byId = new Map(candidates.map((c) => [c.id, c]))
+  const fullDay = wantsFullDayPlan(body, intent)
   return options.filter((o) => {
     const steps = o.patch.addSteps ?? []
-    if (steps.length !== 1) return true
-    const c = byId.get(steps[0]!.candidateId)
-    if (!c) return true
-    if (c.category === 'food' || c.category === 'drink') return false
+    if (!steps.length) return true
+    if (o.kind === 'trim' || o.kind === 'pacing') return true
+
+    const distinct = uniquePlaceCount(steps, byId)
+
+    // Full day must not be the same venue at three clock times
+    if (fullDay && distinct < 2) return false
+    if (fullDay && (intent.fill || intent.fun || intent.wine) && distinct < 2) {
+      return false
+    }
+
+    // Single café/restaurant/winery is never enough for a full/empty day
+    if (fullDay && steps.length === 1) {
+      const c = byId.get(steps[0]!.candidateId)
+      if (!c || c.category === 'food' || c.category === 'drink') return false
+    }
+
+    // Meal/wine stack with no sight on a full/empty day
+    if (fullDay && optionIsMealOnly(o, byId) && !optionHasSight(o, byId)) {
+      return false
+    }
+
+    // Wine + full day must include a sight (tasting alone or tasting+meals is not enough)
+    if (
+      intent.wine &&
+      fullDay &&
+      optionHasWine(o, byId) &&
+      !optionHasSight(o, byId)
+    ) {
+      return false
+    }
+
+    // Wine ask with no wine stop — drop meal-only substitutes
+    if (
+      intent.wine &&
+      !optionHasWine(o, byId) &&
+      optionIsMealOnly(o, byId)
+    ) {
+      return false
+    }
+
+    // Water ask with no water-oriented stop on a full day
+    if (
+      intent.water &&
+      fullDay &&
+      !optionHasWater(o, byId) &&
+      (optionIsMealOnly(o, byId) || !optionHasSight(o, byId))
+    ) {
+      return false
+    }
+
     return true
   })
 }
 
 /**
  * Deterministic repair + critique for one propose pass.
- * Auto-fixes cheap issues (drive without stop); collects the rest for a revise call.
+ * Auto-fixes cheap issues (drive without stop, missing drives, inject sights/meals);
+ * collects the rest for a revise call.
  */
 export function critiqueAndRepairOptions(
   body: AiCoachRequestBody,
@@ -1745,15 +2617,66 @@ export function critiqueAndRepairOptions(
   const byId = new Map(candidates.map((c) => [c.id, c]))
   const fill =
     body.dayFillLevel ?? (body.thinDay ? 'empty' : 'partial')
+  const fullDay = wantsFullDayPlan(body, intent)
+  const vehicle = body.dayItems.find((i) => i.isVehicleStop)
+  const hotel = body.dayItems.find((i) => i.type === 'hotel')
+  const dayStartId = vehicle?.id ?? hotel?.id
   const issues: string[] = []
   const out: AiCoachOption[] = []
+  const sightPool = candidates
+    .filter(
+      (c) =>
+        (c.category === 'sights' || c.category === 'nature') && !isWinePlace(c),
+    )
+    .sort((a, b) => {
+      if (intent.water) {
+        const aw = isWaterPlace(a) ? 1 : 0
+        const bw = isWaterPlace(b) ? 1 : 0
+        if (aw !== bw) return bw - aw
+      }
+      return rankSight(a, b)
+    })
+  const waterPool = candidates.filter(isWaterPlace).sort(rankSight)
+  const winePool = candidates.filter(isWinePlace).sort(rankFood)
+  const lunchPool = candidates
+    .filter(
+      (c) =>
+        c.category === 'food' &&
+        !isCafePlace(c) &&
+        !isPubPlace(c) &&
+        !isWinePlace(c),
+    )
+    .sort((a, b) => {
+      if (intent.water) {
+        const as = isSeafoodPlace(a) ? 1 : 0
+        const bs = isSeafoodPlace(b) ? 1 : 0
+        if (as !== bs) return bs - as
+      }
+      return rankFood(a, b)
+    })
+  const dinnerPool = candidates
+    .filter((c) => isDinnerPlace(c) && !isWinePlace(c))
+    .sort((a, b) => {
+      if (intent.water) {
+        const as = isSeafoodPlace(a) ? 1 : 0
+        const bs = isSeafoodPlace(b) ? 1 : 0
+        if (as !== bs) return bs - as
+      }
+      return rankFood(a, b)
+    })
+  const cafePool = candidates
+    .filter((c) => isCafePlace(c) && !isWinePlace(c))
+    .sort(rankFood)
 
   for (const raw of options) {
     const opt: AiCoachOption = {
       ...raw,
       patch: {
         ...raw.patch,
-        addSteps: [...(raw.patch.addSteps ?? [])],
+        addSteps: dedupeAddStepsByPlace(
+          [...(raw.patch.addSteps ?? [])],
+          byId,
+        ),
         addDrives: [...(raw.patch.addDrives ?? [])],
         setTimes: [...(raw.patch.setTimes ?? [])],
         removeSteps: [...(raw.patch.removeSteps ?? [])],
@@ -1797,41 +2720,242 @@ export function critiqueAndRepairOptions(
       }
     }
 
-    // Fun/activity ≠ restaurant substitute
-    if (intent.fun) {
-      const adds = opt.patch.addSteps ?? []
-      const hasSight = adds.some((s) => {
-        const p = byId.get(s.candidateId)
-        return p && (p.category === 'sights' || p.category === 'nature')
-      })
-      const onlyFood =
-        adds.length > 0 &&
-        adds.every((s) => {
+    // Expand thin wine / empty-day options into a real day (sight + meals + tasting)
+    if (
+      fullDay &&
+      opt.kind !== 'trim' &&
+      opt.kind !== 'pacing' &&
+      (intent.wine ||
+        intent.water ||
+        intent.fill ||
+        intent.fun ||
+        intent.generic ||
+        fill === 'empty')
+    ) {
+      let adds = dedupeAddStepsByPlace(
+        [...(opt.patch.addSteps ?? [])],
+        byId,
+      )
+      const used = new Set(adds.map((s) => s.candidateId))
+      const usedPlaceKeys = new Set(
+        adds
+          .map((s) => byId.get(s.candidateId))
+          .filter(Boolean)
+          .map((p) => placeDedupeKey(p!)),
+      )
+      const hasSight = () =>
+        adds.some((s) => {
           const p = byId.get(s.candidateId)
-          return p && (p.category === 'food' || p.category === 'drink')
+          return Boolean(
+            p &&
+              (p.category === 'sights' || p.category === 'nature') &&
+              !isWinePlace(p),
+          )
         })
-      if (onlyFood || (!hasSight && opt.kind !== 'food' && opt.kind !== 'trim' && opt.kind !== 'pacing')) {
-        if (onlyFood) {
-          issues.push(
-            `Option "${opt.label}": fun/activity ask must include a sights/nature stop — not only restaurants.`,
+      const hasWine = () =>
+        adds.some((s) => {
+          const p = byId.get(s.candidateId)
+          return Boolean(p && isWinePlace(p))
+        })
+      const hasWater = () =>
+        adds.some((s) => {
+          const p = byId.get(s.candidateId)
+          return Boolean(p && isWaterPlace(p))
+        })
+      const hasLunchish = () =>
+        adds.some((s) => {
+          const t = s.start || ''
+          const p = byId.get(s.candidateId)
+          return (
+            t >= '11:30' &&
+            t < '16:00' &&
+            Boolean(p && p.category === 'food' && !isWinePlace(p))
+          )
+        })
+      const hasDinnerish = () =>
+        adds.some((s) => {
+          const t = s.start || ''
+          const p = byId.get(s.candidateId)
+          return (
+            t >= '18:00' &&
+            Boolean(p && !isWinePlace(p) && isDinnerPlace(p))
+          )
+        })
+
+      const insertChrono = (
+        candidateId: string,
+        start: string,
+        note: string,
+      ) => {
+        if (used.has(candidateId)) return
+        const place = byId.get(candidateId)
+        if (place) {
+          const key = placeDedupeKey(place)
+          if (usedPlaceKeys.has(key)) return
+          usedPlaceKeys.add(key)
+        }
+        used.add(candidateId)
+        adds.push({ candidateId, start, note })
+        adds.sort((a, b) => (a.start || '').localeCompare(b.start || ''))
+      }
+
+      if (intent.water && !hasWater() && waterPool.length) {
+        const inject = pickOpenCandidate(waterPool, used, body.day, '10:45')
+        if (inject) insertChrono(inject.id, '10:45', 'By the water')
+      }
+      if (!hasSight() && sightPool.length) {
+        const inject = pickOpenCandidate(sightPool, used, body.day, '10:45')
+        if (inject) insertChrono(inject.id, '10:45', 'Sightseeing stop')
+      }
+      if (!hasLunchish() && lunchPool.length) {
+        const inject = pickOpenCandidate(lunchPool, used, body.day, '13:00')
+        if (inject) insertChrono(inject.id, '13:00', 'Lunch')
+      } else if (!hasLunchish() && cafePool.length && adds.length <= 1) {
+        const inject = pickOpenCandidate(cafePool, used, body.day, '09:00')
+        if (inject) insertChrono(inject.id, '09:00', 'Morning café')
+      }
+      if (intent.wine && !hasWine() && winePool.length) {
+        const inject = pickOpenCandidate(winePool, used, body.day, '15:00')
+        if (inject) insertChrono(inject.id, '15:00', 'Wine tasting')
+      }
+      if (!hasDinnerish() && dinnerPool.length) {
+        const lunchStep = adds.find((s) => {
+          const t = s.start || ''
+          return t >= '11:30' && t < '16:00'
+        })
+        const lunchPlace = lunchStep
+          ? byId.get(lunchStep.candidateId)
+          : undefined
+        const lunchFamily = lunchPlace ? cuisineFamily(lunchPlace) : ''
+        const diverse =
+          dinnerPool.find(
+            (c) =>
+              !used.has(c.id) &&
+              cuisineFamily(c) !== lunchFamily &&
+              placeOpenFor(c, body.day, '19:30'),
+          ) || pickOpenCandidate(dinnerPool, used, body.day, '19:30')
+        if (diverse) {
+          insertChrono(
+            diverse.id,
+            '19:30',
+            isSeafoodPlace(diverse)
+              ? 'Seafood dinner'
+              : isPubPlace(diverse)
+                ? 'Evening pub'
+                : 'Dinner',
           )
         }
+      } else if (hasLunchish() && hasDinnerish()) {
+        const lunchStep = adds.find((s) => {
+          const t = s.start || ''
+          return t >= '11:30' && t < '16:00'
+        })
+        const dinnerStep = adds.find((s) => (s.start || '') >= '18:00')
+        const lunchPlace = lunchStep
+          ? byId.get(lunchStep.candidateId)
+          : undefined
+        const dinnerPlace = dinnerStep
+          ? byId.get(dinnerStep.candidateId)
+          : undefined
+        if (
+          lunchPlace &&
+          dinnerPlace &&
+          dinnerStep &&
+          cuisineFamily(lunchPlace) === cuisineFamily(dinnerPlace) &&
+          cuisineFamily(lunchPlace) !== 'other'
+        ) {
+          const alt = dinnerPool.find(
+            (c) =>
+              !used.has(c.id) &&
+              cuisineFamily(c) !== cuisineFamily(lunchPlace) &&
+              placeOpenFor(c, body.day, dinnerStep.start || '19:30'),
+          )
+          if (alt) {
+            used.delete(dinnerStep.candidateId)
+            const old = byId.get(dinnerStep.candidateId)
+            if (old) usedPlaceKeys.delete(placeDedupeKey(old))
+            dinnerStep.candidateId = alt.id
+            dinnerStep.note = isSeafoodPlace(alt)
+              ? 'Seafood dinner'
+              : 'Dinner'
+            used.add(alt.id)
+            usedPlaceKeys.add(placeDedupeKey(alt))
+          }
+        }
+      }
+
+      // Second sight on wine/fill/water when we still look thin
+      if (
+        (intent.wine || intent.fill || intent.fun || intent.water) &&
+        adds.length < 4 &&
+        sightPool.length
+      ) {
+        const inject = pickOpenCandidate(sightPool, used, body.day, '17:00')
+        if (inject) insertChrono(inject.id, '17:00', 'Afternoon sight')
+      }
+
+      opt.patch.addSteps = adds
+
+      if (intent.wine && !hasWine()) {
+        issues.push(
+          `Option "${opt.label}": wine ask needs a winery/wine-cellar candidate stop.`,
+        )
+      }
+      if (intent.water && !hasWater()) {
+        issues.push(
+          `Option "${opt.label}": water ask needs a beach/lake/marina/waterfront stop.`,
+        )
+      }
+      if (
+        !hasSight() &&
+        (intent.fun || intent.fill || intent.wine || intent.water)
+      ) {
+        issues.push(
+          `Option "${opt.label}": full/empty day must include a sights/nature stop — not tasting or meals alone.`,
+        )
       }
     }
 
-    // Empty fill: lone café is junk
-    if (
-      (fill === 'empty' && (intent.fill || intent.fun || intent.generic)) ||
-      intent.fill
-    ) {
+    // Full day must not collapse to one venue at multiple hours
+    if (fullDay && opt.kind !== 'trim' && opt.kind !== 'pacing') {
       const adds = opt.patch.addSteps ?? []
-      if (adds.length === 1) {
-        const p = byId.get(adds[0]!.candidateId)
-        if (p && (p.category === 'food' || p.category === 'drink')) {
-          issues.push(
-            `Option "${opt.label}": empty/fill day must not be only a café — include sight + meals or a fuller itinerary.`,
-          )
-        }
+      if (uniquePlaceCount(adds, byId) < 2 && adds.length > 1) {
+        issues.push(
+          `Option "${opt.label}": uses the same place more than once — pick distinct candidates for café, sights, meals, and tasting.`,
+        )
+        // Keep a single stop rather than a fake multi-stop day
+        opt.patch.addSteps = adds.slice(0, 1)
+      }
+    }
+
+    // Rebuild drives as a stop→stop chain (not a star from the hotel)
+    {
+      const adds = opt.patch.addSteps ?? []
+      if (adds.length) {
+        const openArea =
+          intent.drive ||
+          Boolean(vehicle) ||
+          /provence|luberon|tuscany|countryside|vineyard|winery|village/i.test(
+            body.userMessage,
+          ) ||
+          candidates.some((c) => c.distKm >= 8)
+        opt.patch.addDrives = chainDrivesForSteps(adds, candidates, {
+          dayItems: [],
+          fromItemId: dayStartId,
+          openArea,
+        })
+      } else {
+        opt.patch.addDrives = []
+      }
+    }
+
+    // Empty fill: lone café/winery after expansion is still junk → revise
+    if (fullDay) {
+      const adds = opt.patch.addSteps ?? []
+      if (adds.length <= 1 && opt.kind !== 'trim' && opt.kind !== 'pacing') {
+        issues.push(
+          `Option "${opt.label}": empty/full day must not be a single stop — include sight + meals (and wine tasting if asked) with distinct places.`,
+        )
       }
     }
 
@@ -1875,16 +2999,16 @@ export function critiqueAndRepairOptions(
   return { options: out, issues: uniqIssues }
 }
 
-/** Keep model options as-is; only fall back locally when nothing usable remains. */
+/** Expand/repair first, then drop options that are still too thin. */
 export function finalizeCoachOptions(
   body: AiCoachRequestBody,
   candidates: ExplorePlace[],
   options: AiCoachOption[],
 ): AiCoachOption[] {
-  const cleaned = repairJunkOptions(body, candidates, options)
-  const repaired = critiqueAndRepairOptions(body, candidates, cleaned)
-  if (repaired.options.length) {
-    return diversifyByKind(dedupeOptions(repaired.options), 5).slice(0, 5)
+  const repaired = critiqueAndRepairOptions(body, candidates, options)
+  const cleaned = repairJunkOptions(body, candidates, repaired.options)
+  if (cleaned.length) {
+    return diversifyByKind(dedupeOptions(cleaned), 5).slice(0, 5)
   }
   const local = localHeuristicOptions(body, candidates).slice(0, 2)
   return diversifyByKind(dedupeOptions(local), 5).slice(0, 2)

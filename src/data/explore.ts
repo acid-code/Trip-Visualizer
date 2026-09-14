@@ -78,6 +78,10 @@ const CATEGORY_QUERIES: Record<ExploreCategory, string[]> = {
     'nwr["amenity"="bar"]',
     'nwr["amenity"="pub"]',
     'nwr["amenity"="biergarten"]',
+    'nwr["amenity"="wine_cellar"]',
+    'nwr["tourism"="winery"]',
+    'nwr["craft"="winery"]',
+    'nwr["shop"="wine"]',
   ],
   hotel: [
     'nwr["tourism"="hotel"]',
@@ -88,8 +92,13 @@ const CATEGORY_QUERIES: Record<ExploreCategory, string[]> = {
   nature: [
     'nwr["leisure"="park"]',
     'nwr["leisure"="nature_reserve"]',
+    'nwr["leisure"="marina"]',
+    'nwr["leisure"="beach_resort"]',
+    'nwr["leisure"="water_park"]',
     'nwr["tourism"="picnic_site"]',
     'nwr["natural"="beach"]',
+    'nwr["man_made"="pier"]',
+    'nwr["harbour"="yes"]',
   ],
   other: [
     'nwr["shop"="bakery"]',
@@ -128,8 +137,8 @@ function cacheKey(
   radiusM: number,
   source: 'google' | 'osm',
 ): string {
-  // v6: hotels as first-class category; bump when pipeline / category rules change
-  return `v6:${source}:${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}`
+  // v8: marina / pier / harbour for Day Coach water days
+  return `v8:${source}:${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}`
 }
 
 async function getCached(key: string): Promise<ExplorePlace[] | null> {
@@ -179,11 +188,18 @@ function categoryForTags(tags: Record<string, string>): ExploreCategory {
     return 'sights'
   }
   if (['restaurant', 'cafe', 'fast_food', 'ice_cream'].includes(amenity)) return 'food'
-  if (['bar', 'pub', 'biergarten'].includes(amenity)) return 'drink'
+  if (['bar', 'pub', 'biergarten', 'wine_cellar'].includes(amenity)) return 'drink'
+  if (tourism === 'winery' || tags.craft === 'winery' || tags.shop === 'wine') {
+    return 'drink'
+  }
   if (
-    ['park', 'nature_reserve'].includes(leisure) ||
+    ['park', 'nature_reserve', 'marina', 'beach_resort', 'water_park'].includes(
+      leisure,
+    ) ||
     tourism === 'picnic_site' ||
-    natural === 'beach'
+    natural === 'beach' ||
+    tags.man_made === 'pier' ||
+    tags.harbour === 'yes'
   ) {
     return 'nature'
   }
@@ -685,6 +701,36 @@ export function exploreCategoryLabel(cat: ExploreCategory): string {
       return 'Nature'
     default:
       return 'Other'
+  }
+}
+
+export function isGoogleExplorePlace(place: ExplorePlace): boolean {
+  return (
+    place.tags.source === 'google' ||
+    place.id.startsWith('google:') ||
+    place.osmType === 'google'
+  )
+}
+
+export function explorePlaceMapsUri(place: ExplorePlace): string {
+  return safeHttpsUrl(place.tags.googleMapsUri || '')
+}
+
+/** Fields to copy onto a TripItem when adding from Explore / Day Coach. */
+export function explorePlaceTripMeta(place: ExplorePlace): {
+  rating: number | null
+  googleMapsUri: string
+  enrichmentSource: string
+} {
+  const fromGoogle = isGoogleExplorePlace(place)
+  return {
+    rating: place.rating,
+    googleMapsUri: explorePlaceMapsUri(place),
+    enrichmentSource: fromGoogle
+      ? 'Google'
+      : place.wikidata
+        ? 'Wikidata'
+        : 'OpenStreetMap',
   }
 }
 

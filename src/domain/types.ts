@@ -109,6 +109,23 @@ export const TripItemSchema = z.object({
   ),
   wikidata: boundedStr(32),
   osmId: boundedStr(64),
+  /** Google/OSM star rating when the step came from Explore / Places (0–5). */
+  rating: z
+    .union([z.number(), z.null(), z.undefined(), z.nan()])
+    .transform((v) => {
+      if (v == null || (typeof v === 'number' && !Number.isFinite(v))) return null
+      const n = v as number
+      if (n < 0 || n > 5) return null
+      return Math.round(n * 10) / 10
+    })
+    .catch(null)
+    .default(null),
+  /** Canonical Google Maps place URL (reviews) when known. */
+  googleMapsUri: z
+    .unknown()
+    .transform((v) => safeHttpsUrl(String(v ?? '')))
+    .catch('')
+    .default(''),
   geocodeQuery: boundedStr(300),
   updatedAt: boundedStr(40),
   enrichmentSummary: boundedStr(2000),

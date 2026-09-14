@@ -16,6 +16,7 @@ import {
   todayIso,
   validateAddStep,
 } from '../data/validate'
+import { DateField } from './DateField'
 
 export type AddContext = {
   afterId?: string | null
@@ -159,15 +160,17 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
       latTo: null,
       lonTo: null,
       wikidata: '',
-      osmId: '',
-      geocodeQuery: place.trim(),
-      updatedAt: '',
-      enrichmentSummary: '',
-      enrichmentImage: '',
-      enrichmentSource: '',
-      routeCoords: [],
-      source: 'app',
-    }
+    osmId: '',
+    rating: null,
+    googleMapsUri: '',
+    geocodeQuery: place.trim(),
+    updatedAt: '',
+    enrichmentSummary: '',
+    enrichmentImage: '',
+    enrichmentSource: '',
+    routeCoords: [],
+    source: 'app',
+  }
     onCreate(item)
   }
 
@@ -220,14 +223,15 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
           <div className="mt-3 grid grid-cols-2 gap-2">
             <label className="block text-xs font-medium text-stone-500">
               Date *
-              <input
+              <DateField
                 className={`${inputCls} ${errors.date ? 'border-rose-400' : ''}`}
-                type="date"
                 value={isIsoDate(date) ? date : ''}
-                onChange={(e) => {
-                  setDate(e.target.value)
+                required
+                onChange={(v) => {
+                  setDate(v)
                   setErrors((er) => ({ ...er, date: '' }))
                 }}
+                aria-label="Step date"
               />
               {fieldErr('date')}
             </label>
@@ -246,12 +250,13 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
               <>
                 <label className="block text-xs font-medium text-stone-500">
                   End date
-                  <input
+                  <DateField
                     className={`${inputCls} ${errors.endDate ? 'border-rose-400' : ''}`}
-                    type="date"
                     value={endDate}
                     min={date || undefined}
-                    onChange={(e) => setEndDate(e.target.value)}
+                    onChange={(v) => setEndDate(v)}
+                    aria-label="End date"
+                    placeholder="Optional"
                   />
                   {fieldErr('endDate')}
                 </label>

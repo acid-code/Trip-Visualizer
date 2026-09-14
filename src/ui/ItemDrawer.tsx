@@ -3,6 +3,10 @@ import type { TripItem } from '../domain/types'
 import { ITEM_STATUSES, ITEM_TYPES, TYPE_COLORS } from '../domain/types'
 import { pinItemOnMap } from '../data/enrichment'
 import { COMMON_CURRENCIES, normalizeCurrency } from '../data/fx'
+import {
+  mapsPlaceSearchUrl,
+  openExternalUrl,
+} from '../data/mapsLinks'
 import { safeHttpsUrl } from '../data/security'
 import {
   applyItemTypeChange,
@@ -10,6 +14,7 @@ import {
 } from '../data/typeSwitch'
 import {
   isIsoDate,
+  isValidCoord,
   parseLat,
   parseLon,
   parseNonNegativeNumber,
@@ -18,6 +23,7 @@ import {
   sanitizeTime,
   sanitizeTitle,
 } from '../data/validate'
+import { DateField } from './DateField'
 
 type Props = {
   item: TripItem | null
@@ -121,11 +127,25 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
 
   const leg = ['flight', 'train', 'bus', 'ferry', 'drive'].includes(item.type)
   const hotel = item.type === 'hotel'
+  const mapsUri = safeHttpsUrl(item.googleMapsUri || '')
+  const fromGoogle =
+    item.enrichmentSource === 'Google' || Boolean(mapsUri)
+  const reviewsUrl =
+    mapsUri ||
+    (fromGoogle && isValidCoord(item.lat, item.lon)
+      ? mapsPlaceSearchUrl(
+          item.title || item.place,
+          { lat: item.lat!, lon: item.lon! },
+          item.place || undefined,
+        )
+      : '')
+  const showGoogleMeta =
+    fromGoogle && (item.rating != null || Boolean(reviewsUrl))
 
   return (
     <div className="space-y-3">
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="min-w-0 flex-1">
           <span
             className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-950"
             style={{ background: TYPE_COLORS[item.type] }}
@@ -133,6 +153,34 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             {item.type}
           </span>
           <h3 className="mt-1 text-lg font-semibold text-stone-900">{item.title}</h3>
+          {showGoogleMeta ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              {item.rating != null ? (
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800">
+                  <span aria-hidden className="text-[11px] text-amber-500">
+                    ★
+                  </span>
+                  <span className="tabular-nums">{item.rating}</span>
+                  <span className="text-[9px] font-normal text-stone-400">
+                    Google
+                  </span>
+                </span>
+              ) : null}
+              {reviewsUrl ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-white px-2.5 py-0.5 text-[11px] font-medium text-stone-700 shadow-sm hover:border-amber-300 hover:bg-amber-50"
+                  title="Open Google Maps reviews"
+                  onClick={() => openExternalUrl(reviewsUrl)}
+                >
+                  Reviews
+                  <span aria-hidden className="text-[10px] text-stone-400">
+                    ↗
+                  </span>
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {item.enrichmentSummary && (
             <p className="mt-1 text-sm text-stone-600">
               {item.enrichmentSummary}
@@ -181,25 +229,26 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
           </select>
         </Field>
         <Field label="Date *">
-          <input
+          <DateField
             className={inputCls}
-            type="date"
             value={isIsoDate(item.date) ? item.date : ''}
             required
-            onChange={(e) => {
-              if (!e.target.value) return
-              set('date', e.target.value)
+            onChange={(v) => {
+              if (!v) return
+              set('date', v)
             }}
+            aria-label="Step date"
           />
         </Field>
         {(hotel || leg) && (
           <Field label={hotel ? 'Check-out' : 'End date'}>
-            <input
+            <DateField
               className={inputCls}
-              type="date"
               value={item.endDate && isIsoDate(item.endDate) ? item.endDate : ''}
               min={isIsoDate(item.date) ? item.date : undefined}
-              onChange={(e) => set('endDate', e.target.value)}
+              onChange={(v) => set('endDate', v)}
+              aria-label={hotel ? 'Check-out date' : 'End date'}
+              placeholder="Optional"
             />
           </Field>
         )}

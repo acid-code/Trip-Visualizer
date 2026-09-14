@@ -34,6 +34,8 @@ export type TypeFieldSnap = {
   enrichmentSummary: string
   enrichmentImage: string
   enrichmentSource: string
+  rating: number | null
+  googleMapsUri: string
 }
 
 /** Shared across types — always carried forward when switching. */
@@ -84,6 +86,8 @@ export function snapshotTypeFields(item: TripItem): TypeFieldSnap {
     enrichmentSummary: item.enrichmentSummary,
     enrichmentImage: item.enrichmentImage,
     enrichmentSource: item.enrichmentSource,
+    rating: item.rating,
+    googleMapsUri: item.googleMapsUri,
   }
 }
 
@@ -161,6 +165,12 @@ function applySnapForType(
     enrichmentSource: preferCurrent(
       base.enrichmentSource,
       snap.enrichmentSource,
+      nonEmptyStr,
+    ),
+    rating: preferCurrent(base.rating, snap.rating, (v) => v != null),
+    googleMapsUri: preferCurrent(
+      base.googleMapsUri,
+      snap.googleMapsUri,
       nonEmptyStr,
     ),
   }
