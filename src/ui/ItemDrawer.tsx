@@ -1,10 +1,20 @@
+import { useEffect } from 'react'
 import type { TripItem } from '../domain/types'
 import { ITEM_STATUSES, ITEM_TYPES, TYPE_COLORS } from '../domain/types'
 import { pinItemOnMap } from '../data/enrichment'
 import { COMMON_CURRENCIES, normalizeCurrency } from '../data/fx'
+import {
+  mapsPlaceSearchUrl,
+  openExternalUrl,
+} from '../data/mapsLinks'
 import { safeHttpsUrl } from '../data/security'
 import {
+  applyItemTypeChange,
+  rememberCurrentType,
+} from '../data/typeSwitch'
+import {
   isIsoDate,
+  isValidCoord,
   parseLat,
   parseLon,
   parseNonNegativeNumber,
@@ -13,6 +23,7 @@ import {
   sanitizeTime,
   sanitizeTitle,
 } from '../data/validate'
+import { DateField } from './DateField'
 
 type Props = {
   item: TripItem | null
@@ -22,9 +33,37 @@ type Props = {
 }
 
 export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
+  useEffect(() => {
+    if (item) rememberCurrentType(item)
+  }, [item?.id])
+
   if (!item) return null
 
   const set = <K extends keyof TripItem>(key: K, value: TripItem[K]) => {
+    if (key === 'type') {
+      const nextType = value as TripItem['type']
+      let next = applyItemTypeChange(item, nextType)
+      next = {
+        ...next,
+        source: item.source === 'example' ? 'example' : 'app',
+      }
+      // Multi-night hotel stay → promote off day-base placeholder
+      if (
+        next.type === 'hotel' &&
+        next.tags?.includes('placeholder') &&
+        isIsoDate(next.date) &&
+        isIsoDate(next.endDate) &&
+        next.endDate > next.date
+      ) {
+        next = { ...next, tags: next.tags.filter((t) => t !== 'placeholder') }
+      }
+      if (next.tags?.includes('placeholder') && nextType !== 'hotel') {
+        next = { ...next, tags: next.tags.filter((t) => t !== 'placeholder') }
+      }
+      onChange(next)
+      return
+    }
+
     const next: TripItem = {
       ...item,
       [key]: value,
@@ -49,13 +88,23 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
       next.currency = normalizeCurrency(String(value ?? 'EUR'))
     }
 
+    // Multi-night hotel stay → promote off day-base placeholder so the trip can widen
+    if (
+      next.type === 'hotel' &&
+      next.tags?.includes('placeholder') &&
+      isIsoDate(next.date) &&
+      isIsoDate(next.endDate) &&
+      next.endDate > next.date
+    ) {
+      next.tags = next.tags.filter((t) => t !== 'placeholder')
+    }
+
     if (
       next.tags?.includes('placeholder') &&
-      (key === 'title' || key === 'place' || key === 'city' || key === 'type' || key === 'lat')
+      (key === 'title' || key === 'place' || key === 'city' || key === 'lat')
     ) {
       const meaningful =
         (typeof value === 'string' && value.trim() && value !== item.title) ||
-        (key === 'type' && value !== 'hotel') ||
         (key === 'lat' && value != null)
       if (
         meaningful ||
@@ -76,10 +125,27 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
       (item.city?.trim() && item.title?.trim()),
   )
 
+  const leg = ['flight', 'train', 'bus', 'ferry', 'drive'].includes(item.type)
+  const hotel = item.type === 'hotel'
+  const mapsUri = safeHttpsUrl(item.googleMapsUri || '')
+  const fromGoogle =
+    item.enrichmentSource === 'Google' || Boolean(mapsUri)
+  const reviewsUrl =
+    mapsUri ||
+    (fromGoogle && isValidCoord(item.lat, item.lon)
+      ? mapsPlaceSearchUrl(
+          item.title || item.place,
+          { lat: item.lat!, lon: item.lon! },
+          item.place || undefined,
+        )
+      : '')
+  const showGoogleMeta =
+    fromGoogle && (item.rating != null || Boolean(reviewsUrl))
+
   return (
     <div className="space-y-3">
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="min-w-0 flex-1">
           <span
             className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-950"
             style={{ background: TYPE_COLORS[item.type] }}
@@ -87,6 +153,34 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             {item.type}
           </span>
           <h3 className="mt-1 text-lg font-semibold text-stone-900">{item.title}</h3>
+          {showGoogleMeta ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              {item.rating != null ? (
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800">
+                  <span aria-hidden className="text-[11px] text-amber-500">
+                    ★
+                  </span>
+                  <span className="tabular-nums">{item.rating}</span>
+                  <span className="text-[9px] font-normal text-stone-400">
+                    Google
+                  </span>
+                </span>
+              ) : null}
+              {reviewsUrl ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-white px-2.5 py-0.5 text-[11px] font-medium text-stone-700 shadow-sm hover:border-amber-300 hover:bg-amber-50"
+                  title="Open Google Maps reviews"
+                  onClick={() => openExternalUrl(reviewsUrl)}
+                >
+                  Reviews
+                  <span aria-hidden className="text-[10px] text-stone-400">
+                    ↗
+                  </span>
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {item.enrichmentSummary && (
             <p className="mt-1 text-sm text-stone-600">
               {item.enrichmentSummary}
@@ -96,7 +190,7 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             </p>
           )}
         </div>
-        <button className="text-stone-400 hover:text-stone-800" onClick={onClose}>
+        <button className="text-stone-400 hover:text-stone-800" onClick={onClose} title="Discard edits and close">
           Close
         </button>
       </div>
@@ -125,6 +219,7 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             className={inputCls}
             value={item.type}
             onChange={(e) => set('type', e.target.value as TripItem['type'])}
+            title="Switching type remembers each type’s fields for this step. Shared fields like confirm, place, and cost carry over."
           >
             {ITEM_TYPES.map((t) => (
               <option key={t} value={t}>
@@ -134,26 +229,29 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
           </select>
         </Field>
         <Field label="Date *">
-          <input
+          <DateField
             className={inputCls}
-            type="date"
             value={isIsoDate(item.date) ? item.date : ''}
             required
-            onChange={(e) => {
-              if (!e.target.value) return
-              set('date', e.target.value)
+            onChange={(v) => {
+              if (!v) return
+              set('date', v)
             }}
+            aria-label="Step date"
           />
         </Field>
-        <Field label="End date">
-          <input
-            className={inputCls}
-            type="date"
-            value={item.endDate && isIsoDate(item.endDate) ? item.endDate : ''}
-            min={isIsoDate(item.date) ? item.date : undefined}
-            onChange={(e) => set('endDate', e.target.value)}
-          />
-        </Field>
+        {(hotel || leg) && (
+          <Field label={hotel ? 'Check-out' : 'End date'}>
+            <DateField
+              className={inputCls}
+              value={item.endDate && isIsoDate(item.endDate) ? item.endDate : ''}
+              min={isIsoDate(item.date) ? item.date : undefined}
+              onChange={(v) => set('endDate', v)}
+              aria-label={hotel ? 'Check-out date' : 'End date'}
+              placeholder="Optional"
+            />
+          </Field>
+        )}
         <Field label="Start">
           <input
             className={inputCls}
@@ -186,21 +284,30 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             onChange={(e) => set('city', e.target.value)}
           />
         </Field>
-        <Field label="From">
-          <input
-            className={inputCls}
-            value={item.from}
-            onChange={(e) => set('from', e.target.value)}
-          />
-        </Field>
-        <Field label="To">
-          <input className={inputCls} value={item.to} onChange={(e) => set('to', e.target.value)} />
-        </Field>
+        {leg ? (
+          <>
+            <Field label="From">
+              <input
+                className={inputCls}
+                value={item.from}
+                onChange={(e) => set('from', e.target.value)}
+              />
+            </Field>
+            <Field label="To">
+              <input
+                className={inputCls}
+                value={item.to}
+                onChange={(e) => set('to', e.target.value)}
+              />
+            </Field>
+          </>
+        ) : null}
         <Field label="Confirm">
           <input
             className={inputCls}
             value={item.confirm}
             onChange={(e) => set('confirm', e.target.value)}
+            placeholder="Booking / confirmation ref"
           />
         </Field>
         <Field label="Status">
@@ -264,6 +371,8 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
       </div>
       <p className="text-[11px] text-stone-500">
         Lat/lon fill automatically from the address. Only edit these if the pin is wrong.
+        Changing type remembers each type’s details for this step; shared fields (confirm, place,
+        cost…) carry over.
       </p>
       <button
         type="button"

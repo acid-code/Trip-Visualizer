@@ -47,6 +47,8 @@ function emptyBase(day: string, dayNum: number, currency: string): TripItem {
     lonTo: null,
     wikidata: '',
     osmId: '',
+    rating: null,
+    googleMapsUri: '',
     geocodeQuery: '',
     updatedAt: '',
     enrichmentSummary: '',
@@ -87,11 +89,16 @@ function dayHasRealSteps(items: TripItem[], day: string): boolean {
   return items.some((i) => isRealStep(i) && itemTouchesDay(i, day))
 }
 
+/** True if a real step *starts* on this calendar day (not merely covered by a hotel stay). */
+function dayHasStartingRealStep(items: TripItem[], day: string): boolean {
+  return items.some((i) => isRealStep(i) && i.date === day)
+}
+
 /**
- * Seed a hotel/arrival placeholder only on days that have no real steps.
- * Leftover placeholders on days that already have a real step (including a
- * hotel stay covering that day) are dropped — otherwise moving a step onto a
- * later day looks like the app inserted an extra "Day N base" after it.
+ * Seed a hotel/arrival placeholder on each trip day that has no step starting that day.
+ * A multi-night hotel covering the night does NOT suppress the day’s base — you still
+ * get a Day N shell for planning (dropdown + strip). Placeholders are only dropped when
+ * something actually starts on that date.
  */
 export function ensureDayStartBases(
   meta: TripMeta,
@@ -109,12 +116,12 @@ export function ensureDayStartBases(
 
   const withoutStale = sorted.filter((item) => {
     if (!isPlaceholderBase(item)) return true
-    return !dayHasRealSteps(sorted, item.date)
+    return !dayHasStartingRealStep(sorted, item.date)
   })
 
   const extras: TripItem[] = []
   for (const day of [...days].sort()) {
-    if (dayHasRealSteps(withoutStale, day)) continue
+    if (dayHasStartingRealStep(withoutStale, day)) continue
     const alreadyPlaceholder = withoutStale.some(
       (i) => i.date === day && isPlaceholderBase(i),
     )
@@ -134,7 +141,15 @@ export function widenMetaToItems(meta: TripMeta, items: TripItem[]): TripMeta {
   let endDate = dates.endDate
   let changed = false
   for (const item of items) {
-    if (!isRealStep(item)) continue
+    if (item.status === 'cancelled' || item.type === 'note') continue
+    // Multi-night hotel stays always extend the trip — even if the day-base
+    // shell still has the placeholder tag (user only changed end date).
+    const multiNightHotel =
+      item.type === 'hotel' &&
+      isIsoDate(item.date) &&
+      isIsoDate(item.endDate) &&
+      item.endDate > item.date
+    if (!isRealStep(item) && !multiNightHotel) continue
     if (isIsoDate(item.date) && item.date < startDate) {
       startDate = item.date
       changed = true

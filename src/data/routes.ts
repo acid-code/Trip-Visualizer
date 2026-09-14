@@ -121,6 +121,7 @@ const POINTISH = new Set([
 export async function buildWalkingConnectors(
   items: TripItem[],
   onProgress?: (done: number, total: number) => void,
+  opts?: { onlyDates?: string[] },
 ): Promise<RouteConnector[]> {
   const sorted = sortItems(
     items.filter(
@@ -129,6 +130,7 @@ export async function buildWalkingConnectors(
   )
   const byDate = new Map<string, TripItem[]>()
   for (const item of sorted) {
+    if (opts?.onlyDates && !opts.onlyDates.includes(item.date)) continue
     if (!byDate.has(item.date)) byDate.set(item.date, [])
     byDate.get(item.date)!.push(item)
   }
@@ -206,44 +208,57 @@ export async function buildWalkingConnectors(
       }
     }
 
-    // Consecutive same-calendar-day steps
-    for (let i = 0; i < daySteps.length - 1; i++) {
-      const from = daySteps[i]!
-      const to = daySteps[i + 1]!
-
-      if (
-        to.type === 'drive' ||
-        to.type === 'flight' ||
-        to.type === 'train' ||
-        to.type === 'bus' ||
-        to.type === 'ferry'
-      ) {
-        continue
-      }
-
-      if (
-        from.type === 'drive' ||
-        from.type === 'flight' ||
-        from.type === 'train' ||
-        from.type === 'bus' ||
-        from.type === 'ferry'
-      ) {
-        const a = anchorForDaySequence(from, 'arrive')
-        const b = pointOf(to)
-        if (!a || !b) continue
-        const d = distKm(a, b)
-        if (d <= 12) addPair(date, from, to, a, b, 12, 'walk')
-        else if (d <= 150) addPair(date, from, to, a, b, 150, 'drive')
-        continue
-      }
-
-      if (!POINTISH.has(from.type) || !POINTISH.has(to.type)) continue
+    // Consecutive *activities* (ignore drive/transit rows between them).
+    // Timeline order is often Stop → Drive → Stop; pairing only adjacent rows
+    // skipped walk paths between nearby sights.
+    const pointSteps = daySteps.filter((i) => POINTISH.has(i.type))
+    for (let i = 0; i < pointSteps.length - 1; i++) {
+      const from = pointSteps[i]!
+      const to = pointSteps[i + 1]!
       const a = pointOf(from)
       const b = pointOf(to)
       if (!a || !b) continue
+
+      // Explicit drive already covers this hop — drive polyline is enough
+      const driveCovers = daySteps.some((dr) => {
+        if (dr.type !== 'drive') return false
+        if (!isValidCoord(dr.lat, dr.lon) || !isValidCoord(dr.latTo, dr.lonTo)) {
+          return false
+        }
+        return (
+          distKm({ lat: dr.lat!, lon: dr.lon! }, a) < 0.6 &&
+          distKm({ lat: dr.latTo!, lon: dr.lonTo! }, b) < 0.6
+        )
+      })
+      if (driveCovers) continue
+
       const d = distKm(a, b)
       if (d <= 8) addPair(date, from, to, a, b, 8, 'walk')
       else if (d <= 150) addPair(date, from, to, a, b, 150, 'drive')
+    }
+
+    // Arrival stub: after a transport leg, short walk from drop-off to the stop
+    // when the stop isn't already the drive's endpoint (same coords).
+    for (let i = 0; i < daySteps.length - 1; i++) {
+      const from = daySteps[i]!
+      const to = daySteps[i + 1]!
+      if (
+        !(
+          from.type === 'drive' ||
+          from.type === 'flight' ||
+          from.type === 'train' ||
+          from.type === 'bus' ||
+          from.type === 'ferry'
+        )
+      ) {
+        continue
+      }
+      if (!POINTISH.has(to.type)) continue
+      const a = anchorForDaySequence(from, 'arrive')
+      const b = pointOf(to)
+      if (!a || !b) continue
+      const d = distKm(a, b)
+      if (d <= 12) addPair(date, from, to, a, b, 12, 'walk')
     }
 
     // Evening: last activity → hotel for the night (walk nearby, else drive path)

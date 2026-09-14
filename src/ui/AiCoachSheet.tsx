@@ -17,6 +17,8 @@ import type {
 import { createId } from '../data/db'
 import { TypewriterText } from './TypewriterText'
 
+const AI_INPUT_MAX = 250
+
 export type AiCoachSessionRestore = {
   day: string
   options: AiCoachOption[]
@@ -119,7 +121,16 @@ export function AiCoachSheet({
   const [typingDone, setTypingDone] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
   const scrollerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const bootRef = useRef(false)
+
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = '0px'
+    const next = Math.min(el.scrollHeight, 132) // ~5 lines
+    el.style.height = `${Math.max(40, next)}px`
+  }, [input, phase, busy])
 
   const days = useMemo(() => listTripDays(meta), [meta])
 
@@ -451,27 +462,49 @@ export function AiCoachSheet({
 
       {(phase === 'ask_help' || phase === 'options') && !busy ? (
         <form
-          className="flex shrink-0 gap-2 border-t border-violet-100 bg-white/80 px-3 py-2"
+          className="flex shrink-0 items-end gap-2 border-t border-violet-100 bg-white/80 px-3 py-2"
           onSubmit={(e) => {
             e.preventDefault()
             void sendIntent(input)
           }}
         >
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={
-              phase === 'options'
-                ? 'Ask for something else…'
-                : 'e.g. lunch near the museum, viewpoints on the drive…'
-            }
-            className="min-w-0 flex-1 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-stone-800 outline-none ring-violet-300 focus:ring-2"
-            disabled={!typingDone}
-          />
+          <div className="relative min-w-0 flex-1">
+            <textarea
+              ref={inputRef}
+              rows={1}
+              value={input}
+              maxLength={AI_INPUT_MAX}
+              onChange={(e) => setInput(e.target.value.slice(0, AI_INPUT_MAX))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  if (input.trim() && typingDone) void sendIntent(input)
+                }
+              }}
+              placeholder={
+                phase === 'options'
+                  ? 'Ask for something else…'
+                  : 'e.g. lunch near the museum, viewpoints on the drive…'
+              }
+              className="max-h-[8.25rem] min-h-[2.5rem] w-full resize-none overflow-y-auto rounded-xl border border-stone-200 bg-white px-3 py-2 pr-12 text-sm leading-snug text-stone-800 outline-none ring-violet-300 focus:ring-2"
+              disabled={!typingDone}
+            />
+            <span
+              className={`pointer-events-none absolute bottom-2 right-2 text-[10px] tabular-nums ${
+                input.length >= AI_INPUT_MAX
+                  ? 'text-rose-500'
+                  : input.length >= AI_INPUT_MAX - 40
+                    ? 'text-amber-600'
+                    : 'text-stone-400'
+              }`}
+            >
+              {input.length}/{AI_INPUT_MAX}
+            </span>
+          </div>
           <button
             type="submit"
             disabled={!input.trim() || !typingDone}
-            className="rounded-xl bg-violet-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-40"
+            className="mb-0.5 rounded-xl bg-violet-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-40"
           >
             Send
           </button>

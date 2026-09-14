@@ -6,6 +6,7 @@ import {
   type RangeReconcileMode,
 } from '../data/dayBases'
 import { isIsoDate, sanitizeMetaDates } from '../data/validate'
+import { DateField } from './DateField'
 
 export type TripMetaDraft = {
   name: string
@@ -178,34 +179,32 @@ export function TripMetaDialog({ open, mode, initial, trip, onClose, onSubmit }:
           <div className="grid grid-cols-2 gap-2">
             <label className="block text-xs font-medium text-[var(--ink-muted)]">
               Start
-              <input
-                type="date"
+              <DateField
                 required
+                disabled={busy}
                 className="mt-1 w-full rounded-2xl border border-[#e7e0d5] bg-white px-3 py-2.5 text-sm text-[var(--ink)] outline-none focus:ring-2 focus:ring-[var(--coral)]/30"
                 value={isIsoDate(startDate) ? startDate : ''}
-                onChange={(e) => {
-                  const v = e.target.value
+                onChange={(v) => {
                   if (!v) return
                   setStartDate(v)
                   if (isIsoDate(endDate) && endDate < v) setEndDate(v)
                 }}
-                disabled={busy}
+                aria-label="Trip start date"
               />
             </label>
             <label className="block text-xs font-medium text-[var(--ink-muted)]">
               End
-              <input
-                type="date"
+              <DateField
                 required
+                disabled={busy}
                 className="mt-1 w-full rounded-2xl border border-[#e7e0d5] bg-white px-3 py-2.5 text-sm text-[var(--ink)] outline-none focus:ring-2 focus:ring-[var(--coral)]/30"
                 value={isIsoDate(endDate) ? endDate : ''}
                 min={isIsoDate(startDate) ? startDate : undefined}
-                onChange={(e) => {
-                  const v = e.target.value
+                onChange={(v) => {
                   if (!v) return
                   setEndDate(v)
                 }}
-                disabled={busy}
+                aria-label="Trip end date"
               />
             </label>
           </div>

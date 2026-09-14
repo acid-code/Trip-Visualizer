@@ -4,6 +4,8 @@
  *
  * Free-tier reality (text-out): most Flash models ≈ 20 RPD; Flash Lite ≈ 500 RPD.
  * Prefer Lite for headroom, then quality Flash if Lite is down/quota-exhausted.
+ *
+ * Client may call twice: propose, then revise with critiqueFeedback (max 1 revise).
  */
 
 export const config = {
@@ -89,21 +91,32 @@ You never change other days.
 Use planningHints and dayFillLevel as the day diagnosis.
 
 Match effort to dayFillLevel:
-- empty: help fill THIS day. For fill/fun/plan, return an itinerary with cafe + at least one sights/nature stop + lunch + dinner — NEVER only a morning cafe.
-- partial: offer THREE different light tweaks (e.g. activity add, meal-gap fill, trim or pace). Do NOT rebuild the whole day.
-- full: offer THREE polish options (trim, one quality upgrade, pacing) — not a new full itinerary.
+- empty: help fill THIS day. For fill/fun/plan/sights, prefer cafe + ≥1 sights/nature + lunch + dinner — NEVER lunch+dinner alone and NEVER only a café. If dayItems include isPlaceholder day-base shells, replace them: add removeSteps for those item ids when you add real stops (the client also upgrades the base into the first new stop). Never leave a fake “Day N base” hotel next to a filled plan.
+- partial: offer 1–3 light tweaks (activity add, meal-gap fill, trim or pace). Do NOT rebuild the whole day.
+- full: offer 1–3 polish options (trim, quality upgrade, pacing) — not a new full itinerary.
+
+Quality over quantity: return 1–3 solid options. One strong option is fine. Do not pad with weak duplicates.
+Never schedule the same candidate twice on one day at different hours — each addSteps entry needs a distinct place.
 
 Default meal arc on empty food fills (3 stops unless user asks otherwise):
 1) morning cafe ~09:00
 2) lunch ~13:00
 3) evening romantic / high-rated dinner OR high-rated pub ~19:30
 Add a later pub (~21:00) ONLY if the user asks for drinks after dinner.
-Fun/activity asks must use sights or nature candidates — never a restaurant substitute.
+Fun/activity/sights/city asks must use sights or nature candidates — never a restaurant substitute. Fill+sights must include actionable sight stops, not only meals. The same rules apply in cities and in countryside.
+Wine tasting: when asked, include ONE winery/wine-cellar candidate as a stop inside a normal day — not a wine-only itinerary. Pair with sights/meals when the user also asked to fill/explore. Never reuse the tasting venue as café/sight/dinner.
+Water / beach / lake / seaside asks: include at least one beach, lake, marina, harbour, waterfront, or coastal promenade candidate (sights or nature). Prefer seafood or waterfront restaurants when available. Do not plan lunch and dinner as two pizzerias — vary cuisine.
+Star-shaped trips (same hotel several nights): never reuse places already on other days — pick fresh candidates for THIS day only.
+Drives: compact city — addDrives only for stops roughly ≥3 km (shorter hops are walks). Open countryside / Provence-style — addDrives even for ~2 km village hops. Always drive farther out-of-town stops. Chain drives stop→stop in time order (first hop may use fromItemId for hotel/vehicle; later hops use fromCandidateId of the previous addSteps stop). Never fan every drive out from day start.
 
 Clarifications:
 - Payload may include lines: "Original request:", "Coach asked:", "User replied:".
 - Short answers like "first one" / "the second" / a place name refer to the LAST "Coach asked" question.
 - Resolve that answer, then return options. Do NOT ask the same clarifying question again.
+
+Critique / revise loop:
+- Payload may include critiqueFeedback: an array of concrete problems with your previous options.
+- When critiqueFeedback is present, FIX every listed issue and return corrected options (or clarification if truly blocked). Do not repeat the same mistakes. Prefer repairing patches over asking a new question.
 
 Respond with JSON only, one of:
 {"kind":"need_clarification","question":"short question"}
@@ -115,7 +128,7 @@ Respond with JSON only, one of:
   "rationale":"why",
   "patch":{
     "addSteps":[{"candidateId":"...","start":"HH:MM","note":"optional"}],
-    "addDrives":[{"fromItemId":"optional existing step id","toCandidateId":"...","start":"HH:MM"}],
+    "addDrives":[{"fromItemId":"optional existing step id","fromCandidateId":"optional prior candidateId","toCandidateId":"...","start":"HH:MM"}],
     "setTimes":[{"itemId":"...","start":"HH:MM"}],
     "removeSteps":[{"itemId":"..."}],
     "addNote":{"title":"...","notes":"...","start":"HH:MM"}
@@ -124,13 +137,12 @@ Respond with JSON only, one of:
 
 Rules:
 - Prefer options over clarification unless truly blocked (no usable candidates / impossible constraint).
-- When candidates.length >= 6, return EXACTLY 3 options (max 5), each a different kind or different primary candidate.
 - Every addSteps/addDrives toCandidateId MUST exist in candidates.
 - setTimes / removeSteps itemId MUST be ids from dayItems for this day.
 - When addDrives points at a place, ALSO include that place in addSteps (stop must appear, not only the drive).
 - Empty + drive/countryside: at least one itinerary with addDrives + optional viewpoint + destination + meals.
 - Prefer destination/along_route for countryside days — avoid airport-only food clusters.
-- If dayItems include isVehicleStop, start drives from that fromItemId.
+- If dayItems include isVehicleStop, start the FIRST drive from that fromItemId; subsequent drives should use fromCandidateId of the previous stop.
 - Meal timing: cafe ~08:30-10:00, lunch ~12:00-14:00, dinner/pub ~19:00-21:00.
 - Opening hours: candidates may include openingHours and openHint for THIS day. Never schedule addSteps/addDrives to a place at a time it is closed. Prefer places whose openHint covers the visit time. If hours are unknown, you may still suggest them.
 - Never remove flights, hotels, or placeholders via trim.
@@ -177,6 +189,10 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     return
   }
 
+  const critiqueFeedback = Array.isArray(body.critiqueFeedback)
+    ? body.critiqueFeedback.map((c) => clamp(String(c), 300)).filter(Boolean).slice(0, 12)
+    : []
+
   const payload = {
     day,
     userMessage,
@@ -198,15 +214,22 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     planningHints: Array.isArray(body.planningHints)
       ? body.planningHints.map((h) => clamp(String(h), 240)).slice(0, 16)
       : [],
+    ...(critiqueFeedback.length ? { critiqueFeedback } : {}),
   }
 
-  const userText = `Full day context (authoritative — ignore any chat memory):\n${JSON.stringify(payload)}`
+  const reviseNote = critiqueFeedback.length
+    ? `\n\nREVISION REQUIRED — fix these critique issues before answering:\n${critiqueFeedback
+        .map((c, i) => `${i + 1}. ${c}`)
+        .join('\n')}`
+    : ''
+
+  const userText = `Full day context (authoritative — ignore any chat memory):\n${JSON.stringify(payload)}${reviseNote}`
   const models = modelCascade()
   const requestBody = JSON.stringify({
     systemInstruction: { parts: [{ text: SYSTEM }] },
     contents: [{ role: 'user', parts: [{ text: userText }] }],
     generationConfig: {
-      temperature: 0.45,
+      temperature: critiqueFeedback.length ? 0.35 : 0.45,
       responseMimeType: 'application/json',
     },
   })

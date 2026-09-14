@@ -89,6 +89,7 @@ import type { AiCoachOption } from './data/aiCoachTypes'
 import { FeatureGuide } from './ui/FeatureGuide'
 import {
   explorePlaceToItemType,
+  explorePlaceTripMeta,
   fetchNearbyExplore,
   type ExplorePlace,
 } from './data/explore'
@@ -104,6 +105,7 @@ import { DEFAULT_MAP_STACK, type MapStack } from './globe/viewer'
 import { firstOpenableStep } from './globe/viewer'
 import { EXAMPLE_TRIP_ID, exampleItems, exampleMeta } from './data/examples/france-south-loop'
 import { ensureDayStartBases, deleteStepAndPrune, isPlaceholderBase, itemTouchesDay, applyTripMetaRange, countTripDays, widenMetaToItems } from './data/dayBases'
+import { clearTypeSwitchMemory } from './data/typeSwitch'
 import { normalizeCurrency } from './data/fx'
 import {
   isValidCoord,
@@ -141,6 +143,16 @@ import type { RangeReconcileMode } from './data/dayBases'
 type NavTab = 'timeline' | 'charts' | 'settings'
 type LowerMode = 'none' | 'detail' | 'insert'
 
+function cloneTripItem(item: TripItem): TripItem {
+  return {
+    ...item,
+    tags: [...(item.tags ?? [])],
+    routeCoords: item.routeCoords
+      ? item.routeCoords.map((c) => [c[0], c[1]] as [number, number])
+      : [],
+  }
+}
+
 type AiReviewState = {
   beforeItems: TripItem[]
   draftItems: TripItem[]
@@ -161,6 +173,8 @@ export default function App() {
   const [lowerMode, setLowerMode] = useState<LowerMode>('none')
   /** Detail sheet: peek (compact) → half (50% edit) → closed */
   const [detailExpanded, setDetailExpanded] = useState(false)
+  /** Working copy while Detail is open — committed only via top handle save. */
+  const [stepDraft, setStepDraft] = useState<TripItem | null>(null)
   const [dayFilter, setDayFilter] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
   const [mapStack, setMapStack] = useState<MapStack>(DEFAULT_MAP_STACK)
@@ -263,6 +277,8 @@ export default function App() {
     () => displayTrip?.items.find((i) => i.id === selectedId) ?? null,
     [displayTrip, selectedId],
   )
+  /** Item shown in the detail editor (draft while editing). */
+  const detailItem = stepDraft?.id === selectedId ? stepDraft : selected
 
   const refresh = useCallback(async () => {
     let all = await listTrips()
@@ -741,6 +757,7 @@ export default function App() {
       setSelectedId(null)
       setMapFocusEndpoint(null)
       setRouteWalk(null)
+      setStepDraft(null)
       setLowerMode((m) => (m === 'detail' ? 'none' : m))
       setDetailExpanded(false)
       return
@@ -754,6 +771,7 @@ export default function App() {
       return
     }
     setSelectedId(id)
+    setStepDraft(null)
     setNavTab('timeline')
     setPanelOpen(true)
     setAddContext(null)
@@ -883,8 +901,12 @@ export default function App() {
     if (exploreOpen) closeExplore()
 
     if (payload.kind === 'flight' || payload.kind === 'route') {
-      // Keep the map clear so both ends of the path stay on screen while framing
-      setPanelOpen(false)
+      // Keep Steps open during AI review so Save/Discard stay usable with the list
+      if (!aiReview) {
+        setPanelOpen(false)
+      } else {
+        setPanelOpen(true)
+      }
       setNavTab('timeline')
       clearTempPin()
       if (payload.kind === 'flight') {
@@ -909,7 +931,7 @@ export default function App() {
       setMapFocusEndpoint(null)
       const item = stepById(payload.itemId)
       if (item && isPlaceholderBase(item)) {
-        openFillDayBase(item)
+        if (!aiReview) openFillDayBase(item)
         return
       }
       setSelectedId(payload.itemId)
@@ -926,7 +948,7 @@ export default function App() {
     setMapFocusEndpoint(payload.endpoint)
     const item = stepById(payload.itemId)
     if (item && isPlaceholderBase(item)) {
-      openFillDayBase(item)
+      if (!aiReview) openFillDayBase(item)
       return
     }
     clearTempPin()
@@ -947,10 +969,11 @@ export default function App() {
       return
     }
     if (id === selectedId && lowerMode === 'detail' && detailExpanded) {
-      closeLower()
+      discardStepDetail()
       return
     }
     setSelectedId(id)
+    setStepDraft(item ? cloneTripItem(item) : null)
     setNavTab('timeline')
     setLowerMode('detail')
     setDetailExpanded(true)
@@ -958,16 +981,64 @@ export default function App() {
     setAddContext(null)
   }
 
-  function closeLower() {
-    const wasDetail = lowerMode === 'detail'
+  /** Close detail without writing draft (Close button / discard). */
+  function discardStepDetail() {
+    if (stepDraft) clearTypeSwitchMemory(stepDraft.id)
+    setStepDraft(null)
     setAddContext(null)
     setLowerMode('none')
     setDetailExpanded(false)
-    if (wasDetail) {
-      // Phone: keep highlight on the step so the strip stays centered there
+    if (!isPhone) setSelectedId(null)
+    setStatus('Changes discarded')
+  }
+
+  /** Commit draft + widen trip dates, then close (top handle). */
+  function saveStepDetail() {
+    if (!active || !stepDraft) {
+      setStepDraft(null)
+      setAddContext(null)
+      setLowerMode('none')
+      setDetailExpanded(false)
       if (!isPhone) setSelectedId(null)
-      setStatus('Step saved')
+      return
     }
+    const draft = cloneTripItem(stepDraft)
+    const prevEnd = active.meta.endDate
+    const prevStart = active.meta.startDate
+    setStepDraft(null)
+    setAddContext(null)
+    setLowerMode('none')
+    setDetailExpanded(false)
+    if (!isPhone) setSelectedId(null)
+    void (async () => {
+      await updateActive((t) => ({
+        ...t,
+        items: sortItems(t.items.map((i) => (i.id === draft.id ? draft : i))),
+      }))
+      const trip = await getTrip(active.id)
+      const meta = trip?.meta
+      if (
+        meta &&
+        (meta.endDate !== prevEnd || meta.startDate !== prevStart)
+      ) {
+        const days = countTripDays(meta.startDate, meta.endDate)
+        setStatus(
+          `Step saved · trip ${meta.startDate} → ${meta.endDate} (${days} days)`,
+        )
+      } else {
+        setStatus('Step saved')
+      }
+    })()
+  }
+
+  function closeLower() {
+    if (lowerMode === 'detail') {
+      discardStepDetail()
+      return
+    }
+    setAddContext(null)
+    setLowerMode('none')
+    setDetailExpanded(false)
   }
 
   function onSheetHandle() {
@@ -978,7 +1049,7 @@ export default function App() {
         return
       }
       // Second press: save & close
-      closeLower()
+      saveStepDetail()
       return
     }
     closeLower()
@@ -1018,6 +1089,7 @@ export default function App() {
 
   async function deleteStep(id: string) {
     if (!active) return
+    clearTypeSwitchMemory(id)
     const { meta, items } = deleteStepAndPrune(active.meta, active.items, id)
     const next = { ...active, meta, items }
     await persist(next)
@@ -1046,6 +1118,7 @@ export default function App() {
       clearTempPin()
       setRouteWalk(null)
       setSelectedId(pinned.id)
+      setStepDraft(cloneTripItem(pinned))
       setAddContext(null)
       setNavTab('timeline')
       setLowerMode('detail')
@@ -1148,6 +1221,8 @@ export default function App() {
       lonTo: null,
       wikidata: '',
       osmId: tempPin.osmId || '',
+      rating: null,
+      googleMapsUri: '',
       geocodeQuery: tempPin.query || tempPin.address || title,
       updatedAt: nowIso(),
       enrichmentSummary: tempPin.address || '',
@@ -1164,6 +1239,7 @@ export default function App() {
       setRouteWalk(null)
       setMapFocusEndpoint(null)
       setSelectedId(item.id)
+      setStepDraft(cloneTripItem(item))
       setAddContext(null)
       setNavTab('timeline')
       setLowerMode('detail')
@@ -1314,6 +1390,7 @@ export default function App() {
   function addStepFromExplore(place: ExplorePlace) {
     if (!active || !exploreAnchor) return
     const date = requireIsoDate(exploreAnchor.date, todayIso())
+    const gmeta = explorePlaceTripMeta(place)
     const item: TripItem = {
       id: createId('S'),
       type: explorePlaceToItemType(place),
@@ -1339,11 +1416,13 @@ export default function App() {
       lonTo: null,
       wikidata: place.wikidata || '',
       osmId: place.osmId || '',
+      rating: gmeta.rating,
+      googleMapsUri: gmeta.googleMapsUri,
       geocodeQuery: place.name,
       updatedAt: nowIso(),
       enrichmentSummary: place.summary || place.address || '',
       enrichmentImage: place.images[0] || '',
-      enrichmentSource: place.wikidata ? 'Wikidata' : 'OpenStreetMap',
+      enrichmentSource: gmeta.enrichmentSource,
       routeCoords: [],
       source: 'app',
     }
@@ -1367,6 +1446,7 @@ export default function App() {
       setAiRestore(null)
     }
     if (lowerMode !== 'none') {
+      setStepDraft(null)
       setAddContext(null)
       setLowerMode('none')
       setDetailExpanded(false)
@@ -1376,6 +1456,7 @@ export default function App() {
   function openAiCoach() {
     if (aiReview) return
     if (exploreOpen) closeExplore()
+    setStepDraft(null)
     setLowerMode('none')
     setDetailExpanded(false)
     setAddContext(null)
@@ -1478,14 +1559,19 @@ export default function App() {
 
     void (async () => {
       const draftTrip = { ...active, items: result.items }
+      const reviewDay = args.day
       setRoutesStatus('Drawing AI day paths…')
       try {
         const withDrives = await hydrateDriveRoutes(draftTrip.items)
-        // Keep the full connector set in memory; the day filter + AI review
-        // scoping decides what the globe shows. Never replace with a day slice
-        // or discard/rebuild races leave the map with no paths.
-        const walks = await buildWalkingConnectors(withDrives)
-        setConnectors(walks)
+        // Only rebuild walks for the coached day (merge) so nearby sight walks
+        // show up quickly in review without re-routing the whole trip.
+        const dayWalks = await buildWalkingConnectors(withDrives, undefined, {
+          onlyDates: [reviewDay],
+        })
+        setConnectors((prev) => [
+          ...prev.filter((c) => c.date !== reviewDay),
+          ...dayWalks,
+        ])
         setAiReview((prev) =>
           prev
             ? {
@@ -1562,7 +1648,14 @@ export default function App() {
   /** Bottom/side tongues: a covering sheet (detail, insert, explore) always
    *  closes first so the tapped tab’s panel is visible — same for every button. */
   function onTongue(id: NavTab | 'insert' | 'ai') {
-    if (aiReview) return
+    // AI review lock: only allow reopening Steps (other tongues stay disabled)
+    if (aiReview) {
+      if (id === 'timeline') {
+        setNavTab('timeline')
+        setPanelOpen(true)
+      }
+      return
+    }
 
     if (id === 'ai') {
       if (aiOpen) {
@@ -1613,25 +1706,23 @@ export default function App() {
   }
 
   /**
-   * Timeline can filter by day, but the globe should still draw the whole trip’s
-   * paths — unless we’re in AI review lock (day-scoped preview).
-   * A stuck day filter after Day Coach was hiding drives/walks on other days.
+   * Day filter scopes both the timeline and the globe. AI review also sets a
+   * day filter for the draft preview. Overview clears the filter (see header).
    */
   const mapItems = useMemo(() => {
     if (!displayTrip) return []
-    if (aiReview && dayFilter) {
+    if (dayFilter) {
       return displayTrip.items.filter((i) => itemTouchesDay(i, dayFilter))
     }
     return displayTrip.items
-  }, [displayTrip, aiReview, dayFilter])
+  }, [displayTrip, dayFilter])
 
   const visibleConnectors = useMemo(() => {
-    if (aiReview && dayFilter) {
+    if (dayFilter) {
       return connectors.filter((c) => c.date === dayFilter)
     }
-    // Normal browsing: always show all built walk/drive links on the globe
     return connectors
-  }, [connectors, dayFilter, aiReview])
+  }, [connectors, dayFilter])
 
   const walkTarget = useMemo((): WalkLinkTarget | null => {
     if (tempPin && isValidCoord(tempPin.lat, tempPin.lon)) {
@@ -1856,7 +1947,11 @@ export default function App() {
             />
             <button
               className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-xs text-white backdrop-blur hover:bg-white/25"
-              onClick={() => setOverviewToken((n) => n + 1)}
+              onClick={() => {
+                // During AI draft lock, keep the coached day scoped on the map.
+                if (!aiReview) setDayFilter(null)
+                setOverviewToken((n) => n + 1)
+              }}
             >
               Overview
             </button>
@@ -1893,10 +1988,10 @@ export default function App() {
       {!isPhone ? (
       <aside
         className={`side-shell absolute bottom-0 left-0 top-0 z-30 flex pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.5rem,env(safe-area-inset-left))] ${
-          panelOpen || exploreOpen || aiOpen ? 'side-shell-open' : 'side-shell-collapsed'
+          panelOpen || exploreOpen || aiOpen || aiReview ? 'side-shell-open' : 'side-shell-collapsed'
         } ${exploreOpen || aiOpen ? 'side-shell-explore' : ''}`}
       >
-        {panelOpen || exploreOpen || aiOpen ? (
+        {panelOpen || exploreOpen || aiOpen || aiReview ? (
           <div className="side-panel relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {aiOpen && active && !aiReview ? (
               <AiCoachSheet
@@ -1945,9 +2040,13 @@ export default function App() {
               </div>
               <button
                 type="button"
-                className="rounded-full px-2 py-1 text-xs text-stone-500 hover:bg-stone-100"
-                onClick={() => setPanelOpen(false)}
-                title="Collapse panel"
+                className="rounded-full px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 disabled:opacity-40"
+                onClick={() => {
+                  if (aiReview) return
+                  setPanelOpen(false)
+                }}
+                disabled={Boolean(aiReview)}
+                title={aiReview ? 'Steps stay open while reviewing AI changes' : 'Collapse panel'}
               >
                 ‹ Map
               </button>
@@ -2089,7 +2188,7 @@ export default function App() {
       {/* Phone: map-first — horizontal steps strip + bottom book tongues */}
       {isPhone ? (
         <div className="mobile-dock absolute inset-x-0 bottom-0 z-30 flex flex-col pb-[max(0.25rem,env(safe-area-inset-bottom))]">
-          {(panelOpen || exploreOpen || aiOpen) && lowerMode !== 'insert' ? (
+          {(panelOpen || exploreOpen || aiOpen || aiReview) && lowerMode !== 'insert' ? (
             <div
               className={`mobile-panel relative mx-2 mb-1 flex flex-col overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
                 aiOpen
@@ -2346,11 +2445,11 @@ export default function App() {
               isPhone ? 'pb-2' : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]'
             }`}
           >
-            {lowerMode === 'detail' && selected ? (
+            {lowerMode === 'detail' && detailItem ? (
               <div className="h-full min-h-0 overflow-y-auto overscroll-contain">
                 <ItemDrawer
-                  item={selected}
-                  onClose={closeLower}
+                  item={detailItem}
+                  onClose={discardStepDetail}
                   onChange={(item) => {
                     if (aiReview) {
                       if (!itemTouchesDay(item, aiReview.day)) return
@@ -2368,20 +2467,18 @@ export default function App() {
                       )
                       return
                     }
-                    void updateActive((t) => ({
-                      ...t,
-                      items: sortItems(t.items.map((i) => (i.id === item.id ? item : i))),
-                    }))
+                    setStepDraft(cloneTripItem(item))
                   }}
                   onDelete={(id) => {
                     if (aiReview) return
+                    setStepDraft(null)
                     void deleteStep(id)
                   }}
                 />
               </div>
             ) : null}
 
-            {lowerMode === 'detail' && !selected ? (
+            {lowerMode === 'detail' && !detailItem ? (
               <p className="text-sm text-stone-500">Select a step on the map or timeline.</p>
             ) : null}
 

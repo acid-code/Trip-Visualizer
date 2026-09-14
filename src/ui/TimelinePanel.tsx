@@ -5,7 +5,7 @@ import { TYPE_COLORS } from '../domain/types'
 import { dayIndex, stepOrderMap } from '../data/analytics'
 import { dayColor } from '../data/dayTheme'
 import { sortItems } from '../data/db'
-import { isPlaceholderBase, itemTouchesDay } from '../data/dayBases'
+import { isPlaceholderBase, itemTouchesDay, listTripDays } from '../data/dayBases'
 
 const TYPE_EMOJI: Record<ItemType, string> = {
   flight: '✈️',
@@ -74,7 +74,8 @@ export function TimelinePanel({
     if (typeFilter && i.type !== typeFilter) return false
     return true
   })
-  const days = [...new Set(items.map((i) => i.date).filter(Boolean))].sort()
+  // Full trip calendar (meta range), not only dates that happen to have a step start
+  const days = listTripDays(meta)
   const types = [...new Set(items.map((i) => i.type))]
   const order = stepOrderMap(meta, items)
 

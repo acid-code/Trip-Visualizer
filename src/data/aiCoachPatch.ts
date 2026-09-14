@@ -5,6 +5,7 @@ import { createId, sortItems, nowIso } from './db'
 import { ensureDayStartBases, itemTouchesDay, isPlaceholderBase } from './dayBases'
 import {
   explorePlaceToItemType,
+  explorePlaceTripMeta,
   type ExplorePlace,
 } from './explore'
 import { normalizeCurrency } from './fx'
@@ -59,7 +60,8 @@ function isVehicleish(item: TripItem): boolean {
 }
 
 function canCoachRemove(item: TripItem): boolean {
-  if (isPlaceholderBase(item)) return false
+  // Day-base shells may be removed / replaced when the coach fills the day
+  if (isPlaceholderBase(item)) return true
   if (PROTECTED_TYPES.has(item.type)) return false
   if (isVehicleish(item)) return false
   return REMOVABLE_CONTENT.has(item.type)
@@ -170,6 +172,8 @@ function emptyNote(
     lonTo: null,
     wikidata: '',
     osmId: '',
+    rating: null,
+    googleMapsUri: '',
     geocodeQuery: '',
     updatedAt: nowIso(),
     enrichmentSummary: '',
@@ -188,9 +192,22 @@ function placeToItem(
   end?: string,
   note?: string,
 ): TripItem {
+  // Day Coach must never invent lodging stays. Hotel-tagged places that slip
+  // through (e.g. a hotel restaurant) become restaurant/other steps instead.
+  let type = explorePlaceToItemType(place)
+  if (type === 'hotel') {
+    const primary = (place.tags.primaryType || '').toLowerCase()
+    const foodish =
+      place.category === 'food' ||
+      place.category === 'drink' ||
+      /restaurant|cafe|bakery|bar|food|meal/i.test(primary) ||
+      /lunch|dinner|café|cafe|breakfast|brunch|pub|meal/i.test(note || '')
+    type = foodish ? 'restaurant' : 'other'
+  }
+  const meta = explorePlaceTripMeta(place)
   return {
     id: createId('S'),
-    type: explorePlaceToItemType(place),
+    type,
     title: place.name,
     place: place.address || place.name,
     city: '',
@@ -213,11 +230,13 @@ function placeToItem(
     lonTo: null,
     wikidata: place.wikidata || '',
     osmId: place.osmId || '',
+    rating: meta.rating,
+    googleMapsUri: meta.googleMapsUri,
     geocodeQuery: place.name,
     updatedAt: nowIso(),
     enrichmentSummary: place.summary || place.address || '',
     enrichmentImage: place.images[0] || '',
-    enrichmentSource: place.wikidata ? 'Wikidata' : 'OpenStreetMap',
+    enrichmentSource: meta.enrichmentSource,
     routeCoords: [],
     source: 'app',
   }
@@ -268,6 +287,8 @@ function driveBetweenStops(
     lonTo: to.lon,
     wikidata: '',
     osmId: '',
+    rating: null,
+    googleMapsUri: '',
     geocodeQuery: '',
     updatedAt: nowIso(),
     enrichmentSummary: '',
@@ -299,6 +320,175 @@ function pointLatLon(item: TripItem): { lat: number; lon: number } | null {
   return null
 }
 
+function dayCoordPoints(dayItems: TripItem[]): { lat: number; lon: number }[] {
+  const out: { lat: number; lon: number }[] = []
+  for (const i of dayItems) {
+    if (i.status === 'cancelled' || i.type === 'note' || isPlaceholderBase(i)) {
+      continue
+    }
+    const p = pointOf(i)
+    if (p) out.push(p)
+  }
+  return out
+}
+
+/**
+ * Open countryside / multi-village day (Provence-style) vs compact city pocket.
+ * Sparse hops and road-trip cues → open area (prefer drives even for ~2 km).
+ */
+export function isOpenAreaTravelDay(
+  dayItems: TripItem[],
+  a: { lat: number; lon: number },
+  b: { lat: number; lon: number },
+): boolean {
+  if (dayItems.some(isVehicleish)) return true
+  if (dayItems.some((i) => i.type === 'drive')) return true
+
+  const blob = dayItems
+    .map((i) => `${i.title} ${i.place} ${i.city} ${i.notes}`)
+    .join(' ')
+  if (
+    /provence|luberon|tuscany|umbria|dordogne|countryside|vineyard|winery|wine\s*cellar|village|hamlet|agriturismo|farm\s*stay|gordes|rousillon|bonnieux|ménerbes|lourmarin/i.test(
+      blob,
+    )
+  ) {
+    return true
+  }
+
+  const pts = dayCoordPoints(dayItems)
+  // Include the hop endpoints so a fresh AI add still has geometry
+  const all = [...pts, a, b]
+  let diameter = 0
+  for (let i = 0; i < all.length; i++) {
+    for (let j = i + 1; j < all.length; j++) {
+      diameter = Math.max(diameter, haversineKm(all[i]!, all[j]!))
+    }
+  }
+  // Spread day-trip → open area
+  if (diameter >= 10) return true
+
+  const mid = { lat: (a.lat + b.lat) / 2, lon: (a.lon + b.lon) / 2 }
+  const near = all.filter((p) => haversineKm(p, mid) <= 1.6).length
+  const hop = haversineKm(a, b)
+  // Only a couple of pins around this hop → villages / countryside, not a city grid
+  if (near <= 2 && hop >= 1.2) return true
+
+  return false
+}
+
+/**
+ * AI auto travel: city + under 3 km → walk (map connectors); open area → drive
+ * even around 2 km; skip tiny same-complex hops.
+ */
+export function aiLegTravelMode(
+  distKm: number,
+  dayItems: TripItem[],
+  a: { lat: number; lon: number },
+  b: { lat: number; lon: number },
+): 'walk' | 'drive' | 'none' {
+  if (!Number.isFinite(distKm) || distKm < 0.12 || distKm > 200) return 'none'
+  if (isOpenAreaTravelDay(dayItems, a, b)) {
+    return distKm < 0.8 ? 'none' : 'drive'
+  }
+  if (distKm < 3) return 'walk'
+  return 'drive'
+}
+
+/** Min distance (km) before Day Coach should propose an explicit drive to a candidate. */
+export function aiAutoDriveMinKm(
+  dayItems: TripItem[],
+  anchor: { lat: number; lon: number },
+  place: { lat: number; lon: number },
+): number {
+  return isOpenAreaTravelDay(dayItems, anchor, place) ? 1 : 3
+}
+
+function earlierHmDrive(hm: string, minutes: number): string {
+  const [h, m] = hm.split(':').map(Number)
+  const total = Math.max(0, (h || 0) * 60 + (m || 0) - minutes)
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
+
+function laterHmDrive(hm: string, minutes: number): string {
+  const [h, m] = hm.split(':').map(Number)
+  const total = Math.min(23 * 60 + 59, (h || 0) * 60 + (m || 0) + minutes)
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
+
+/**
+ * Build stop-to-stop drives for a day's addSteps (not a star from the hotel).
+ * First far hop may leave from fromItemId (vehicle/hotel); later hops use fromCandidateId.
+ */
+export function chainDrivesForSteps(
+  steps: NonNullable<AiCoachOption['patch']['addSteps']>,
+  candidates: ExplorePlace[],
+  opts: {
+    dayItems: TripItem[]
+    fromItemId?: string
+    openArea?: boolean
+  },
+): NonNullable<AiCoachOption['patch']['addDrives']> {
+  const byId = new Map(candidates.map((c) => [c.id, c]))
+  const sorted = [...steps].sort((a, b) =>
+    (a.start || '99:99').localeCompare(b.start || '99:99'),
+  )
+  if (sorted.length < 1) return []
+
+  const minKm = opts.openArea ? 1 : 3
+  const daySnap = opts.dayItems
+  const out: NonNullable<AiCoachOption['patch']['addDrives']> = []
+
+  let prevId: string | null = null
+  let prevPlace: ExplorePlace | null = null
+  let prevArrive = ''
+
+  for (const s of sorted) {
+    const place = byId.get(s.candidateId)
+    if (!place || !isValidCoord(place.lat, place.lon)) continue
+    const arrive = s.start || '12:00'
+
+    if (!prevPlace) {
+      if (place.distKm >= minKm) {
+        out.push({
+          fromItemId: opts.fromItemId,
+          toCandidateId: place.id,
+          start: earlierHmDrive(arrive, 45),
+          end: arrive,
+        })
+      }
+    } else {
+      const d = haversineKm(
+        { lat: prevPlace.lat, lon: prevPlace.lon },
+        { lat: place.lat, lon: place.lon },
+      )
+      const shouldDrive =
+        opts.openArea != null
+          ? d >= (opts.openArea ? 0.8 : 3)
+          : aiLegTravelMode(
+              d,
+              daySnap,
+              { lat: prevPlace.lat, lon: prevPlace.lon },
+              { lat: place.lat, lon: place.lon },
+            ) === 'drive'
+      if (shouldDrive) {
+        // Leave after the previous stop so Drive sorts between stops, not before them
+        let start = laterHmDrive(prevArrive || arrive, 15)
+        if (start >= arrive) start = earlierHmDrive(arrive, 20)
+        out.push({
+          fromCandidateId: prevId!,
+          toCandidateId: place.id,
+          start,
+          end: arrive,
+        })
+      }
+    }
+    prevId = place.id
+    prevPlace = place
+    prevArrive = arrive
+  }
+  return out
+}
+
 const STITCHABLE = new Set([
   'hotel',
   'sight',
@@ -309,8 +499,9 @@ const STITCHABLE = new Set([
 ])
 
 /**
- * Insert drive legs between consecutive same-day stops that are too far to walk.
- * Keeps Provence-style AI adds from appearing as disconnected pins.
+ * Insert drive legs between consecutive same-day stops when the hop needs a car.
+ * Compact city hops under 3 km stay walk-only (existing map walk connectors).
+ * Open / Provence-style days get drives even for ~2 km village hops.
  */
 function stitchMissingDayDrives(
   items: TripItem[],
@@ -344,17 +535,13 @@ function stitchMissingDayDrives(
     const b = pointLatLon(to)
     if (!a || !b) continue
     const d = haversineKm(a, b)
-    if (d <= 8 || d > 200) continue
+    const mode = aiLegTravelMode(d, dayItems, a, b)
+    if (mode !== 'drive') continue
 
+    // One inbound drive to this stop is enough (avoids hotel→X plus wrong dinner→X)
     const covered = drives.some((dr) => {
-      if (!isValidCoord(dr.lat, dr.lon) || !isValidCoord(dr.latTo, dr.lonTo)) {
-        return false
-      }
-      const startNear =
-        haversineKm({ lat: dr.lat!, lon: dr.lon! }, a) < 3
-      const endNear =
-        haversineKm({ lat: dr.latTo!, lon: dr.lonTo! }, b) < 3
-      return startNear && endNear
+      if (!isValidCoord(dr.latTo, dr.lonTo)) return false
+      return haversineKm({ lat: dr.latTo!, lon: dr.lonTo! }, b) < 3
     })
     if (covered) continue
 
@@ -362,7 +549,7 @@ function stitchMissingDayDrives(
     let start = ''
     if (to.start && /^\d{2}:\d{2}$/.test(to.start)) {
       const [hh, mm] = to.start.split(':').map(Number)
-      const mins = Math.max(0, (hh || 0) * 60 + (mm || 0) - 60)
+      const mins = Math.max(0, (hh || 0) * 60 + (mm || 0) - 45)
       start = `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`
     } else if (from.start) {
       start = from.start
@@ -423,6 +610,8 @@ function driveToPlace(
     lonTo: place.lon,
     wikidata: '',
     osmId: '',
+    rating: null,
+    googleMapsUri: '',
     geocodeQuery: '',
     updatedAt: nowIso(),
     enrichmentSummary: '',
@@ -437,13 +626,22 @@ function resolveDriveFrom(
   working: TripItem[],
   day: string,
   fromItemId: string | undefined,
+  /** Prefer these items for “day start” (pre-patch hotel/vehicle) — not newly added stops. */
+  dayStartPool?: TripItem[],
 ): TripItem | null {
   if (fromItemId) {
     const hit = working.find((i) => i.id === fromItemId && itemTouchesDay(i, day))
     if (hit) return hit
   }
-  const dayItems = working.filter(
-    (i) => itemTouchesDay(i, day) && !isPlaceholderBase(i) && i.status !== 'cancelled',
+
+  const poolSource = dayStartPool ?? working
+  const dayItems = poolSource.filter(
+    (i) =>
+      itemTouchesDay(i, day) &&
+      !isPlaceholderBase(i) &&
+      i.status !== 'cancelled' &&
+      i.type !== 'drive' &&
+      i.type !== 'note',
   )
   const vehicle = dayItems.find((i) =>
     /dealer|dealership|rental|rent-a-car|avis|hertz|sixt|europcar|enterprise|car\s*hire|pick\s*up/i.test(
@@ -451,12 +649,122 @@ function resolveDriveFrom(
     ),
   )
   if (vehicle) return vehicle
+
+  const hotel = dayItems.find(
+    (i) =>
+      i.type === 'hotel' &&
+      (isValidCoord(i.lat, i.lon) || isValidCoord(i.latTo, i.lonTo)),
+  )
+  if (hotel) return hotel
+
+  // Earliest existing stop — never the last (that wrongly became dinner after addSteps-first)
   const sorted = sortItems(dayItems)
-  for (let i = sorted.length - 1; i >= 0; i--) {
-    const it = sorted[i]!
+  for (const it of sorted) {
     if (isValidCoord(it.lat, it.lon) || isValidCoord(it.latTo, it.lonTo)) return it
   }
-  return null
+
+  // Placeholders only if nothing else
+  const base = poolSource.find(
+    (i) =>
+      isPlaceholderBase(i) &&
+      i.date === day &&
+      (isValidCoord(i.lat, i.lon) || isValidCoord(i.latTo, i.lonTo)),
+  )
+  return base ?? null
+}
+
+/** Resolve a prior patch stop (by candidate id / coords) as the departure for the next drive. */
+function resolveDriveFromCandidate(
+  working: TripItem[],
+  day: string,
+  fromCandidateId: string,
+  byCandidate: Map<string, ExplorePlace>,
+): TripItem | null {
+  const place = byCandidate.get(fromCandidateId)
+  if (!place || !isValidCoord(place.lat, place.lon)) return null
+  const dayItems = working.filter(
+    (i) =>
+      itemTouchesDay(i, day) &&
+      i.type !== 'drive' &&
+      i.status !== 'cancelled' &&
+      !isPlaceholderBase(i),
+  )
+  const hit = dayItems.find(
+    (i) =>
+      isValidCoord(i.lat, i.lon) &&
+      Math.abs(i.lat! - place.lat) < 1e-4 &&
+      Math.abs(i.lon! - place.lon) < 1e-4,
+  )
+  return hit ?? null
+}
+
+/**
+ * When the coach populates a day that only had a “Day N base” shell, turn that
+ * shell into the first real stop (keep id) and remove other placeholders on the day.
+ */
+function absorbDayPlaceholders(
+  working: TripItem[],
+  day: string,
+  addedIds: string[],
+): {
+  working: TripItem[]
+  removedIds: string[]
+  changedIds: string[]
+  idMap: Map<string, string>
+} {
+  const removedIds: string[] = []
+  const changedIds: string[] = []
+  const idMap = new Map<string, string>()
+  const placeholders = working.filter(
+    (i) => isPlaceholderBase(i) && i.date === day,
+  )
+  if (!placeholders.length) {
+    return { working, removedIds, changedIds, idMap }
+  }
+
+  const addedSet = new Set(addedIds)
+  const newStops = sortItems(
+    working.filter(
+      (i) =>
+        addedSet.has(i.id) &&
+        i.type !== 'drive' &&
+        i.type !== 'note' &&
+        !isPlaceholderBase(i),
+    ),
+  )
+
+  let next = working
+
+  if (newStops.length) {
+    const ph = placeholders[0]!
+    const first = newStops[0]!
+    const upgraded: TripItem = {
+      ...cloneItem(first),
+      id: ph.id,
+      tags: (first.tags ?? []).filter(
+        (t) => t !== 'placeholder' && t !== 'day-base',
+      ),
+      updatedAt: nowIso(),
+    }
+    if (!upgraded.tags.includes('ai-coach')) upgraded.tags = [...upgraded.tags, 'ai-coach']
+    next = working.filter((i) => i.id !== ph.id && i.id !== first.id)
+    // Drop any other bases on this day
+    for (const p of placeholders.slice(1)) {
+      next = next.filter((i) => i.id !== p.id)
+      removedIds.push(p.id)
+    }
+    next.push(upgraded)
+    idMap.set(first.id, ph.id)
+    changedIds.push(ph.id)
+  } else {
+    // Drives/notes only: still clear empty day shells so they don't stay as fake hotels
+    for (const p of placeholders) {
+      next = next.filter((i) => i.id !== p.id)
+      removedIds.push(p.id)
+    }
+  }
+
+  return { working: next, removedIds, changedIds, idMap }
 }
 
 /** Apply patch; only selected-day items may change. */
@@ -514,25 +822,6 @@ export function applyCoachPatch(args: {
     }
   }
 
-  if (patch.addDrives?.length) {
-    for (const d of patch.addDrives) {
-      const place = byCandidate.get(d.toCandidateId)
-      if (!place) {
-        return { ok: false, error: `Unknown drive destination ${d.toCandidateId}` }
-      }
-      const from = resolveDriveFrom(working, day, d.fromItemId)
-      if (!from) {
-        return { ok: false, error: 'No valid departure point for suggested drive' }
-      }
-      const leg = driveToPlace(from, place, day, currency, d.start, d.end)
-      if (!leg) {
-        return { ok: false, error: 'Could not build drive leg (missing coordinates)' }
-      }
-      working.push(leg)
-      addedIds.push(leg.id)
-    }
-  }
-
   if (patch.addSteps?.length) {
     for (const add of patch.addSteps) {
       const place = byCandidate.get(add.candidateId)
@@ -551,6 +840,40 @@ export function applyCoachPatch(args: {
       const item = placeToItem(place, day, currency, add.start, add.end, add.note)
       working.push(item)
       addedIds.push(item.id)
+    }
+  }
+
+  if (patch.addDrives?.length) {
+    for (const d of patch.addDrives) {
+      const place = byCandidate.get(d.toCandidateId)
+      if (!place) {
+        return { ok: false, error: `Unknown drive destination ${d.toCandidateId}` }
+      }
+      const from = d.fromCandidateId
+        ? resolveDriveFromCandidate(working, day, d.fromCandidateId, byCandidate) ??
+          resolveDriveFrom(working, day, d.fromItemId, before)
+        : resolveDriveFrom(working, day, d.fromItemId, before)
+      if (!from) {
+        return { ok: false, error: 'No valid departure point for suggested drive' }
+      }
+      const fromPt = pointLatLon(from)
+      if (fromPt && isValidCoord(place.lat, place.lon)) {
+        const daySnap = working.filter((i) => itemTouchesDay(i, day))
+        const mode = aiLegTravelMode(
+          haversineKm(fromPt, { lat: place.lat, lon: place.lon }),
+          daySnap,
+          fromPt,
+          { lat: place.lat, lon: place.lon },
+        )
+        // City short hops: skip explicit drive — walk connectors cover them
+        if (mode === 'walk' || mode === 'none') continue
+      }
+      const leg = driveToPlace(from, place, day, currency, d.start, d.end)
+      if (!leg) {
+        return { ok: false, error: 'Could not build drive leg (missing coordinates)' }
+      }
+      working.push(leg)
+      addedIds.push(leg.id)
     }
   }
 
@@ -592,6 +915,24 @@ export function applyCoachPatch(args: {
     )
     working.push(note)
     addedIds.push(note.id)
+  }
+
+  // Empty-day bases → real steps: upgrade the Day N shell into the first new stop
+  // (same id), and drop any leftover placeholders on this day.
+  if (addedIds.length) {
+    const absorbed = absorbDayPlaceholders(working, day, addedIds)
+    working = absorbed.working
+    for (const id of absorbed.removedIds) {
+      if (!removedIds.includes(id)) removedIds.push(id)
+    }
+    for (const id of absorbed.changedIds) {
+      if (!changedIds.includes(id)) changedIds.push(id)
+    }
+    // Rewrite addedIds if the first stop reused a placeholder id
+    for (let i = 0; i < addedIds.length; i++) {
+      const mapped = absorbed.idMap.get(addedIds[i]!)
+      if (mapped) addedIds[i] = mapped
+    }
   }
 
   // Far stops (e.g. Provence lunch/dinner) need drive legs or the map stays pin-only
@@ -655,19 +996,41 @@ export function describePatch(
   const lines: string[] = []
   const byId = new Map(candidates.map((c) => [c.id, c]))
   const byItem = new Map((dayItems ?? []).map((i) => [i.id, i.title]))
+
+  type TimedLine = { t: string; line: string }
+  const timed: TimedLine[] = []
+
+  const driveFromLabel = (
+    d: NonNullable<AiCoachOption['patch']['addDrives']>[number],
+  ): string => {
+    if (d.fromCandidateId) {
+      return byId.get(d.fromCandidateId)?.name ?? 'previous stop'
+    }
+    if (d.fromItemId) {
+      return byItem.get(d.fromItemId) ?? 'day start'
+    }
+    return 'day start'
+  }
+
   for (const d of option.patch.addDrives ?? []) {
     const p = byId.get(d.toCandidateId)
-    const from = d.fromItemId ? byItem.get(d.fromItemId) : 'day start'
-    lines.push(
-      `Drive ${from ? `from ${from} ` : ''}→ ${p?.name ?? d.toCandidateId}${d.start ? ` @ ${d.start}` : ''}`,
-    )
+    timed.push({
+      t: d.start || d.end || '99:99',
+      line: `Drive from ${driveFromLabel(d)} → ${p?.name ?? d.toCandidateId}${
+        d.start ? ` @ ${d.start}` : ''
+      }`,
+    })
   }
   for (const a of option.patch.addSteps ?? []) {
     const p = byId.get(a.candidateId)
-    lines.push(
-      `Add ${p?.name ?? a.candidateId}${a.start ? ` @ ${a.start}` : ''}`,
-    )
+    timed.push({
+      t: a.start || '99:99',
+      line: `Add ${p?.name ?? a.candidateId}${a.start ? ` @ ${a.start}` : ''}`,
+    })
   }
+  timed.sort((a, b) => a.t.localeCompare(b.t))
+  for (const row of timed) lines.push(row.line)
+
   for (const t of option.patch.setTimes ?? []) {
     const title = byItem.get(t.itemId) || `${t.itemId.slice(0, 8)}…`
     lines.push(`Retimed “${title}”${t.start ? ` → ${t.start}` : ''}`)

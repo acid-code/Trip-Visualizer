@@ -38,6 +38,8 @@ function step(
     lonTo: null,
     wikidata: '',
     osmId: '',
+    rating: null,
+    googleMapsUri: '',
     geocodeQuery: '',
     updatedAt: '',
     enrichmentSummary: '',
