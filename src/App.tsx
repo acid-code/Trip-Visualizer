@@ -429,9 +429,17 @@ export default function App() {
         ? `Updating “${safeMeta.name}” from Drive…`
         : `Imported “${safeMeta.name}” · looking up places on the map…`,
     )
-    const pinned = await pinTripItemsOnMap(withBases, (done, total) => {
-      setStatus(`Pinning places ${done}/${total}…`)
-    })
+    const pinned = await pinTripItemsOnMap(
+      withBases,
+      (done, total) => {
+        setStatus(`Pinning places ${done}/${total}…`)
+      },
+      {
+        useGooglePlaces: placesEnabled,
+        googleApiKey: effectiveGoogleKey || undefined,
+        hotels: withBases.filter((i) => i.type === 'hotel'),
+      },
+    )
     const pinnedCount = pinned.filter(
       (item, i) =>
         (isValidCoord(item.lat, item.lon) && !isValidCoord(withBases[i]?.lat, withBases[i]?.lon)) ||
@@ -1102,7 +1110,11 @@ export default function App() {
       if (!active) return
       const replaceId = addContext?.replaceId
       setStatus(`Pinning “${item.title}” on the map…`)
-      const pinned = await pinItemOnMap(item)
+      const pinned = await pinItemOnMap(item, {
+        useGooglePlaces: placesEnabled,
+        googleApiKey: effectiveGoogleKey || undefined,
+        hotels: active.items.filter((i) => i.type === 'hotel'),
+      })
       const withoutPlaceholder = replaceId
         ? active.items.filter((i) => i.id !== replaceId)
         : active.items

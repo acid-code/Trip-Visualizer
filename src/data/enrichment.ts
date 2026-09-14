@@ -15,6 +15,23 @@ function asCoord(lat: unknown, lon: unknown): { lat: number; lon: number } | nul
 const NOMINATIM = 'https://nominatim.openstreetmap.org/search'
 const NOMINATIM_REVERSE = 'https://nominatim.openstreetmap.org/reverse'
 const WIKIDATA = 'https://www.wikidata.org/w/api.php'
+/** Identify this app — required by Nominatim usage policy (Node); browsers send their own UA. */
+const NOMINATIM_UA = 'trip-worker/0.1 (trip planner; local geocode)'
+
+let lastNominatimAt = 0
+
+async function nominatimRateLimit() {
+  const wait = Math.max(0, 1100 - (Date.now() - lastNominatimAt))
+  if (wait) await sleep(wait)
+  lastNominatimAt = Date.now()
+}
+
+function nominatimHeaders(): HeadersInit {
+  return {
+    Accept: 'application/json',
+    'User-Agent': NOMINATIM_UA,
+  }
+}
 
 export type PlaceLookup = {
   lat: number
@@ -168,8 +185,9 @@ export async function lookupPlace(
   url.searchParams.set('format', 'json')
   url.searchParams.set('addressdetails', '1')
   url.searchParams.set('limit', '1')
+  await nominatimRateLimit()
   const res = await fetch(url.toString(), {
-    headers: { Accept: 'application/json' },
+    headers: nominatimHeaders(),
   })
   if (!res.ok) return null
   const data = (await res.json()) as NominatimHit[]
@@ -189,8 +207,9 @@ export async function reverseGeocode(
   url.searchParams.set('format', 'json')
   url.searchParams.set('addressdetails', '1')
   url.searchParams.set('zoom', '18')
+  await nominatimRateLimit()
   const res = await fetch(url.toString(), {
-    headers: { Accept: 'application/json' },
+    headers: nominatimHeaders(),
   })
   if (!res.ok) return null
   const hit = (await res.json()) as NominatimHit & { error?: string }
@@ -247,53 +266,118 @@ export function locationQueryFromInput(input: string): string {
   return s
 }
 
+/** Soften vague spreadsheet labels so geocoders hit a real place. */
+function normalizeGeocodeQuery(input: string): string {
+  const s = input.trim()
+  if (!s) return ''
+  if (/^paris\s*(center|centre|city\s*center|city\s*centre)?$/i.test(s)) {
+    return 'Paris, France'
+  }
+  if (/^mrs(\s+airport)?$/i.test(s)) return 'Marseille Provence Airport, France'
+  if (/^cdg(\s+airport)?$/i.test(s)) return 'Charles de Gaulle Airport, Paris'
+  return s
+}
+
+function normalizeMatchKey(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+/** Prefer an already-pinned hotel when From/To is just a city / hotel label. */
+function coordFromRelatedHotels(
+  label: string,
+  hotels: TripItem[] | undefined,
+): { lat: number; lon: number } | null {
+  if (!hotels?.length) return null
+  const q = normalizeMatchKey(label)
+  if (!q || q.length < 2) return null
+
+  let best: { lat: number; lon: number; score: number } | null = null
+  for (const h of hotels) {
+    if (!isValidCoord(h.lat, h.lon)) continue
+    const candidates = [h.city, h.place, h.title]
+      .map(normalizeMatchKey)
+      .filter((c) => c.length >= 2)
+    for (const c of candidates) {
+      let score = 0
+      if (q === c) score = 100
+      else if (q.includes(c) || c.includes(q)) score = Math.min(q.length, c.length)
+      if (score > 0 && (!best || score > best.score)) {
+        best = { lat: h.lat!, lon: h.lon!, score }
+      }
+    }
+  }
+  return best ? { lat: best.lat, lon: best.lon } : null
+}
+
+export type PinMapOpts = {
+  useGooglePlaces?: boolean
+  googleApiKey?: string
+  /** Hotels (or other pinned stays) used as From/To fallbacks for drives. */
+  hotels?: TripItem[]
+}
+
 /** Resolve a phone paste: Google Maps URL, "lat, lon", or plain address. */
 export async function resolveLocationInput(
   input: string,
+  opts?: PinMapOpts,
 ): Promise<{ lat: number; lon: number; query: string } | null> {
   const coords = extractCoordsFromText(input)
   if (coords) return { ...coords, query: input.trim() }
-  const q = locationQueryFromInput(input)
-  if (!q) return null
-  const g = await geocodePlace(q)
+  const raw = locationQueryFromInput(input)
+  if (!raw) return null
+  const q = normalizeGeocodeQuery(raw)
+  const g = await lookupPlace(q, {
+    useGooglePlaces: opts?.useGooglePlaces,
+    googleApiKey: opts?.googleApiKey,
+  })
   if (!g) return null
-  return { ...g, query: q }
+  return { lat: g.lat, lon: g.lon, query: q }
+}
+
+async function resolveLegEndpoint(
+  label: string,
+  opts?: PinMapOpts,
+): Promise<{ lat: number; lon: number; query?: string } | null> {
+  const text = label.trim()
+  if (!text) return null
+  const airport = lookupAirport(text)
+  if (airport) return { lat: airport.lat, lon: airport.lon, query: text }
+  const hotel = coordFromRelatedHotels(text, opts?.hotels)
+  if (hotel) return { ...hotel, query: text }
+  return resolveLocationInput(text, opts)
 }
 
 /**
  * Fill lat/lon (and latTo/lonTo for legs) from place / from / to text.
  * No Wikidata — used right after Add so pins appear without a full Enrich.
  */
-export async function pinItemOnMap(item: TripItem): Promise<TripItem> {
+export async function pinItemOnMap(
+  item: TripItem,
+  opts?: PinMapOpts,
+): Promise<TripItem> {
   const next: TripItem = { ...item, updatedAt: nowIso() }
   const isLeg = ['flight', 'train', 'bus', 'ferry', 'drive'].includes(item.type)
 
   if (isLeg) {
     if (!isValidCoord(next.lat, next.lon)) {
-      const airport = lookupAirport(item.from)
-      if (airport) {
-        next.lat = airport.lat
-        next.lon = airport.lon
-      } else {
-        const g = await resolveLocationInput(item.from || item.place)
-        if (g) {
-          next.lat = g.lat
-          next.lon = g.lon
-          next.geocodeQuery = g.query
-        }
+      const from = await resolveLegEndpoint(item.from || item.place, opts)
+      if (from) {
+        next.lat = from.lat
+        next.lon = from.lon
+        if (from.query) next.geocodeQuery = from.query
       }
     }
     if (!isValidCoord(next.latTo, next.lonTo)) {
-      const airport = lookupAirport(item.to)
-      if (airport) {
-        next.latTo = airport.lat
-        next.lonTo = airport.lon
-      } else {
-        const g = await resolveLocationInput(item.to)
-        if (g) {
-          next.latTo = g.lat
-          next.lonTo = g.lon
-        }
+      const to = await resolveLegEndpoint(item.to, opts)
+      if (to) {
+        next.latTo = to.lat
+        next.lonTo = to.lon
       }
     }
     return next
@@ -304,7 +388,7 @@ export async function pinItemOnMap(item: TripItem): Promise<TripItem> {
 
   const pasted = item.place || item.geocodeQuery
   if (pasted) {
-    const g = await resolveLocationInput(pasted)
+    const g = await resolveLocationInput(pasted, opts)
     if (g) {
       next.lat = g.lat
       next.lon = g.lon
@@ -316,7 +400,10 @@ export async function pinItemOnMap(item: TripItem): Promise<TripItem> {
   const q = [item.place || item.title, item.city].filter(Boolean).join(', ')
   if (!q.trim()) return next
   next.geocodeQuery = q
-  const g = await geocodePlace(q)
+  const g = await lookupPlace(normalizeGeocodeQuery(q), {
+    useGooglePlaces: opts?.useGooglePlaces,
+    googleApiKey: opts?.googleApiKey,
+  })
   if (g) {
     next.lat = g.lat
     next.lon = g.lon
@@ -344,6 +431,7 @@ function itemNeedsPinning(item: TripItem): boolean {
 export async function pinTripItemsOnMap(
   items: TripItem[],
   onProgress?: (done: number, total: number) => void,
+  opts?: PinMapOpts,
 ): Promise<TripItem[]> {
   const needIdx = items
     .map((item, i) => (itemNeedsPinning(item) ? i : -1))
@@ -354,13 +442,20 @@ export async function pinTripItemsOnMap(
   }
 
   const out = [...items]
+  // Prefer already-known hotel pins (and ones we fill as we go) for drive From/To.
+  const hotels = () =>
+    out.filter((i) => i.type === 'hotel' && isValidCoord(i.lat, i.lon))
+
   let done = 0
   for (const i of needIdx) {
-    out[i] = await pinItemOnMap(out[i]!)
+    out[i] = await pinItemOnMap(out[i]!, {
+      ...opts,
+      hotels: [...(opts?.hotels ?? []), ...hotels()],
+    })
     done += 1
     onProgress?.(done, needIdx.length)
-    // Nominatim usage policy ~1 req/s
-    if (done < needIdx.length) await sleep(1100)
+    // Extra pause when falling back to Nominatim (Google is already paced by proxy)
+    if (!opts?.useGooglePlaces && done < needIdx.length) await sleep(200)
   }
   return out
 }

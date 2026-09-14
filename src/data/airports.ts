@@ -17,7 +17,21 @@ export const AIRPORTS: Record<string, { name: string; lat: number; lon: number; 
   LYS: { name: 'Lyon-Saint-Exupéry', lat: 45.7256, lon: 5.0811, city: 'Lyon' },
 }
 
-export function lookupAirport(code: string) {
-  const key = code.trim().toUpperCase()
-  return AIRPORTS[key]
+/**
+ * Resolve an IATA code from a bare code ("MRS") or a short label ("MRS Airport",
+ * "CDG Terminal 2"). Avoids matching random 3-letter words inside longer place names.
+ */
+export function lookupAirport(codeOrPlace: string) {
+  const raw = codeOrPlace.trim().toUpperCase()
+  if (!raw) return undefined
+  if (AIRPORTS[raw]) return AIRPORTS[raw]
+
+  const airportWord = raw.match(/\b([A-Z]{3})\b(?=\s+AIRPORT\b)/)
+  if (airportWord?.[1] && AIRPORTS[airportWord[1]]) return AIRPORTS[airportWord[1]]
+
+  // Bare code with optional terminal / parenthetical junk: "CDG T2", "TLV (LY123)"
+  const bare = raw.match(/^([A-Z]{3})(?:\s|[/(]|$)/)
+  if (bare?.[1] && AIRPORTS[bare[1]] && raw.length <= 16) return AIRPORTS[bare[1]]
+
+  return undefined
 }
