@@ -82,7 +82,7 @@ function normalizeHeader(h: unknown): string {
     .toLowerCase()
     .replace(/\*+/g, '')
     .replace(/[·•].*$/, '') // drop " · format" if pasted into header
-    .replace(/\s+/g, '_')
+    .replace(/[\s-]+/g, '_')
     .replace(/_+/g, '_')
     .replace(/^_|_$/g, '')
 }
@@ -248,6 +248,7 @@ function isHintRow(row: Record<string, unknown>): boolean {
     .map((v) => String(v ?? '').toLowerCase())
     .join(' ')
   if (!blob.trim()) return true
+  if (/\bcost\s*heat\b/.test(blob)) return true
   const looksLikeHint =
     /\brequired\b/.test(blob) ||
     /\boptional\b/.test(blob) ||
@@ -280,6 +281,8 @@ function rowToItem(
   const date = excelDateToIso(row.date)
   if (!title && !date) return null
   if (isHintRow(row)) return null
+  // Hotels need a real check-in — don't invent from trip start (skips empty / legend rows)
+  if (forceType === 'hotel' && !date) return null
 
   const rowDate = date || meta.startDate
   if (!rowDate) return null

@@ -242,7 +242,6 @@ function buildTripSheet(wb: ExcelJS.Workbook, trip: TripRecord) {
   const tips = [
     'Edit Steps for day plans (sights, food, drives, flights). Use Hotels for stays.',
     'Cash is a read-only spend snapshot with charts — ignored on import.',
-    'Hover column headers on Steps/Hotels for Required/Optional format tips.',
     'Preferred date: YYYY-MM-DD · Preferred time: HH:MM (24h). Other common formats still import.',
     'Date cells use day colors; Type uses category colors; Cost uses a low→high heat scale.',
   ]
