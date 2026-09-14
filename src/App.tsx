@@ -459,22 +459,22 @@ export default function App() {
     return trip
   }
 
-  function findTripForDriveWorkbook(
-    tripName: string,
-    fileName: string,
-  ): TripRecord | undefined {
+  /** True when imported workbook name/slug matches the active trip. */
+  function importedFitsActiveTrip(tripName: string, fileName?: string): boolean {
+    if (!active) return false
     const nameNorm = tripName.trim().toLowerCase()
-    const fileSlug = tripNameSlugFromDriveFileName(fileName)
+    const activeNorm = active.meta.name.trim().toLowerCase()
+    if (nameNorm && activeNorm && nameNorm === activeNorm) return true
+
+    const activeSlug = slugTripFileBase(active.meta.name)
+    if (!activeSlug) return false
     const nameSlug = slugTripFileBase(tripName)
-    const ranked = [...trips].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-
-    const exact = ranked.find((t) => t.meta.name.trim().toLowerCase() === nameNorm)
-    if (exact) return exact
-
-    return ranked.find((t) => {
-      const s = slugTripFileBase(t.meta.name)
-      return s === fileSlug || s === nameSlug
-    })
+    if (nameSlug && nameSlug === activeSlug) return true
+    if (fileName) {
+      const fileSlug = tripNameSlugFromDriveFileName(fileName)
+      if (fileSlug && fileSlug === activeSlug) return true
+    }
+    return false
   }
 
   async function onImportFile(file: File) {
@@ -483,7 +483,17 @@ export default function App() {
         setStatus('Import failed — file is too large (max 5 MB)')
         return
       }
-      await importWorkbookBuffer(await file.arrayBuffer())
+      const buf = await file.arrayBuffer()
+      const { meta } = parseTripWorkbook(buf)
+      const tripName = meta.name.trim() || file.name.replace(/\.xlsx?$/i, '')
+      if (active && importedFitsActiveTrip(tripName, file.name)) {
+        await importWorkbookBuffer(buf, {
+          sourceLabel: 'Imported',
+          replaceTrip: active,
+        })
+        return
+      }
+      await importWorkbookBuffer(buf, { sourceLabel: 'Imported' })
     } catch (err) {
       logClientError('import', err)
       setStatus(
@@ -518,30 +528,14 @@ export default function App() {
       const buf = await downloadDriveFile(file.id)
       const { meta } = parseTripWorkbook(buf)
       const tripName = meta.name.trim() || file.name.replace(/\.xlsx?$/i, '')
-      const match = findTripForDriveWorkbook(tripName, file.name)
 
-      if (match) {
-        // Switch to the matching trip first
-        setActiveId(match.id)
-        rememberDriveFileForTrip(match.id, file.id, file.name)
-
-        const driveMs = file.modifiedTime ? Date.parse(file.modifiedTime) : NaN
-        const localMs = Date.parse(match.updatedAt)
-        const driveIsNewer =
-          Number.isFinite(driveMs) && (!Number.isFinite(localMs) || driveMs > localMs)
-
-        if (!driveIsNewer) {
-          setStatus(
-            `Opened “${match.meta.name}” · local copy is up to date (Drive not newer) — skipped overwrite`,
-          )
-          return
-        }
-
+      if (active && importedFitsActiveTrip(tripName, file.name)) {
+        rememberDriveFileForTrip(active.id, file.id, file.name)
         await importWorkbookBuffer(buf, {
           sourceLabel: 'Drive',
-          replaceTrip: match,
+          replaceTrip: active,
         })
-        rememberDriveFileForTrip(match.id, file.id, file.name)
+        rememberDriveFileForTrip(active.id, file.id, file.name)
         return
       }
 
@@ -2630,10 +2624,10 @@ function DriveSyncPanel({
       <p className="mt-1 text-xs text-stone-600">
         Saves Excel into <code className="rounded bg-white px-1">{DRIVE_FOLDER_NAME}/</code>. Each
         trip keeps one Drive file — renaming the trip renames that file on the next save. Load
-        switches to the matching trip and overwrites it only when the Drive file is newer than your
-        local copy. Open opens the folder or file in Google Drive. Manual uploads in that folder
-        show up after Connect (allow full Drive access when Google asks). If an older save won’t
-        open in Sheets, delete it and Save trip to Drive again.
+        updates the current trip when the workbook name matches; otherwise it creates a new trip
+        and switches to it. Open opens the folder or file in Google Drive. Manual uploads in that
+        folder show up after Connect (allow full Drive access when Google asks). If an older save
+        won’t open in Sheets, delete it and Save trip to Drive again.
       </p>
       {!configured ? (
         <p className="mt-2 text-xs text-amber-800">

@@ -84,7 +84,7 @@ export const FEATURE_TIPS: FeatureTip[] = [
   {
     id: 'google-drive-sync',
     title: 'Google Drive backup',
-    body: 'In Data, connect Google once (allow Drive access), then Save trip to Drive (trip-planer/). Files you add yourself in that folder also appear on Refresh. Renaming a trip renames that same Drive file on the next save. Load overwrites the matching local trip only when the Drive file is newer.',
+    body: 'In Data, connect Google once (allow Drive access), then Save trip to Drive (trip-planer/). Load updates the open trip when the file name matches, or creates a new trip and switches to it. Files you add yourself in that folder also appear on Refresh.',
     visual: 'drive',
   },
   {
