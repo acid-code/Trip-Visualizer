@@ -2631,8 +2631,9 @@ function DriveSyncPanel({
         Saves Excel into <code className="rounded bg-white px-1">{DRIVE_FOLDER_NAME}/</code>. Each
         trip keeps one Drive file — renaming the trip renames that file on the next save. Load
         switches to the matching trip and overwrites it only when the Drive file is newer than your
-        local copy. Open opens the folder or file in Google Drive. If an older save won’t open in
-        Sheets, delete it and Save trip to Drive again.
+        local copy. Open opens the folder or file in Google Drive. Manual uploads in that folder
+        show up after Connect (allow full Drive access when Google asks). If an older save won’t
+        open in Sheets, delete it and Save trip to Drive again.
       </p>
       {!configured ? (
         <p className="mt-2 text-xs text-amber-800">

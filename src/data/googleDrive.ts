@@ -2,14 +2,20 @@
  * Google Drive sync for trip Excel workbooks.
  * Uses Google Identity Services (browser OAuth) + Drive REST API.
  * Files live under a folder named `trip-planer/` that this app creates.
+ *
+ * Scope note: `drive.file` only sees files *this app* created/opened, so a
+ * workbook you drop into the folder in Drive UI stays invisible. Full `drive`
+ * lets Refresh list show every .xlsx in trip-planer/ (including manual uploads).
  */
 
 const DRIVE_FOLDER_NAME = 'trip-planer'
-const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
+/** Full Drive — required to list/load workbooks the user added outside the app. */
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive'
 const GIS_SCRIPT = 'https://accounts.google.com/gsi/client'
 const DRIVE_API = 'https://www.googleapis.com/drive/v3'
 const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3'
-const TOKEN_STORAGE_KEY = 'trip-drive-oauth'
+/** Bump when OAuth scopes change so stale tokens are not reused. */
+const TOKEN_STORAGE_KEY = 'trip-drive-oauth-v2'
 const FOLDER_STORAGE_KEY = 'trip-drive-folder-id'
 const TRIP_FILE_MAP_KEY = 'trip-drive-file-map'
 
@@ -18,6 +24,7 @@ export type DriveFileInfo = {
   name: string
   modifiedTime?: string
   webViewLink?: string
+  mimeType?: string
 }
 
 type TokenResponse = {
@@ -138,6 +145,14 @@ function explainAuthError(err: { type?: string; message?: string } | Error): str
   if (type === 'popup_failed_to_open') {
     return 'Browser blocked the Google sign-in popup. Allow popups for this site and retry.'
   }
+  if (/access_denied|403|insufficient|scope/i.test(`${type} ${message}`)) {
+    return (
+      'Google denied Drive access. In Google Cloud → OAuth consent screen, add the scope ' +
+      '“…/auth/drive” (or “…/auth/drive.readonly” plus write) for this client, add yourself as a ' +
+      'test user if the app is in Testing, then Connect again and allow access.' +
+      localHint
+    )
+  }
   return (message || type || 'Google sign-in failed') + localHint
 }
 
@@ -165,9 +180,12 @@ async function ensureTokenClient(
   return tokenClient
 }
 
-async function requestAccessToken(interactive: boolean): Promise<string> {
+async function requestAccessToken(
+  interactive: boolean,
+  opts?: { forceConsent?: boolean },
+): Promise<string> {
   const existing = cachedToken ?? readStoredToken()
-  if (existing && Date.now() < existing.expiresAt - 30_000) {
+  if (!opts?.forceConsent && existing && Date.now() < existing.expiresAt - 30_000) {
     cachedToken = existing
     return existing.accessToken
   }
@@ -216,10 +234,14 @@ async function requestAccessToken(interactive: boolean): Promise<string> {
       },
     )
       .then((client) => {
-        // Empty prompt = consent only when Google still needs it (avoids repeat hangs).
-        // Interactive connect may still need account picker once.
+        // forceConsent: re-approve after scope upgrades (drive.file → drive).
+        // select_account: normal connect. Empty: silent refresh when possible.
         client.requestAccessToken({
-          prompt: interactive ? 'select_account' : '',
+          prompt: opts?.forceConsent
+            ? 'consent'
+            : interactive
+              ? 'select_account'
+              : '',
         })
       })
       .catch((err) => {
@@ -231,7 +253,14 @@ async function requestAccessToken(interactive: boolean): Promise<string> {
 }
 
 export async function connectGoogleDrive(): Promise<void> {
-  await requestAccessToken(true)
+  // Drop any pre-v2 / narrow-scope session token so Google re-prompts for full Drive.
+  try {
+    sessionStorage.removeItem('trip-drive-oauth')
+  } catch {
+    /* ignore */
+  }
+  persistToken(null)
+  await requestAccessToken(true, { forceConsent: true })
 }
 
 export function disconnectGoogleDrive(): void {
@@ -522,7 +551,7 @@ function uniqueWorkbookName(base: string, existingNames: string[]): string {
 async function listFilesInFolder(folderId: string): Promise<DriveFileInfo[]> {
   const q = encodeURIComponent(`'${folderId}' in parents and trashed=false`)
   const res = await driveFetch(
-    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,modifiedTime,webViewLink)&pageSize=100&orderBy=modifiedTime desc`,
+    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name,modifiedTime,webViewLink,mimeType)&pageSize=100&orderBy=modifiedTime desc`,
   )
   if (!res.ok) throw new Error(await driveErrorMessage(res, 'Drive list failed'))
   const data = (await res.json()) as { files?: DriveFileInfo[] }
@@ -683,11 +712,16 @@ export async function uploadTripWorkbookToDrive(
   return out
 }
 
-/** List .xlsx workbooks in trip-planer/ (creates the folder if needed). */
+/** List trip workbooks in trip-planer/ (creates the folder if needed). */
 export async function listTripWorkbooksOnDrive(): Promise<DriveFileInfo[]> {
   const folderId = await ensureTripPlanerFolder(true)
   const files = await listFilesInFolder(folderId)
-  return files.filter((f) => /\.xlsx?$/i.test(f.name))
+  return files.filter(
+    (f) =>
+      /\.xlsx?$/i.test(f.name) ||
+      f.mimeType === XLSX_MIME ||
+      f.mimeType === 'application/vnd.google-apps.spreadsheet',
+  )
 }
 
 export async function downloadDriveFile(fileId: string): Promise<ArrayBuffer> {
