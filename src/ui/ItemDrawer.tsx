@@ -142,7 +142,7 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             </p>
           )}
         </div>
-        <button className="text-stone-400 hover:text-stone-800" onClick={onClose}>
+        <button className="text-stone-400 hover:text-stone-800" onClick={onClose} title="Discard edits and close">
           Close
         </button>
       </div>

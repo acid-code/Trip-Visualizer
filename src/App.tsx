@@ -142,6 +142,16 @@ import type { RangeReconcileMode } from './data/dayBases'
 type NavTab = 'timeline' | 'charts' | 'settings'
 type LowerMode = 'none' | 'detail' | 'insert'
 
+function cloneTripItem(item: TripItem): TripItem {
+  return {
+    ...item,
+    tags: [...(item.tags ?? [])],
+    routeCoords: item.routeCoords
+      ? item.routeCoords.map((c) => [c[0], c[1]] as [number, number])
+      : [],
+  }
+}
+
 type AiReviewState = {
   beforeItems: TripItem[]
   draftItems: TripItem[]
@@ -162,6 +172,8 @@ export default function App() {
   const [lowerMode, setLowerMode] = useState<LowerMode>('none')
   /** Detail sheet: peek (compact) → half (50% edit) → closed */
   const [detailExpanded, setDetailExpanded] = useState(false)
+  /** Working copy while Detail is open — committed only via top handle save. */
+  const [stepDraft, setStepDraft] = useState<TripItem | null>(null)
   const [dayFilter, setDayFilter] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
   const [mapStack, setMapStack] = useState<MapStack>(DEFAULT_MAP_STACK)
@@ -264,6 +276,8 @@ export default function App() {
     () => displayTrip?.items.find((i) => i.id === selectedId) ?? null,
     [displayTrip, selectedId],
   )
+  /** Item shown in the detail editor (draft while editing). */
+  const detailItem = stepDraft?.id === selectedId ? stepDraft : selected
 
   const refresh = useCallback(async () => {
     let all = await listTrips()
@@ -376,18 +390,10 @@ export default function App() {
   }, [activeId])
 
   async function persist(next: TripRecord) {
-    const prevEnd = next.meta.endDate
-    const prevStart = next.meta.startDate
     const meta = widenMetaToItems(next.meta, next.items)
     const items = ensureDayStartBases(meta, next.items)
     await saveTrip({ ...next, meta, items })
     setTrips(await listTrips())
-    if (meta.endDate !== prevEnd || meta.startDate !== prevStart) {
-      const days = countTripDays(meta.startDate, meta.endDate)
-      setStatus(
-        `Trip dates updated · ${meta.startDate} → ${meta.endDate} (${days} day${days === 1 ? '' : 's'})`,
-      )
-    }
   }
 
   async function updateActive(mutator: (trip: TripRecord) => TripRecord) {
@@ -750,6 +756,7 @@ export default function App() {
       setSelectedId(null)
       setMapFocusEndpoint(null)
       setRouteWalk(null)
+      setStepDraft(null)
       setLowerMode((m) => (m === 'detail' ? 'none' : m))
       setDetailExpanded(false)
       return
@@ -763,6 +770,7 @@ export default function App() {
       return
     }
     setSelectedId(id)
+    setStepDraft(null)
     setNavTab('timeline')
     setPanelOpen(true)
     setAddContext(null)
@@ -956,10 +964,11 @@ export default function App() {
       return
     }
     if (id === selectedId && lowerMode === 'detail' && detailExpanded) {
-      closeLower()
+      discardStepDetail()
       return
     }
     setSelectedId(id)
+    setStepDraft(item ? cloneTripItem(item) : null)
     setNavTab('timeline')
     setLowerMode('detail')
     setDetailExpanded(true)
@@ -967,16 +976,64 @@ export default function App() {
     setAddContext(null)
   }
 
-  function closeLower() {
-    const wasDetail = lowerMode === 'detail'
+  /** Close detail without writing draft (Close button / discard). */
+  function discardStepDetail() {
+    if (stepDraft) clearTypeSwitchMemory(stepDraft.id)
+    setStepDraft(null)
     setAddContext(null)
     setLowerMode('none')
     setDetailExpanded(false)
-    if (wasDetail) {
-      // Phone: keep highlight on the step so the strip stays centered there
+    if (!isPhone) setSelectedId(null)
+    setStatus('Changes discarded')
+  }
+
+  /** Commit draft + widen trip dates, then close (top handle). */
+  function saveStepDetail() {
+    if (!active || !stepDraft) {
+      setStepDraft(null)
+      setAddContext(null)
+      setLowerMode('none')
+      setDetailExpanded(false)
       if (!isPhone) setSelectedId(null)
-      setStatus('Step saved')
+      return
     }
+    const draft = cloneTripItem(stepDraft)
+    const prevEnd = active.meta.endDate
+    const prevStart = active.meta.startDate
+    setStepDraft(null)
+    setAddContext(null)
+    setLowerMode('none')
+    setDetailExpanded(false)
+    if (!isPhone) setSelectedId(null)
+    void (async () => {
+      await updateActive((t) => ({
+        ...t,
+        items: sortItems(t.items.map((i) => (i.id === draft.id ? draft : i))),
+      }))
+      const trip = await getTrip(active.id)
+      const meta = trip?.meta
+      if (
+        meta &&
+        (meta.endDate !== prevEnd || meta.startDate !== prevStart)
+      ) {
+        const days = countTripDays(meta.startDate, meta.endDate)
+        setStatus(
+          `Step saved · trip ${meta.startDate} → ${meta.endDate} (${days} days)`,
+        )
+      } else {
+        setStatus('Step saved')
+      }
+    })()
+  }
+
+  function closeLower() {
+    if (lowerMode === 'detail') {
+      discardStepDetail()
+      return
+    }
+    setAddContext(null)
+    setLowerMode('none')
+    setDetailExpanded(false)
   }
 
   function onSheetHandle() {
@@ -987,7 +1044,7 @@ export default function App() {
         return
       }
       // Second press: save & close
-      closeLower()
+      saveStepDetail()
       return
     }
     closeLower()
@@ -1056,6 +1113,7 @@ export default function App() {
       clearTempPin()
       setRouteWalk(null)
       setSelectedId(pinned.id)
+      setStepDraft(cloneTripItem(pinned))
       setAddContext(null)
       setNavTab('timeline')
       setLowerMode('detail')
@@ -1174,6 +1232,7 @@ export default function App() {
       setRouteWalk(null)
       setMapFocusEndpoint(null)
       setSelectedId(item.id)
+      setStepDraft(cloneTripItem(item))
       setAddContext(null)
       setNavTab('timeline')
       setLowerMode('detail')
@@ -1377,6 +1436,7 @@ export default function App() {
       setAiRestore(null)
     }
     if (lowerMode !== 'none') {
+      setStepDraft(null)
       setAddContext(null)
       setLowerMode('none')
       setDetailExpanded(false)
@@ -1386,6 +1446,7 @@ export default function App() {
   function openAiCoach() {
     if (aiReview) return
     if (exploreOpen) closeExplore()
+    setStepDraft(null)
     setLowerMode('none')
     setDetailExpanded(false)
     setAddContext(null)
@@ -2356,11 +2417,11 @@ export default function App() {
               isPhone ? 'pb-2' : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]'
             }`}
           >
-            {lowerMode === 'detail' && selected ? (
+            {lowerMode === 'detail' && detailItem ? (
               <div className="h-full min-h-0 overflow-y-auto overscroll-contain">
                 <ItemDrawer
-                  item={selected}
-                  onClose={closeLower}
+                  item={detailItem}
+                  onClose={discardStepDetail}
                   onChange={(item) => {
                     if (aiReview) {
                       if (!itemTouchesDay(item, aiReview.day)) return
@@ -2378,20 +2439,18 @@ export default function App() {
                       )
                       return
                     }
-                    void updateActive((t) => ({
-                      ...t,
-                      items: sortItems(t.items.map((i) => (i.id === item.id ? item : i))),
-                    }))
+                    setStepDraft(cloneTripItem(item))
                   }}
                   onDelete={(id) => {
                     if (aiReview) return
+                    setStepDraft(null)
                     void deleteStep(id)
                   }}
                 />
               </div>
             ) : null}
 
-            {lowerMode === 'detail' && !selected ? (
+            {lowerMode === 'detail' && !detailItem ? (
               <p className="text-sm text-stone-500">Select a step on the map or timeline.</p>
             ) : null}
 
