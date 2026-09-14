@@ -1,8 +1,13 @@
+import { useEffect } from 'react'
 import type { TripItem } from '../domain/types'
 import { ITEM_STATUSES, ITEM_TYPES, TYPE_COLORS } from '../domain/types'
 import { pinItemOnMap } from '../data/enrichment'
 import { COMMON_CURRENCIES, normalizeCurrency } from '../data/fx'
 import { safeHttpsUrl } from '../data/security'
+import {
+  applyItemTypeChange,
+  rememberCurrentType,
+} from '../data/typeSwitch'
 import {
   isIsoDate,
   parseLat,
@@ -22,9 +27,37 @@ type Props = {
 }
 
 export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
+  useEffect(() => {
+    if (item) rememberCurrentType(item)
+  }, [item?.id])
+
   if (!item) return null
 
   const set = <K extends keyof TripItem>(key: K, value: TripItem[K]) => {
+    if (key === 'type') {
+      const nextType = value as TripItem['type']
+      let next = applyItemTypeChange(item, nextType)
+      next = {
+        ...next,
+        source: item.source === 'example' ? 'example' : 'app',
+      }
+      // Multi-night hotel stay → promote off day-base placeholder
+      if (
+        next.type === 'hotel' &&
+        next.tags?.includes('placeholder') &&
+        isIsoDate(next.date) &&
+        isIsoDate(next.endDate) &&
+        next.endDate > next.date
+      ) {
+        next = { ...next, tags: next.tags.filter((t) => t !== 'placeholder') }
+      }
+      if (next.tags?.includes('placeholder') && nextType !== 'hotel') {
+        next = { ...next, tags: next.tags.filter((t) => t !== 'placeholder') }
+      }
+      onChange(next)
+      return
+    }
+
     const next: TripItem = {
       ...item,
       [key]: value,
@@ -49,13 +82,23 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
       next.currency = normalizeCurrency(String(value ?? 'EUR'))
     }
 
+    // Multi-night hotel stay → promote off day-base placeholder so the trip can widen
+    if (
+      next.type === 'hotel' &&
+      next.tags?.includes('placeholder') &&
+      isIsoDate(next.date) &&
+      isIsoDate(next.endDate) &&
+      next.endDate > next.date
+    ) {
+      next.tags = next.tags.filter((t) => t !== 'placeholder')
+    }
+
     if (
       next.tags?.includes('placeholder') &&
-      (key === 'title' || key === 'place' || key === 'city' || key === 'type' || key === 'lat')
+      (key === 'title' || key === 'place' || key === 'city' || key === 'lat')
     ) {
       const meaningful =
         (typeof value === 'string' && value.trim() && value !== item.title) ||
-        (key === 'type' && value !== 'hotel') ||
         (key === 'lat' && value != null)
       if (
         meaningful ||
@@ -75,6 +118,9 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
       item.geocodeQuery?.trim() ||
       (item.city?.trim() && item.title?.trim()),
   )
+
+  const leg = ['flight', 'train', 'bus', 'ferry', 'drive'].includes(item.type)
+  const hotel = item.type === 'hotel'
 
   return (
     <div className="space-y-3">
@@ -125,6 +171,7 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             className={inputCls}
             value={item.type}
             onChange={(e) => set('type', e.target.value as TripItem['type'])}
+            title="Switching type remembers each type’s fields for this step. Shared fields like confirm, place, and cost carry over."
           >
             {ITEM_TYPES.map((t) => (
               <option key={t} value={t}>
@@ -145,15 +192,17 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             }}
           />
         </Field>
-        <Field label="End date">
-          <input
-            className={inputCls}
-            type="date"
-            value={item.endDate && isIsoDate(item.endDate) ? item.endDate : ''}
-            min={isIsoDate(item.date) ? item.date : undefined}
-            onChange={(e) => set('endDate', e.target.value)}
-          />
-        </Field>
+        {(hotel || leg) && (
+          <Field label={hotel ? 'Check-out' : 'End date'}>
+            <input
+              className={inputCls}
+              type="date"
+              value={item.endDate && isIsoDate(item.endDate) ? item.endDate : ''}
+              min={isIsoDate(item.date) ? item.date : undefined}
+              onChange={(e) => set('endDate', e.target.value)}
+            />
+          </Field>
+        )}
         <Field label="Start">
           <input
             className={inputCls}
@@ -186,21 +235,30 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             onChange={(e) => set('city', e.target.value)}
           />
         </Field>
-        <Field label="From">
-          <input
-            className={inputCls}
-            value={item.from}
-            onChange={(e) => set('from', e.target.value)}
-          />
-        </Field>
-        <Field label="To">
-          <input className={inputCls} value={item.to} onChange={(e) => set('to', e.target.value)} />
-        </Field>
+        {leg ? (
+          <>
+            <Field label="From">
+              <input
+                className={inputCls}
+                value={item.from}
+                onChange={(e) => set('from', e.target.value)}
+              />
+            </Field>
+            <Field label="To">
+              <input
+                className={inputCls}
+                value={item.to}
+                onChange={(e) => set('to', e.target.value)}
+              />
+            </Field>
+          </>
+        ) : null}
         <Field label="Confirm">
           <input
             className={inputCls}
             value={item.confirm}
             onChange={(e) => set('confirm', e.target.value)}
+            placeholder="Booking / confirmation ref"
           />
         </Field>
         <Field label="Status">
@@ -264,6 +322,8 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
       </div>
       <p className="text-[11px] text-stone-500">
         Lat/lon fill automatically from the address. Only edit these if the pin is wrong.
+        Changing type remembers each type’s details for this step; shared fields (confirm, place,
+        cost…) carry over.
       </p>
       <button
         type="button"

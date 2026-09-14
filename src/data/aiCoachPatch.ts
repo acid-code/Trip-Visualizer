@@ -188,9 +188,21 @@ function placeToItem(
   end?: string,
   note?: string,
 ): TripItem {
+  // Day Coach must never invent lodging stays. Hotel-tagged places that slip
+  // through (e.g. a hotel restaurant) become restaurant/other steps instead.
+  let type = explorePlaceToItemType(place)
+  if (type === 'hotel') {
+    const primary = (place.tags.primaryType || '').toLowerCase()
+    const foodish =
+      place.category === 'food' ||
+      place.category === 'drink' ||
+      /restaurant|cafe|bakery|bar|food|meal/i.test(primary) ||
+      /lunch|dinner|café|cafe|breakfast|brunch|pub|meal/i.test(note || '')
+    type = foodish ? 'restaurant' : 'other'
+  }
   return {
     id: createId('S'),
-    type: explorePlaceToItemType(place),
+    type,
     title: place.name,
     place: place.address || place.name,
     city: '',

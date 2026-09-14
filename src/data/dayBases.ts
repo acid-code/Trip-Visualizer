@@ -134,7 +134,15 @@ export function widenMetaToItems(meta: TripMeta, items: TripItem[]): TripMeta {
   let endDate = dates.endDate
   let changed = false
   for (const item of items) {
-    if (!isRealStep(item)) continue
+    if (item.status === 'cancelled' || item.type === 'note') continue
+    // Multi-night hotel stays always extend the trip — even if the day-base
+    // shell still has the placeholder tag (user only changed end date).
+    const multiNightHotel =
+      item.type === 'hotel' &&
+      isIsoDate(item.date) &&
+      isIsoDate(item.endDate) &&
+      item.endDate > item.date
+    if (!isRealStep(item) && !multiNightHotel) continue
     if (isIsoDate(item.date) && item.date < startDate) {
       startDate = item.date
       changed = true

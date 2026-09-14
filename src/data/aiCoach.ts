@@ -719,12 +719,12 @@ export async function gatherCoachCandidates(
     }
   }
 
-  // Drop places known closed for every typical visit slot on this calendar day
   const usable = list.filter((p) => {
+    if (p.category === 'hotel') return false
     const hint = summarizeOpenSlots(day, p.openingPeriods, p.openingHours)
     return hint !== 'closed all typical slots'
   })
-  const ranked = usable.length ? usable : list
+  const ranked = usable.length ? usable : list.filter((p) => p.category !== 'hotel')
 
   // Prefer sights earlier in the list for fun/fill so Gemini sees them
   if (intent.fun || intent.fill) {
@@ -898,6 +898,7 @@ function sanitizeOption(
       const candidateId = String(r.candidateId ?? '').trim()
       if (!candidateIds.has(candidateId)) return null
       const place = byCandidate.get(candidateId)
+      if (place?.category === 'hotel') return null
       const start = sanitizeTime(r.start)
       if (place && !placeOpenFor(place, day, start || '12:00')) return null
       return {

@@ -104,6 +104,7 @@ import { DEFAULT_MAP_STACK, type MapStack } from './globe/viewer'
 import { firstOpenableStep } from './globe/viewer'
 import { EXAMPLE_TRIP_ID, exampleItems, exampleMeta } from './data/examples/france-south-loop'
 import { ensureDayStartBases, deleteStepAndPrune, isPlaceholderBase, itemTouchesDay, applyTripMetaRange, countTripDays, widenMetaToItems } from './data/dayBases'
+import { clearTypeSwitchMemory } from './data/typeSwitch'
 import { normalizeCurrency } from './data/fx'
 import {
   isValidCoord,
@@ -375,10 +376,18 @@ export default function App() {
   }, [activeId])
 
   async function persist(next: TripRecord) {
+    const prevEnd = next.meta.endDate
+    const prevStart = next.meta.startDate
     const meta = widenMetaToItems(next.meta, next.items)
     const items = ensureDayStartBases(meta, next.items)
     await saveTrip({ ...next, meta, items })
     setTrips(await listTrips())
+    if (meta.endDate !== prevEnd || meta.startDate !== prevStart) {
+      const days = countTripDays(meta.startDate, meta.endDate)
+      setStatus(
+        `Trip dates updated · ${meta.startDate} → ${meta.endDate} (${days} day${days === 1 ? '' : 's'})`,
+      )
+    }
   }
 
   async function updateActive(mutator: (trip: TripRecord) => TripRecord) {
@@ -1018,6 +1027,7 @@ export default function App() {
 
   async function deleteStep(id: string) {
     if (!active) return
+    clearTypeSwitchMemory(id)
     const { meta, items } = deleteStepAndPrune(active.meta, active.items, id)
     const next = { ...active, meta, items }
     await persist(next)

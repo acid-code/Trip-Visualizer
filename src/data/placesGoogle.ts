@@ -74,31 +74,41 @@ type GooglePlace = {
 }
 
 function categoryFromTypes(primary: string, types: string[]): ExploreCategory {
-  const all = [primary, ...types].map((t) => t.toLowerCase())
+  const p = (primary || '').toLowerCase()
+  const all = [p, ...types.map((t) => t.toLowerCase())].filter(Boolean)
   const has = (t: string) => all.includes(t)
-  // Lodging first — places often also carry food-related types
-  if (
-    has('lodging') ||
-    has('hotel') ||
-    has('motel') ||
-    has('resort_hotel') ||
-    has('extended_stay_hotel') ||
-    has('guest_house') ||
-    has('hostel')
-  ) {
-    return 'hotel'
-  }
-  if (
-    has('restaurant') ||
-    has('cafe') ||
-    has('bakery') ||
-    has('meal_takeaway') ||
-    has('meal_delivery') ||
-    has('food')
-  ) {
-    return 'food'
-  }
-  if (has('bar') || has('night_club') || has('pub')) return 'drink'
+
+  const isLodgingType = (t: string) =>
+    t === 'lodging' ||
+    t === 'hotel' ||
+    t === 'motel' ||
+    t === 'resort_hotel' ||
+    t === 'extended_stay_hotel' ||
+    t === 'guest_house' ||
+    t === 'hostel'
+
+  const isFoodType = (t: string) =>
+    t === 'restaurant' ||
+    t === 'cafe' ||
+    t === 'bakery' ||
+    t === 'meal_takeaway' ||
+    t === 'meal_delivery' ||
+    t === 'food'
+
+  const isDrinkType = (t: string) =>
+    t === 'bar' || t === 'night_club' || t === 'pub'
+
+  // Prefer primaryType — hotel restaurants often also list lodging
+  if (p && isFoodType(p)) return 'food'
+  if (p && isDrinkType(p)) return 'drink'
+  if (p && isLodgingType(p)) return 'hotel'
+
+  // Both food + lodging in secondary types → dining (not a new hotel stay)
+  if (all.some(isFoodType) && all.some(isLodgingType)) return 'food'
+  if (all.some(isDrinkType) && all.some(isLodgingType)) return 'drink'
+  if (all.some(isLodgingType)) return 'hotel'
+  if (all.some(isFoodType)) return 'food'
+  if (all.some(isDrinkType)) return 'drink'
   if (
     has('park') ||
     has('campground') ||
