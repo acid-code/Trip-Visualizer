@@ -108,7 +108,8 @@ Wine tasting: when asked, include ONE winery/wine-cellar candidate as a stop ins
 Water / beach / lake / seaside asks: include at least one beach, lake, marina, harbour, waterfront, or coastal promenade candidate (sights or nature). Prefer seafood or waterfront restaurants when available. Do not plan lunch and dinner as two pizzerias — vary cuisine.
 Star-shaped trips (same hotel several nights): never reuse places already on other days — pick fresh candidates for THIS day only.
 Drives: compact city — addDrives only for stops roughly ≥3 km (shorter hops are walks). Open countryside / Provence-style — addDrives even for ~2 km village hops. Always drive farther out-of-town stops. Chain drives stop→stop in time order (first hop may use fromItemId for hotel/vehicle; later hops use fromCandidateId of the previous addSteps stop). Never fan every drive out from day start.
-
+Transit / arrival: if dayItems include a flight/train/bus/ferry, NEVER schedule addSteps before that leg arrives (use its end time, plus buffer). If dayAvailability.inTransitAllDay or planningHints say the traveler is still traveling, do not fill the day with sights/meals. On afternoon arrivals, skip morning café/lunch — start after arrival.
+Meal timing: cafe ~08:30-10:00, lunch ~12:00-14:00, dinner/pub ~19:00-21:00 — but only when those slots are after any arrival gate.
 Clarifications:
 - Payload may include lines: "Original request:", "Coach asked:", "User replied:".
 - Short answers like "first one" / "the second" / a place name refer to the LAST "Coach asked" question.
@@ -143,7 +144,7 @@ Rules:
 - Empty + drive/countryside: at least one itinerary with addDrives + optional viewpoint + destination + meals.
 - Prefer destination/along_route for countryside days — avoid airport-only food clusters.
 - If dayItems include isVehicleStop, start the FIRST drive from that fromItemId; subsequent drives should use fromCandidateId of the previous stop.
-- Meal timing: cafe ~08:30-10:00, lunch ~12:00-14:00, dinner/pub ~19:00-21:00.
+- Meal timing: cafe ~08:30-10:00, lunch ~12:00-14:00, dinner/pub ~19:00-21:00 — only when those slots are after any arrival gate on the day.
 - Opening hours: candidates may include openingHours and openHint for THIS day. Never schedule addSteps/addDrives to a place at a time it is closed. Prefer places whose openHint covers the visit time. If hours are unknown, you may still suggest them.
 - Never remove flights, hotels, or placeholders via trim.
 - Trim options: removeSteps must use exact dayItems.id where canRemove is true (or matching title). On a busy/full day remove 2–4 weaker content stops — enough that the day feels lighter. Do not only remove a single trivial note when many sights exist.

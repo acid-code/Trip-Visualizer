@@ -15,7 +15,19 @@ export function itemTouchesDay(item: TripItem, day: string): boolean {
   if (item.type === 'hotel' && item.endDate && item.date < day && item.endDate >= day) {
     return true
   }
-  // Explicit end-date match (e.g. checkout day listed on filter)
+  // Multi-day transit still underway (left earlier, arrives later)
+  if (
+    (item.type === 'flight' ||
+      item.type === 'train' ||
+      item.type === 'bus' ||
+      item.type === 'ferry') &&
+    item.endDate &&
+    item.date < day &&
+    item.endDate > day
+  ) {
+    return true
+  }
+  // Explicit end-date match (e.g. checkout day / arrival day of overnight leg)
   if (item.endDate === day && item.date !== day) return true
   return false
 }

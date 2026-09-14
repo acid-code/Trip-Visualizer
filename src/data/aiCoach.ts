@@ -177,6 +177,7 @@ export function diagnoseDay(
   const dayItems = dayItemsForCoach(items, day).filter(
     (i) => i.status !== 'cancelled' && !isPlaceholderBase(i),
   )
+  const avail = resolveDayAvailability(items, day)
   const content = dayItems.filter(
     (i) =>
       ['sight', 'restaurant', 'activity', 'city', 'other'].includes(i.type) &&
@@ -186,15 +187,27 @@ export function diagnoseDay(
   const sights = content.filter(
     (i) => i.type === 'sight' || i.type === 'activity',
   )
+  const gate = avail.earliestStart
   const hasMorning = restaurants.some(
-    (i) => i.start && i.start < '11:00',
+    (i) => i.start && i.start < '11:00' && (!gate || i.start >= gate),
   )
   const hasLunch = restaurants.some(
-    (i) => i.start && i.start >= '11:30' && i.start < '16:00',
+    (i) =>
+      i.start &&
+      i.start >= '11:30' &&
+      i.start < '16:00' &&
+      (!gate || i.start >= gate),
   )
   const hasDinner = restaurants.some(
-    (i) => i.start && i.start >= '18:00',
+    (i) => i.start && i.start >= '18:00' && (!gate || i.start >= gate),
   )
+  // Don't ask to fill meal slots that are impossible before arrival / in transit
+  const morningPossible =
+    !avail.inTransitAllDay && (!gate || gate < '11:00')
+  const lunchPossible =
+    !avail.inTransitAllDay && (!gate || gate < '15:00')
+  const dinnerPossible =
+    !avail.inTransitAllDay && (!gate || gate < '21:00')
   const removable = content.filter((i) =>
     ['sight', 'restaurant', 'activity', 'note', 'other'].includes(i.type),
   )
@@ -219,9 +232,9 @@ export function diagnoseDay(
   return {
     fillLevel,
     mealGaps: {
-      morning: !hasMorning,
-      lunch: !hasLunch,
-      dinner: !hasDinner,
+      morning: morningPossible && !hasMorning,
+      lunch: lunchPossible && !hasLunch,
+      dinner: dinnerPossible && !hasDinner,
     },
     hasVehicle: dayItems.some(isVehicleStop),
     hasDrive: dayItems.some((i) => i.type === 'drive'),
@@ -236,6 +249,168 @@ export function diagnoseDay(
 function timeToMin(t: string): number {
   const [h, m] = t.split(':').map(Number)
   return (h || 0) * 60 + (m || 0)
+}
+
+function minToHm(total: number): string {
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, total))
+  const h = Math.floor(clamped / 60)
+  const m = clamped % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+function addMinutesHm(hm: string, minutes: number): string {
+  return minToHm(timeToMin(hm) + minutes)
+}
+
+const TRANSIT_TYPES = new Set(['flight', 'train', 'bus', 'ferry'])
+
+export type DayAvailability = {
+  /** Earliest HH:MM for new stops (after transit arrival + buffer). */
+  earliestStart: string | null
+  /** True when a multi-day transit covers this whole calendar day. */
+  inTransitAllDay: boolean
+  /** Short labels for planningHints / UI. */
+  notes: string[]
+}
+
+/**
+ * Respect flights/trains/buses/ferries: never schedule coach stops before you
+ * arrive, and treat mid-journey days as fully in transit.
+ */
+export function resolveDayAvailability(
+  items: TripItem[],
+  day: string,
+): DayAvailability {
+  const notes: string[] = []
+  let earliestMin: number | null = null
+  let inTransitAllDay = false
+
+  for (const item of items) {
+    if (item.status === 'cancelled') continue
+    if (!TRANSIT_TYPES.has(item.type)) continue
+
+    const departDay = item.date
+    const arriveDay =
+      item.endDate && /^\d{4}-\d{2}-\d{2}$/.test(item.endDate)
+        ? item.endDate
+        : item.date
+    const departHm = TIME_HM.test(item.start) ? item.start : ''
+    const arriveHm = TIME_HM.test(item.end)
+      ? item.end
+      : TIME_HM.test(item.start)
+        ? item.start
+        : ''
+
+    // Still aboard all day (left earlier, arrives later)
+    if (departDay < day && arriveDay > day) {
+      inTransitAllDay = true
+      notes.push(
+        `${item.type} “${item.title || item.from || 'leg'}” is in progress all day — do not add sightseeing/meals on this day.`,
+      )
+      continue
+    }
+
+    // Arrives today (same-day hop or multi-day arrival)
+    if (arriveDay === day && arriveHm) {
+      const buffer =
+        item.type === 'flight' ? 60 : item.type === 'ferry' ? 45 : 30
+      const free = timeToMin(arriveHm) + buffer
+      if (earliestMin == null || free > earliestMin) {
+        earliestMin = free
+      }
+      const label =
+        item.type === 'flight'
+          ? 'flight'
+          : item.type === 'train'
+            ? 'train'
+            : item.type === 'ferry'
+              ? 'ferry'
+              : 'bus'
+      notes.push(
+        `${label} arrives ${arriveHm}${
+          departDay < day ? ` (started ${departDay})` : ''
+        } — first new stop no earlier than ${minToHm(free)} (includes ${buffer}m buffer).`,
+      )
+    }
+
+    // Departs today on a multi-day leg (not arriving today): leave after departure
+    if (departDay === day && arriveDay > day && departHm) {
+      notes.push(
+        `${item.type} “${item.title || ''}” departs ${departHm} and continues past today — only schedule before departure; nothing after you leave.`,
+      )
+    }
+  }
+
+  if (inTransitAllDay) {
+    return { earliestStart: null, inTransitAllDay: true, notes }
+  }
+
+  const earliestStart =
+    earliestMin != null ? minToHm(earliestMin) : null
+  return { earliestStart, inTransitAllDay: false, notes }
+}
+
+/**
+ * Build a sensible post-arrival arc. Slots before the gate are omitted
+ * (e.g. afternoon flight → no morning café).
+ */
+export function slotsAfterArrival(earliestStart: string | null): {
+  cafe?: string
+  sight?: string
+  lunch?: string
+  afternoon?: string
+  dinner?: string
+} {
+  if (!earliestStart) {
+    return {
+      cafe: '09:00',
+      sight: '10:45',
+      lunch: '13:00',
+      afternoon: '16:00',
+      dinner: '19:30',
+    }
+  }
+  const e = timeToMin(earliestStart)
+  const out: {
+    cafe?: string
+    sight?: string
+    lunch?: string
+    afternoon?: string
+    dinner?: string
+  } = {}
+
+  if (e <= timeToMin('09:30')) {
+    out.cafe = earliestStart > '09:00' ? earliestStart : '09:00'
+    out.sight = addMinutesHm(out.cafe, 90)
+    out.lunch = out.sight < '12:30' ? '13:00' : addMinutesHm(out.sight, 90)
+    out.afternoon = '16:00'
+    out.dinner = '19:30'
+    return out
+  }
+  if (e <= timeToMin('11:30')) {
+    out.sight = earliestStart
+    out.lunch = earliestStart < '12:30' ? '13:00' : addMinutesHm(earliestStart, 75)
+    out.afternoon = '16:30'
+    out.dinner = '19:30'
+    return out
+  }
+  if (e <= timeToMin('14:30')) {
+    out.lunch = earliestStart
+    out.afternoon = addMinutesHm(earliestStart, 120)
+    out.dinner = '19:30'
+    return out
+  }
+  if (e <= timeToMin('17:30')) {
+    out.afternoon = earliestStart
+    out.dinner = earliestStart < '18:30' ? '19:30' : addMinutesHm(earliestStart, 75)
+    return out
+  }
+  if (e <= timeToMin('20:30')) {
+    out.dinner = earliestStart
+    return out
+  }
+  // Very late arrival — nothing sensible to add tonight
+  return out
 }
 
 function placeBlob(p: ExplorePlace): string {
@@ -806,6 +981,18 @@ function buildPlanningHints(
       .join(', ') || 'generic'}.`,
   )
 
+  const avail = resolveDayAvailability(items, day)
+  for (const n of avail.notes) hints.push(n)
+  if (avail.inTransitAllDay) {
+    hints.push(
+      'CRITICAL: traveler is in transit all day — do NOT add café/sights/meals. Prefer need_clarification or a note-only option if anything.',
+    )
+  } else if (avail.earliestStart) {
+    hints.push(
+      `CRITICAL: do not schedule any addSteps/addDrives before ${avail.earliestStart}. Skip morning/lunch slots that fall before arrival; start the day after the transit arrives.`,
+    )
+  }
+
   if (diagnosis.fillLevel === 'empty') {
     hints.push(
       'Empty/skeleton day: help fill THIS day. Prefer a full-day itinerary with café + fun sight + lunch + dinner when asked to fill/plan/fun.',
@@ -1275,6 +1462,7 @@ export function buildCoachRequestBody(args: {
       title: i.title,
       place: i.place,
       date: i.date,
+      endDate: i.endDate || undefined,
       start: i.start,
       end: i.end,
       lat: i.lat,
@@ -1304,6 +1492,8 @@ export function buildCoachRequestBody(args: {
     })
   })
 
+  const avail = resolveDayAvailability(trip.items, day)
+
   return {
     day,
     userMessage: userMessage.slice(0, 2000),
@@ -1315,6 +1505,11 @@ export function buildCoachRequestBody(args: {
     dayFillLevel: diagnosis.fillLevel,
     anchor,
     dayItems: trimmed,
+    dayAvailability: {
+      earliestStart: avail.earliestStart,
+      inTransitAllDay: avail.inTransitAllDay,
+      notes: avail.notes.slice(0, 6),
+    },
     candidates: tagged,
     planningHints: buildPlanningHints(
       trip.items,
@@ -1687,6 +1882,15 @@ export function localHeuristicOptions(
   const fromId = vehicle?.id ?? hotel?.id
   const options: AiCoachOption[] = []
   const dayPlaceholders = body.dayItems.filter((i) => i.isPlaceholder)
+  const avail = body.dayAvailability ?? {
+    earliestStart: null,
+    inTransitAllDay: false,
+    notes: [],
+  }
+  const slots = avail.inTransitAllDay
+    ? {}
+    : slotsAfterArrival(avail.earliestStart)
+
   const clearBases = (): NonNullable<AiCoachOption['patch']['removeSteps']> =>
     dayPlaceholders.map((p) => ({ itemId: p.id }))
 
@@ -1697,6 +1901,27 @@ export function localHeuristicOptions(
     const extra = clearBases().filter((r) => !seen.has(r.itemId))
     if (!extra.length) return patch
     return { ...patch, removeSteps: [...existing, ...extra] }
+  }
+
+  // In-transit calendar day — don't invent a sightseeing day at either end
+  if (avail.inTransitAllDay) {
+    return [
+      {
+        id: 'local-in-transit',
+        label: 'Still traveling',
+        kind: 'other',
+        summary: 'This day is spent in transit — nothing to add before you arrive.',
+        rationale:
+          'A flight/train/bus/ferry spans this whole day. Wait until the arrival day to fill activities.',
+        patch: withClearedBases({
+          addNote: {
+            title: 'In transit',
+            notes: avail.notes[0] || 'Travel day — no local plan until arrival.',
+            start: '12:00',
+          },
+        }),
+      },
+    ]
   }
 
   function openAreaTravel(): boolean {
@@ -1737,10 +1962,10 @@ export function localHeuristicOptions(
     steps: NonNullable<AiCoachOption['patch']['addSteps']>,
     used: Set<string>,
     place: ExplorePlace | undefined,
-    start: string,
+    start: string | undefined,
     note: string,
   ) {
-    if (!place) return
+    if (!place || !start) return
     const key = placeDedupeKey(place)
     if (used.has(place.id) || used.has(key)) return
     used.add(place.id)
@@ -1814,79 +2039,49 @@ export function localHeuristicOptions(
           sightsFar.find((s) => !used.has(s.id))
         const meals = pickMeals(true)
         const addSteps: NonNullable<AiCoachOption['patch']['addSteps']> = []
-        if (meals.cafe) {
-          addSteps.push({
-            candidateId: meals.cafe.id,
-            start: '09:00',
-            note: 'Morning café',
-          })
-        }
-        if (pit) {
-          addSteps.push({
-            candidateId: pit.id,
-            start: '10:45',
-            note: 'Viewpoint on the way',
-          })
-        }
+        const usedSlots = new Set<string>([dest.id])
+        pushUnique(addSteps, usedSlots, meals.cafe, slots.cafe, 'Morning café')
+        pushUnique(addSteps, usedSlots, pit, slots.sight, 'Viewpoint on the way')
         if (dest.category === 'sights' || dest.category === 'nature') {
-          addSteps.push({
-            candidateId: dest.id,
-            start: '11:45',
-            note: 'Main day-trip stop',
-          })
-        }
-        if (meals.lunch) {
-          addSteps.push({
-            candidateId: meals.lunch.id,
-            start: '13:00',
-            note: 'Lunch',
-          })
-        }
-        if (meals.dinner) {
-          addSteps.push({
-            candidateId: meals.dinner.id,
-            start: '19:30',
-            note: isPubPlace(meals.dinner) ? 'Evening pub' : 'Dinner',
-          })
-        }
-        options.push({
-          id: 'local-drive-day',
-          label: 'Drive day plan',
-          kind: 'itinerary',
-          summary: `Drive toward ${dest.name} with meals timed to the route.`,
-          rationale: 'Empty drive day: vehicle → scenic stop → destination → meals.',
-          patch: withClearedBases({
+          pushUnique(
             addSteps,
-            addDrives: drivesForFarSteps(addSteps),
-          }),
-        })
+            usedSlots,
+            dest,
+            slots.sight && !pit ? slots.sight : slots.afternoon || slots.lunch || slots.dinner,
+            'Main day-trip stop',
+          )
+        }
+        pushUnique(addSteps, usedSlots, meals.lunch, slots.lunch, 'Lunch')
+        pushUnique(
+          addSteps,
+          usedSlots,
+          meals.dinner,
+          slots.dinner,
+          meals.dinner && isPubPlace(meals.dinner) ? 'Evening pub' : 'Dinner',
+        )
+        if (addSteps.length) {
+          options.push({
+            id: 'local-drive-day',
+            label: 'Drive day plan',
+            kind: 'itinerary',
+            summary: `Drive toward ${dest.name} with meals timed to the route.`,
+            rationale: 'Empty drive day: vehicle → scenic stop → destination → meals.',
+            patch: withClearedBases({
+              addSteps,
+              addDrives: drivesForFarSteps(addSteps),
+            }),
+          })
+        }
       }
       // Stay-local alternative
       if (sightsNear[0] || foodAll[0]) {
         const meals = pickMeals(false)
         const fun = sightsNear[0] || sights[0]
         const steps: NonNullable<AiCoachOption['patch']['addSteps']> = []
-        if (meals.cafe) {
-          steps.push({
-            candidateId: meals.cafe.id,
-            start: '09:30',
-            note: 'Café near base',
-          })
-        }
-        if (fun) {
-          steps.push({
-            candidateId: fun.id,
-            start: '11:00',
-            note: 'Stay-local highlight',
-          })
-        }
-        if (meals.lunch) {
-          steps.push({
-            candidateId: meals.lunch.id,
-            start: '13:00',
-            note: 'Lunch',
-          })
-        }
+        const usedLocal = new Set<string>()
+        pushUnique(steps, usedLocal, meals.cafe, slots.cafe, 'Café near base')
+        pushUnique(steps, usedLocal, fun, slots.sight, 'Stay-local highlight')
+        pushUnique(steps, usedLocal, meals.lunch, slots.lunch, 'Lunch')
         if (steps.length) {
           options.push({
             id: 'local-stay-near',
@@ -1938,21 +2133,21 @@ export function localHeuristicOptions(
       if (waterMain) {
         const waterSteps: NonNullable<AiCoachOption['patch']['addSteps']> = []
         const used = new Set<string>([waterMain.id, placeDedupeKey(waterMain)])
-        pushUnique(waterSteps, used, meals.cafe, '09:00', 'Morning café')
-        pushUnique(waterSteps, used, waterMain, '10:45', 'By the water')
-        pushUnique(waterSteps, used, meals.lunch, '13:00', 'Lunch')
+        pushUnique(waterSteps, used, meals.cafe, slots.cafe, 'Morning café')
+        pushUnique(waterSteps, used, waterMain, slots.sight, 'By the water')
+        pushUnique(waterSteps, used, meals.lunch, slots.lunch, 'Lunch')
         pushUnique(
           waterSteps,
           used,
           water2,
-          '16:00',
+          slots.afternoon,
           'Waterfront / lakeside stop',
         )
         pushUnique(
           waterSteps,
           used,
           meals.dinner,
-          '19:30',
+          slots.dinner,
           meals.dinner && isSeafoodPlace(meals.dinner)
             ? 'Seafood dinner'
             : meals.dinner && isPubPlace(meals.dinner)
@@ -1998,22 +2193,24 @@ export function localHeuristicOptions(
         const wineSteps: NonNullable<AiCoachOption['patch']['addSteps']> = []
         const used = new Set<string>([tasting.id, placeDedupeKey(tasting)])
         if (pairWithDay || fill === 'empty') {
-          pushUnique(wineSteps, used, meals.cafe, '09:00', 'Morning café')
-          pushUnique(wineSteps, used, fun, '10:30', 'Sightseeing')
-          pushUnique(wineSteps, used, meals.lunch, '12:30', 'Lunch')
+          pushUnique(wineSteps, used, meals.cafe, slots.cafe, 'Morning café')
+          pushUnique(wineSteps, used, fun, slots.sight, 'Sightseeing')
+          pushUnique(wineSteps, used, meals.lunch, slots.lunch, 'Lunch')
         }
-        wineSteps.push({
-          candidateId: tasting.id,
-          start: '15:00',
-          note: 'Wine tasting',
-        })
+        if (slots.afternoon || slots.sight) {
+          wineSteps.push({
+            candidateId: tasting.id,
+            start: slots.afternoon || slots.sight || slots.dinner || '15:00',
+            note: 'Wine tasting',
+          })
+        }
         if (pairWithDay || fill === 'empty') {
-          pushUnique(wineSteps, used, fun2, '17:00', 'Afternoon sight')
+          pushUnique(wineSteps, used, fun2, slots.afternoon, 'Afternoon sight')
           pushUnique(
             wineSteps,
             used,
             meals.dinner,
-            '19:30',
+            slots.dinner,
             meals.dinner && isPubPlace(meals.dinner)
               ? 'Evening pub'
               : 'Dinner',
@@ -2068,25 +2265,31 @@ export function localHeuristicOptions(
         intent.fill || intent.fun || intent.generic || intent.wine || intent.water || !intent.food
       const fillSteps: NonNullable<AiCoachOption['patch']['addSteps']> = []
       const used = new Set<string>()
-      if (meals.cafe) pushUnique(fillSteps, used, meals.cafe, '09:00', 'Morning café')
+      if (meals.cafe) pushUnique(fillSteps, used, meals.cafe, slots.cafe, 'Morning café')
       if (fun && wantActivity) {
-        pushUnique(fillSteps, used, fun, '10:30', 'Fun thing in the area')
+        pushUnique(fillSteps, used, fun, slots.sight, 'Fun thing in the area')
       }
-      if (meals.lunch) pushUnique(fillSteps, used, meals.lunch, '13:00', 'Lunch')
+      if (meals.lunch) pushUnique(fillSteps, used, meals.lunch, slots.lunch, 'Lunch')
       if (fun2 && (intent.fill || intent.fun || intent.generic || intent.wine || intent.water)) {
-        pushUnique(fillSteps, used, fun2, '15:30', 'Afternoon activity')
+        pushUnique(fillSteps, used, fun2, slots.afternoon, 'Afternoon activity')
       }
       if (meals.dinner) {
         pushUnique(
           fillSteps,
           used,
           meals.dinner,
-          '19:30',
+          slots.dinner,
           isPubPlace(meals.dinner) ? 'High-rated pub' : 'Dinner',
         )
       }
       if (meals.nightcap) {
-        pushUnique(fillSteps, used, meals.nightcap, '21:15', 'Pub after dinner')
+        pushUnique(
+          fillSteps,
+          used,
+          meals.nightcap,
+          slots.dinner ? addMinutesHm(slots.dinner, 105) : undefined,
+          'Pub after dinner',
+        )
       }
       const byId = new Map(candidates.map((c) => [c.id, c]))
       if (
@@ -2621,6 +2824,14 @@ export function critiqueAndRepairOptions(
   const vehicle = body.dayItems.find((i) => i.isVehicleStop)
   const hotel = body.dayItems.find((i) => i.type === 'hotel')
   const dayStartId = vehicle?.id ?? hotel?.id
+  const avail = body.dayAvailability ?? {
+    earliestStart: null as string | null,
+    inTransitAllDay: false,
+    notes: [] as string[],
+  }
+  const postArrival = avail.inTransitAllDay
+    ? {}
+    : slotsAfterArrival(avail.earliestStart)
   const issues: string[] = []
   const out: AiCoachOption[] = []
   const sightPool = candidates
@@ -2684,11 +2895,42 @@ export function critiqueAndRepairOptions(
     }
     const steps = opt.patch.addSteps ?? []
     const drives = opt.patch.addDrives ?? []
-    const stepIds = new Set(steps.map((s) => s.candidateId))
+
+    // Transit gate: drop stops/drives scheduled before arrival (or wipe fills on in-transit days)
+    if (avail.inTransitAllDay) {
+      if (steps.length || drives.length) {
+        issues.push(
+          `Option "${opt.label}": day is fully in transit — remove sightseeing/meal stops until arrival day.`,
+        )
+        opt.patch.addSteps = []
+        opt.patch.addDrives = []
+      }
+    } else if (avail.earliestStart) {
+      const gate = avail.earliestStart
+      const before = (opt.patch.addSteps ?? []).filter(
+        (s) => s.start && s.start < gate,
+      )
+      if (before.length) {
+        issues.push(
+          `Option "${opt.label}": ${before.length} stop(s) before arrival gate ${gate} — removed or need retiming after transit.`,
+        )
+        opt.patch.addSteps = (opt.patch.addSteps ?? []).filter(
+          (s) => !s.start || s.start >= gate,
+        )
+      }
+      opt.patch.addDrives = (opt.patch.addDrives ?? []).filter((d) => {
+        const t = d.start || d.end
+        return !t || t >= gate
+      })
+    }
+
+    const stepsAfterGate = opt.patch.addSteps ?? []
+    const drivesAfterGate = opt.patch.addDrives ?? []
+    const stepIds2 = new Set(stepsAfterGate.map((s) => s.candidateId))
 
     // Auto-repair: every drive destination must also be a stop (no revise needed)
-    for (const d of drives) {
-      if (stepIds.has(d.toCandidateId)) continue
+    for (const d of drivesAfterGate) {
+      if (stepIds2.has(d.toCandidateId)) continue
       if (!byId.has(d.toCandidateId)) {
         issues.push(
           `Option "${opt.label}": drive to unknown candidate ${d.toCandidateId} — remove or replace.`,
@@ -2696,14 +2938,16 @@ export function critiqueAndRepairOptions(
         continue
       }
       const arrive = d.end || d.start || '12:00'
-      steps.push({
+      if (avail.earliestStart && arrive < avail.earliestStart) continue
+      stepsAfterGate.push({
         candidateId: d.toCandidateId,
         start: arrive,
         note: 'Stop at end of drive',
       })
-      stepIds.add(d.toCandidateId)
+      stepIds2.add(d.toCandidateId)
     }
-    opt.patch.addSteps = steps
+    opt.patch.addSteps = stepsAfterGate
+    opt.patch.addDrives = drivesAfterGate
 
     // Closed at visit time — strip locally; ask model to replace if option goes empty later
     for (const s of [...(opt.patch.addSteps ?? [])]) {
@@ -2784,9 +3028,10 @@ export function critiqueAndRepairOptions(
 
       const insertChrono = (
         candidateId: string,
-        start: string,
+        start: string | undefined,
         note: string,
       ) => {
+        if (!start) return
         if (used.has(candidateId)) return
         const place = byId.get(candidateId)
         if (place) {
@@ -2800,50 +3045,69 @@ export function critiqueAndRepairOptions(
       }
 
       if (intent.water && !hasWater() && waterPool.length) {
-        const inject = pickOpenCandidate(waterPool, used, body.day, '10:45')
-        if (inject) insertChrono(inject.id, '10:45', 'By the water')
+        const t = postArrival.sight || postArrival.afternoon || postArrival.lunch
+        const inject = t
+          ? pickOpenCandidate(waterPool, used, body.day, t)
+          : undefined
+        if (inject && t) insertChrono(inject.id, t, 'By the water')
       }
       if (!hasSight() && sightPool.length) {
-        const inject = pickOpenCandidate(sightPool, used, body.day, '10:45')
-        if (inject) insertChrono(inject.id, '10:45', 'Sightseeing stop')
+        const t = postArrival.sight || postArrival.afternoon || postArrival.lunch
+        const inject = t
+          ? pickOpenCandidate(sightPool, used, body.day, t)
+          : undefined
+        if (inject && t) insertChrono(inject.id, t, 'Sightseeing stop')
       }
       if (!hasLunchish() && lunchPool.length) {
-        const inject = pickOpenCandidate(lunchPool, used, body.day, '13:00')
-        if (inject) insertChrono(inject.id, '13:00', 'Lunch')
+        const t = postArrival.lunch
+        const inject = t
+          ? pickOpenCandidate(lunchPool, used, body.day, t)
+          : undefined
+        if (inject && t) insertChrono(inject.id, t, 'Lunch')
       } else if (!hasLunchish() && cafePool.length && adds.length <= 1) {
-        const inject = pickOpenCandidate(cafePool, used, body.day, '09:00')
-        if (inject) insertChrono(inject.id, '09:00', 'Morning café')
+        const t = postArrival.cafe
+        const inject = t
+          ? pickOpenCandidate(cafePool, used, body.day, t)
+          : undefined
+        if (inject && t) insertChrono(inject.id, t, 'Morning café')
       }
       if (intent.wine && !hasWine() && winePool.length) {
-        const inject = pickOpenCandidate(winePool, used, body.day, '15:00')
-        if (inject) insertChrono(inject.id, '15:00', 'Wine tasting')
+        const t =
+          postArrival.afternoon || postArrival.sight || postArrival.dinner
+        const inject = t
+          ? pickOpenCandidate(winePool, used, body.day, t)
+          : undefined
+        if (inject && t) insertChrono(inject.id, t, 'Wine tasting')
       }
       if (!hasDinnerish() && dinnerPool.length) {
-        const lunchStep = adds.find((s) => {
-          const t = s.start || ''
-          return t >= '11:30' && t < '16:00'
-        })
-        const lunchPlace = lunchStep
-          ? byId.get(lunchStep.candidateId)
-          : undefined
-        const lunchFamily = lunchPlace ? cuisineFamily(lunchPlace) : ''
-        const diverse =
-          dinnerPool.find(
-            (c) =>
-              !used.has(c.id) &&
-              cuisineFamily(c) !== lunchFamily &&
-              placeOpenFor(c, body.day, '19:30'),
-          ) || pickOpenCandidate(dinnerPool, used, body.day, '19:30')
-        if (diverse) {
-          insertChrono(
-            diverse.id,
-            '19:30',
-            isSeafoodPlace(diverse)
-              ? 'Seafood dinner'
-              : isPubPlace(diverse)
-                ? 'Evening pub'
-                : 'Dinner',
-          )
+        const t = postArrival.dinner
+        if (t) {
+          const lunchStep = adds.find((s) => {
+            const st = s.start || ''
+            return st >= '11:30' && st < '16:00'
+          })
+          const lunchPlace = lunchStep
+            ? byId.get(lunchStep.candidateId)
+            : undefined
+          const lunchFamily = lunchPlace ? cuisineFamily(lunchPlace) : ''
+          const diverse =
+            dinnerPool.find(
+              (c) =>
+                !used.has(c.id) &&
+                cuisineFamily(c) !== lunchFamily &&
+                placeOpenFor(c, body.day, t),
+            ) || pickOpenCandidate(dinnerPool, used, body.day, t)
+          if (diverse) {
+            insertChrono(
+              diverse.id,
+              t,
+              isSeafoodPlace(diverse)
+                ? 'Seafood dinner'
+                : isPubPlace(diverse)
+                  ? 'Evening pub'
+                  : 'Dinner',
+            )
+          }
         }
       } else if (hasLunchish() && hasDinnerish()) {
         const lunchStep = adds.find((s) => {
@@ -2890,8 +3154,11 @@ export function critiqueAndRepairOptions(
         adds.length < 4 &&
         sightPool.length
       ) {
-        const inject = pickOpenCandidate(sightPool, used, body.day, '17:00')
-        if (inject) insertChrono(inject.id, '17:00', 'Afternoon sight')
+        const t = postArrival.afternoon
+        const inject = t
+          ? pickOpenCandidate(sightPool, used, body.day, t)
+          : undefined
+        if (inject && t) insertChrono(inject.id, t, 'Afternoon sight')
       }
 
       opt.patch.addSteps = adds

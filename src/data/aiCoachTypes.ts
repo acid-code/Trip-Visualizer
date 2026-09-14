@@ -86,6 +86,7 @@ export type AiCoachDayItem = {
   title: string
   place: string
   date: string
+  endDate?: string
   start: string
   end: string
   lat: number | null
@@ -112,6 +113,15 @@ export type AiCoachRequestBody = {
   anchor: { lat: number; lon: number; label: string } | null
   dayItems: AiCoachDayItem[]
   candidates: AiCoachCandidate[]
+  /**
+   * Transit gate for this day (flight/train/bus/ferry arrival).
+   * Coach must not schedule new stops before earliestStart; skip fills when inTransitAllDay.
+   */
+  dayAvailability?: {
+    earliestStart: string | null
+    inTransitAllDay: boolean
+    notes: string[]
+  }
   /** Soft planning hints for the model (meal gaps, drive intent, etc.). */
   planningHints?: string[]
   /**
