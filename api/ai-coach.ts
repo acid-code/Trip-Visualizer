@@ -4,6 +4,8 @@
  *
  * Free-tier reality (text-out): most Flash models ≈ 20 RPD; Flash Lite ≈ 500 RPD.
  * Prefer Lite for headroom, then quality Flash if Lite is down/quota-exhausted.
+ *
+ * Client may call twice: propose, then revise with critiqueFeedback (max 1 revise).
  */
 
 export const config = {
@@ -89,9 +91,11 @@ You never change other days.
 Use planningHints and dayFillLevel as the day diagnosis.
 
 Match effort to dayFillLevel:
-- empty: help fill THIS day. For fill/fun/plan, return an itinerary with cafe + at least one sights/nature stop + lunch + dinner — NEVER only a morning cafe.
-- partial: offer THREE different light tweaks (e.g. activity add, meal-gap fill, trim or pace). Do NOT rebuild the whole day.
-- full: offer THREE polish options (trim, one quality upgrade, pacing) — not a new full itinerary.
+- empty: help fill THIS day. For fill/fun/plan, prefer an itinerary with cafe + at least one sights/nature stop + lunch + dinner — NEVER only a morning cafe.
+- partial: offer 1–3 light tweaks (activity add, meal-gap fill, trim or pace). Do NOT rebuild the whole day.
+- full: offer 1–3 polish options (trim, quality upgrade, pacing) — not a new full itinerary.
+
+Quality over quantity: return 1–3 solid options. One strong option is fine. Do not pad with weak duplicates.
 
 Default meal arc on empty food fills (3 stops unless user asks otherwise):
 1) morning cafe ~09:00
@@ -104,6 +108,10 @@ Clarifications:
 - Payload may include lines: "Original request:", "Coach asked:", "User replied:".
 - Short answers like "first one" / "the second" / a place name refer to the LAST "Coach asked" question.
 - Resolve that answer, then return options. Do NOT ask the same clarifying question again.
+
+Critique / revise loop:
+- Payload may include critiqueFeedback: an array of concrete problems with your previous options.
+- When critiqueFeedback is present, FIX every listed issue and return corrected options (or clarification if truly blocked). Do not repeat the same mistakes. Prefer repairing patches over asking a new question.
 
 Respond with JSON only, one of:
 {"kind":"need_clarification","question":"short question"}
@@ -124,7 +132,6 @@ Respond with JSON only, one of:
 
 Rules:
 - Prefer options over clarification unless truly blocked (no usable candidates / impossible constraint).
-- When candidates.length >= 6, return EXACTLY 3 options (max 5), each a different kind or different primary candidate.
 - Every addSteps/addDrives toCandidateId MUST exist in candidates.
 - setTimes / removeSteps itemId MUST be ids from dayItems for this day.
 - When addDrives points at a place, ALSO include that place in addSteps (stop must appear, not only the drive).
@@ -177,6 +184,10 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     return
   }
 
+  const critiqueFeedback = Array.isArray(body.critiqueFeedback)
+    ? body.critiqueFeedback.map((c) => clamp(String(c), 300)).filter(Boolean).slice(0, 12)
+    : []
+
   const payload = {
     day,
     userMessage,
@@ -198,15 +209,22 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     planningHints: Array.isArray(body.planningHints)
       ? body.planningHints.map((h) => clamp(String(h), 240)).slice(0, 16)
       : [],
+    ...(critiqueFeedback.length ? { critiqueFeedback } : {}),
   }
 
-  const userText = `Full day context (authoritative — ignore any chat memory):\n${JSON.stringify(payload)}`
+  const reviseNote = critiqueFeedback.length
+    ? `\n\nREVISION REQUIRED — fix these critique issues before answering:\n${critiqueFeedback
+        .map((c, i) => `${i + 1}. ${c}`)
+        .join('\n')}`
+    : ''
+
+  const userText = `Full day context (authoritative — ignore any chat memory):\n${JSON.stringify(payload)}${reviseNote}`
   const models = modelCascade()
   const requestBody = JSON.stringify({
     systemInstruction: { parts: [{ text: SYSTEM }] },
     contents: [{ role: 'user', parts: [{ text: userText }] }],
     generationConfig: {
-      temperature: 0.45,
+      temperature: critiqueFeedback.length ? 0.35 : 0.45,
       responseMimeType: 'application/json',
     },
   })

@@ -589,7 +589,7 @@ function buildPlanningHints(
     'When clarifications include Original request / Coach asked / User replied, resolve short answers like “first one” against Coach asked, then return options — do not re-ask.',
   )
   hints.push(
-    'Return exactly 3 options when candidates ≥ 6, each a different kind or primary candidate.',
+    'Return 1–3 solid options (quality over quantity). One strong option is fine.',
   )
   return hints
 }
@@ -1731,19 +1731,190 @@ function repairJunkOptions(
   })
 }
 
+/**
+ * Deterministic repair + critique for one propose pass.
+ * Auto-fixes cheap issues (drive without stop); collects the rest for a revise call.
+ */
+export function critiqueAndRepairOptions(
+  body: AiCoachRequestBody,
+  candidates: ExplorePlace[],
+  options: AiCoachOption[],
+): { options: AiCoachOption[]; issues: string[] } {
+  const intent = detectCoachIntent(body.userMessage)
+  const byId = new Map(candidates.map((c) => [c.id, c]))
+  const fill =
+    body.dayFillLevel ?? (body.thinDay ? 'empty' : 'partial')
+  const issues: string[] = []
+  const out: AiCoachOption[] = []
+
+  for (const raw of options) {
+    const opt: AiCoachOption = {
+      ...raw,
+      patch: {
+        ...raw.patch,
+        addSteps: [...(raw.patch.addSteps ?? [])],
+        addDrives: [...(raw.patch.addDrives ?? [])],
+        setTimes: [...(raw.patch.setTimes ?? [])],
+        removeSteps: [...(raw.patch.removeSteps ?? [])],
+      },
+    }
+    const steps = opt.patch.addSteps ?? []
+    const drives = opt.patch.addDrives ?? []
+    const stepIds = new Set(steps.map((s) => s.candidateId))
+
+    // Auto-repair: every drive destination must also be a stop (no revise needed)
+    for (const d of drives) {
+      if (stepIds.has(d.toCandidateId)) continue
+      if (!byId.has(d.toCandidateId)) {
+        issues.push(
+          `Option "${opt.label}": drive to unknown candidate ${d.toCandidateId} — remove or replace.`,
+        )
+        continue
+      }
+      const arrive = d.end || d.start || '12:00'
+      steps.push({
+        candidateId: d.toCandidateId,
+        start: arrive,
+        note: 'Stop at end of drive',
+      })
+      stepIds.add(d.toCandidateId)
+    }
+    opt.patch.addSteps = steps
+
+    // Closed at visit time — strip locally; ask model to replace if option goes empty later
+    for (const s of [...(opt.patch.addSteps ?? [])]) {
+      const place = byId.get(s.candidateId)
+      if (!place) continue
+      const start = s.start || '12:00'
+      if (!placeOpenFor(place, body.day, start)) {
+        issues.push(
+          `Option "${opt.label}": ${place.name} is closed around ${start} on ${body.day} — pick an open place or different time.`,
+        )
+        opt.patch.addSteps = (opt.patch.addSteps ?? []).filter(
+          (x) => !(x.candidateId === s.candidateId && x.start === s.start),
+        )
+      }
+    }
+
+    // Fun/activity ≠ restaurant substitute
+    if (intent.fun) {
+      const adds = opt.patch.addSteps ?? []
+      const hasSight = adds.some((s) => {
+        const p = byId.get(s.candidateId)
+        return p && (p.category === 'sights' || p.category === 'nature')
+      })
+      const onlyFood =
+        adds.length > 0 &&
+        adds.every((s) => {
+          const p = byId.get(s.candidateId)
+          return p && (p.category === 'food' || p.category === 'drink')
+        })
+      if (onlyFood || (!hasSight && opt.kind !== 'food' && opt.kind !== 'trim' && opt.kind !== 'pacing')) {
+        if (onlyFood) {
+          issues.push(
+            `Option "${opt.label}": fun/activity ask must include a sights/nature stop — not only restaurants.`,
+          )
+        }
+      }
+    }
+
+    // Empty fill: lone café is junk
+    if (
+      (fill === 'empty' && (intent.fill || intent.fun || intent.generic)) ||
+      intent.fill
+    ) {
+      const adds = opt.patch.addSteps ?? []
+      if (adds.length === 1) {
+        const p = byId.get(adds[0]!.candidateId)
+        if (p && (p.category === 'food' || p.category === 'drink')) {
+          issues.push(
+            `Option "${opt.label}": empty/fill day must not be only a café — include sight + meals or a fuller itinerary.`,
+          )
+        }
+      }
+    }
+
+    // Trim must actually remove something meaningful
+    if (opt.kind === 'trim') {
+      const rms = opt.patch.removeSteps ?? []
+      if (!rms.length) {
+        issues.push(
+          `Option "${opt.label}": trim has no removeSteps — use real dayItems.id values.`,
+        )
+      }
+    }
+
+    // Chronology: flag severe out-of-order starts
+    const timed = (opt.patch.addSteps ?? [])
+      .filter((s) => s.start)
+      .map((s) => s.start!)
+    for (let i = 1; i < timed.length; i++) {
+      if (timed[i]! < timed[i - 1]!) {
+        issues.push(
+          `Option "${opt.label}": stop times go backwards (${timed[i - 1]} then ${timed[i]}) — order chronologically.`,
+        )
+        break
+      }
+    }
+
+    const hasAction =
+      (opt.patch.addSteps?.length ?? 0) ||
+      (opt.patch.addDrives?.length ?? 0) ||
+      (opt.patch.setTimes?.length ?? 0) ||
+      (opt.patch.removeSteps?.length ?? 0) ||
+      opt.patch.addNote
+    if (hasAction) out.push(opt)
+    else {
+      issues.push(`Option "${opt.label}": patch became empty after repairs — rebuild it.`)
+    }
+  }
+
+  // Deduplicate issues for the revise prompt
+  const uniqIssues = [...new Set(issues)].slice(0, 12)
+  return { options: out, issues: uniqIssues }
+}
+
+/** Keep model options as-is; only fall back locally when nothing usable remains. */
+export function finalizeCoachOptions(
+  body: AiCoachRequestBody,
+  candidates: ExplorePlace[],
+  options: AiCoachOption[],
+): AiCoachOption[] {
+  const cleaned = repairJunkOptions(body, candidates, options)
+  const repaired = critiqueAndRepairOptions(body, candidates, cleaned)
+  if (repaired.options.length) {
+    return diversifyByKind(dedupeOptions(repaired.options), 5).slice(0, 5)
+  }
+  const local = localHeuristicOptions(body, candidates).slice(0, 2)
+  return diversifyByKind(dedupeOptions(local), 5).slice(0, 2)
+}
+
+/** @deprecated use finalizeCoachOptions — kept so older imports keep working */
 export function ensureMinCoachOptions(
   body: AiCoachRequestBody,
   candidates: ExplorePlace[],
   options: AiCoachOption[],
 ): AiCoachOption[] {
-  const min = candidates.length >= 6 ? 3 : Math.min(2, Math.max(1, candidates.length))
-  const cleaned = repairJunkOptions(body, candidates, options)
-  if (cleaned.length >= min) {
-    return diversifyByKind(dedupeOptions(cleaned), 5)
-  }
-  const local = localHeuristicOptions(body, candidates)
-  const merged = dedupeOptions([...cleaned, ...local])
-  return diversifyByKind(merged, 5).slice(0, Math.max(min, Math.min(5, merged.length)))
+  return finalizeCoachOptions(body, candidates, options)
+}
+
+async function fetchCoachOnce(
+  body: AiCoachRequestBody,
+  signal?: AbortSignal,
+): Promise<{ ok: true; data: unknown } | { ok: false; status: number; error: string }> {
+  const res = await fetch('/api/ai-coach', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  })
+  const data = (await res.json()) as unknown
+  if (res.ok) return { ok: true, data }
+  const err =
+    data && typeof data === 'object' && 'error' in data
+      ? String((data as { error: unknown }).error)
+      : `Coach failed (${res.status})`
+  return { ok: false, status: res.status, error: err }
 }
 
 export async function requestCoachAdvice(
@@ -1752,53 +1923,83 @@ export async function requestCoachAdvice(
   signal?: AbortSignal,
 ): Promise<AiCoachApiResponse> {
   try {
-    const res = await fetch('/api/ai-coach', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal,
-    })
-    const data = (await res.json()) as unknown
-    if (res.ok) {
-      const parsed = parseCoachResponse(
-        data,
-        candidates,
-        body.dayItems,
-        body.day,
-      )
-      if (parsed.kind === 'options') {
-        return {
-          kind: 'options',
-          options: ensureMinCoachOptions(body, candidates, parsed.options),
-        }
+    // Pass 1 — propose
+    let pass = await fetchCoachOnce(body, signal)
+    if (!pass.ok) {
+      if (pass.status === 503 || /GEMINI|API key|not configured/i.test(pass.error)) {
+        const options = finalizeCoachOptions(
+          body,
+          candidates,
+          localHeuristicOptions(body, candidates),
+        )
+        if (options.length) return { kind: 'options', options }
       }
-      // Clarification: if we already have Q&A clarifying "first one", prefer options
+      throw new Error(pass.error)
+    }
+
+    let parsed = parseCoachResponse(
+      pass.data,
+      candidates,
+      body.dayItems,
+      body.day,
+    )
+
+    if (parsed.kind === 'need_clarification') {
       if (
-        parsed.kind === 'need_clarification' &&
         body.clarifications.some((c) => /Coach asked:/i.test(c)) &&
         body.clarifications.some((c) => /User replied:/i.test(c))
       ) {
-        const local = ensureMinCoachOptions(body, candidates, [])
+        const local = finalizeCoachOptions(body, candidates, [])
         if (local.length) return { kind: 'options', options: local }
       }
       return parsed
     }
-    const err =
-      data && typeof data === 'object' && 'error' in data
-        ? String((data as { error: unknown }).error)
-        : `Coach failed (${res.status})`
-    if (res.status === 503 || /GEMINI|API key|not configured/i.test(err)) {
-      const options = ensureMinCoachOptions(
-        body,
-        candidates,
-        localHeuristicOptions(body, candidates),
-      )
-      if (options.length) return { kind: 'options', options }
+
+    // Deterministic critique; at most one revise call when issues remain
+    let working = parsed.options
+    const first = critiqueAndRepairOptions(body, candidates, working)
+    working = first.options
+
+    const needsRevise =
+      first.issues.length > 0 &&
+      (working.length === 0 ||
+        first.issues.some((i) =>
+          /closed|fun\/activity|only a café|no removeSteps|backwards|rebuild|unknown candidate/i.test(
+            i,
+          ),
+        ))
+
+    if (needsRevise && !body.critiqueFeedback?.length) {
+      const reviseBody: AiCoachRequestBody = {
+        ...body,
+        critiqueFeedback: first.issues,
+      }
+      const second = await fetchCoachOnce(reviseBody, signal)
+      if (second.ok) {
+        const revised = parseCoachResponse(
+          second.data,
+          candidates,
+          body.dayItems,
+          body.day,
+        )
+        if (revised.kind === 'options' && revised.options.length) {
+          const again = critiqueAndRepairOptions(
+            body,
+            candidates,
+            revised.options,
+          )
+          working = again.options.length ? again.options : working
+        }
+      }
     }
-    throw new Error(err)
+
+    return {
+      kind: 'options',
+      options: finalizeCoachOptions(body, candidates, working),
+    }
   } catch (e) {
     if (signal?.aborted) throw e
-    const options = ensureMinCoachOptions(
+    const options = finalizeCoachOptions(
       body,
       candidates,
       localHeuristicOptions(body, candidates),

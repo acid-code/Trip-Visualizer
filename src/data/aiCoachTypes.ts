@@ -112,6 +112,11 @@ export type AiCoachRequestBody = {
   candidates: AiCoachCandidate[]
   /** Soft planning hints for the model (meal gaps, drive intent, etc.). */
   planningHints?: string[]
+  /**
+   * Deterministic critique from a prior propose pass.
+   * When set, the model should revise and fix these issues (second loop only).
+   */
+  critiqueFeedback?: string[]
 }
 
 export type AiCoachApiResponse =
