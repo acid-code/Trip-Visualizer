@@ -29,29 +29,6 @@ export const STEPS_COLS = [
   'Lon to',
 ] as const
 
-export const STEPS_HINTS = [
-  'Required · YYYY-MM-DD',
-  'Optional · HH:MM (24h)',
-  'Optional · HH:MM (24h)',
-  'Required · flight, train, bus, ferry, drive, sight, restaurant, activity, city, note, other',
-  'Required · free text',
-  'Optional · free text',
-  'Optional · free text',
-  'Optional · place or IATA',
-  'Optional · place or IATA',
-  'Optional · booking ref',
-  'Optional · number ≥ 0',
-  'Optional · 3-letter code (EUR)',
-  'Optional · planned / booked / done / cancelled',
-  'Optional · free text',
-  'Optional · https://…',
-  'Optional · comma-separated',
-  'Optional · decimal degrees',
-  'Optional · decimal degrees',
-  'Optional · decimal degrees',
-  'Optional · decimal degrees',
-] as const
-
 export const HOTELS_COLS = [
   'Check-in',
   'Check-out',
@@ -66,22 +43,6 @@ export const HOTELS_COLS = [
   'URL',
   'Lat',
   'Lon',
-] as const
-
-export const HOTELS_HINTS = [
-  'Required · YYYY-MM-DD',
-  'Preferred · YYYY-MM-DD (defaults to check-in)',
-  'Required · free text',
-  'Optional · free text',
-  'Optional · free text',
-  'Optional · booking ref',
-  'Optional · number ≥ 0',
-  'Optional · 3-letter code (EUR)',
-  'Optional · planned / booked / done / cancelled',
-  'Optional · free text',
-  'Optional · https://…',
-  'Optional · decimal degrees',
-  'Optional · decimal degrees',
 ] as const
 
 const BRAND = 'FFFF6B4A'
@@ -163,13 +124,6 @@ function costRange(values: (number | null | undefined)[]): { min: number; max: n
   const nums = values.filter((v): v is number => v != null && Number.isFinite(v) && v > 0)
   if (!nums.length) return { min: 0, max: 0 }
   return { min: Math.min(...nums), max: Math.max(...nums) }
-}
-
-function applyHeaderNotes(row: ExcelJS.Row, hints: readonly string[]) {
-  hints.forEach((hint, i) => {
-    const cell = row.getCell(i + 1)
-    cell.note = hint
-  })
 }
 
 function styleHeaderRow(row: ExcelJS.Row, colCount: number) {
@@ -361,7 +315,6 @@ function buildStepsSheet(wb: ExcelJS.Workbook, trip: TripRecord, items: TripItem
   })
 
   styleHeaderRow(sheet.getRow(headerRow), STEPS_COLS.length)
-  applyHeaderNotes(sheet.getRow(headerRow), STEPS_HINTS)
 
   const dateCol = 1
   const typeCol = 4
@@ -460,7 +413,6 @@ function buildHotelsSheet(wb: ExcelJS.Workbook, trip: TripRecord, items: TripIte
   })
 
   styleHeaderRow(sheet.getRow(headerRow), HOTELS_COLS.length)
-  applyHeaderNotes(sheet.getRow(headerRow), HOTELS_HINTS)
 
   for (let i = 0; i < tableRows.length; i++) {
     const r = headerRow + 1 + i
