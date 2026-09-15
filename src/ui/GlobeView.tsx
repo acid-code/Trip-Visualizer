@@ -787,7 +787,7 @@ export function GlobeView({
   const pinActions =
     typeof document !== 'undefined'
       ? createPortal(
-          <div className="pointer-events-none fixed inset-0 z-[120] overflow-hidden">
+          <div className="pointer-events-none fixed inset-0 z-[42] overflow-hidden">
             <div
               ref={walkOverlayRef}
               className={`absolute hidden ${actionLift} -translate-x-1/2 flex-col items-center gap-0.5`}

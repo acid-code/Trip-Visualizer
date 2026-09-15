@@ -1986,11 +1986,11 @@ export default function App() {
           hint={
             tempPin ? (
               <>
-                Temp pin · double-tap map to clear · <span className="font-bold">+</span> to save
-                {nearbyLinks.length ? ` · ${nearbyLinks.length} nearby` : ''}
+                Pin set · ★ explore · <span className="font-bold">+</span> save
+                {nearbyLinks.length ? ` · ${nearbyLinks.length} near` : ''}
               </>
             ) : (
-              <>Long-press the map to drop a pin</>
+              <>Long-press map to pin</>
             )
           }
         />
@@ -2327,7 +2327,7 @@ export default function App() {
       {/* Detail / Insert bottom sheet — covers steps on phone; tongues stay reachable */}
       {lowerOpen ? (
         <section
-          className={`journal-sheet absolute inset-x-0 z-40 flex flex-col rounded-t-[1.75rem] border shadow-[0_-12px_40px_rgba(15,23,42,0.35)] transition-all ${
+          className={`journal-sheet absolute inset-x-0 z-50 flex flex-col rounded-t-[1.75rem] border shadow-[0_-12px_40px_rgba(15,23,42,0.35)] transition-all ${
             'bottom-[3.1rem]'
           } ${
             lowerMode === 'insert'

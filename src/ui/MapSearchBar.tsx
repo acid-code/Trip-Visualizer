@@ -93,8 +93,8 @@ export function MapSearchBar({
         <p
           className={
             hintTone === 'pin'
-              ? 'pointer-events-none max-w-[14rem] rounded-lg bg-black/45 px-2 py-1 text-[10px] text-orange-100 backdrop-blur'
-              : 'pointer-events-none max-w-[12rem] text-[10px] text-white/55 drop-shadow'
+              ? 'pointer-events-none max-w-[9.5rem] rounded-lg bg-black/45 px-2 py-1 text-[10px] leading-snug text-orange-100 backdrop-blur'
+              : 'pointer-events-none max-w-[8.5rem] text-[10px] leading-snug text-white/55 drop-shadow'
           }
         >
           {hint}
@@ -107,7 +107,7 @@ export function MapSearchBar({
 
   return createPortal(
     <div
-      className="pointer-events-none fixed z-[200] left-3 top-[max(0.75rem,env(safe-area-inset-top))]"
+      className="pointer-events-none fixed z-[38] left-3 top-[max(0.75rem,env(safe-area-inset-top))]"
       data-coach="map-search"
     >
       <div className="pointer-events-auto">{ui}</div>
