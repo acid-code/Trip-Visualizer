@@ -39,10 +39,12 @@ import { stepOrderMap } from '../data/analytics'
 import { isValidCoord } from '../data/validate'
 import { logClientError, sanitizeEntityId } from '../data/security'
 
-export type MapStack = 'esri' | 'osm' | 'google3d'
+export type MapStack = 'esri' | 'osm' | 'google3d' | 'esri-dark'
+export type MapLook = 'realistic' | 'modern'
 
 /** Default basemap for new sessions / unset preference. */
 export const DEFAULT_MAP_STACK: MapStack = 'esri'
+export const DEFAULT_MAP_LOOK: MapLook = 'realistic'
 
 let googleTileset: Cesium3DTileset | null = null
 
@@ -62,6 +64,24 @@ function esriLayer(): ImageryLayer {
       credit: 'Esri / Maxar / Earthstar Geographics',
     }),
   )
+}
+
+/** Dark canvas basemap for “modern” Journey look — Esri public tiles, no API key. */
+function esriDarkLayer(): ImageryLayer {
+  return new ImageryLayer(
+    new UrlTemplateImageryProvider({
+      url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+      maximumLevel: 16,
+      credit: 'Esri, HERE, Garmin, © OpenStreetMap',
+    }),
+  )
+}
+
+export function resolveMapStack(look: MapLook, stack: MapStack | string): MapStack {
+  if (look === 'modern') return 'esri-dark'
+  if (stack === 'esri-dark' || stack === 'carto-dark') return DEFAULT_MAP_STACK
+  if (stack === 'osm' || stack === 'google3d' || stack === 'esri') return stack
+  return DEFAULT_MAP_STACK
 }
 
 export async function createTripViewer(
@@ -307,7 +327,12 @@ export async function applyMapStack(
 
   viewer.scene.globe.show = true
 
-  const next = stack === 'osm' ? osmLayer() : esriLayer()
+  const next =
+    stack === 'osm'
+      ? osmLayer()
+      : stack === 'esri-dark'
+        ? esriDarkLayer()
+        : esriLayer()
 
   // Swap without leaving zero layers (removeAll → black frame)
   viewer.imageryLayers.add(next)

@@ -120,7 +120,7 @@ export function ExploreSheet({
   if (!open) return null
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-gradient-to-b from-stone-50 to-amber-50/40 text-stone-800">
+    <div className="relative flex h-full min-h-0 flex-col bg-gradient-to-b from-[#12182a] via-[#0e1522] to-[#0a1018] text-[var(--ink)]">
       <div className="flex shrink-0 items-center gap-2 border-b border-amber-100/80 px-3 py-2">
         <div className="flex min-w-0 shrink-0 items-center gap-2">
           <div>
@@ -243,7 +243,7 @@ export function ExploreSheet({
 
       {detail ? (
         <div className="absolute inset-0 z-20 flex flex-col bg-stone-950/25 backdrop-blur-[2px]">
-          <div className="mt-auto max-h-[90%] overflow-y-auto rounded-t-3xl border border-stone-200 bg-white shadow-2xl">
+          <div className="mt-auto max-h-[min(70vh,28rem)] overflow-y-auto overscroll-contain touch-pan-y rounded-t-3xl border border-[var(--glass-border)] bg-[rgba(18,24,38,0.96)] text-[var(--ink)] shadow-2xl">
             <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-stone-100 bg-white/95 px-4 py-2.5 backdrop-blur">
               <div className="min-w-0">
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">

@@ -41,8 +41,8 @@ export const FEATURE_TIPS: FeatureTip[] = [
   },
   {
     id: 'side-tongues',
-    title: 'Steps, Stats & Data',
-    body: 'The side (or bottom) tongues open your day list, charts, and trip settings. Tap the same tongue again to tuck the panel away.',
+    title: 'Steps, Stats & Settings',
+    body: 'The book dividers along the bottom open your day list, charts, and settings. Tap the same divider again to tuck the sheet away.',
     visual: 'tongues',
   },
   {

@@ -136,12 +136,14 @@ function TipFrame({ visual }: { visual: FeatureTipVisual }) {
                 <div className="h-6 rounded-lg bg-stone-200" />
               </div>
             </div>
-            <div className="absolute right-0 top-[28%] flex flex-col gap-1">
-              {['Steps', 'Stats', 'Data'].map((label, i) => (
+            <div className="absolute inset-x-3 bottom-2 flex items-end gap-1">
+              {['Steps', 'Stats', 'Settings'].map((label, i) => (
                 <div
                   key={label}
-                  className={`rounded-l-lg px-2 py-1 text-[9px] font-semibold ${
-                    i === 0 ? 'bg-orange-500 text-white' : 'bg-white/90 text-stone-700'
+                  className={`flex-1 rounded-t-lg px-1 py-1.5 text-center text-[8px] font-semibold ${
+                    i === 0
+                      ? 'translate-y-0 bg-orange-500 text-white'
+                      : 'translate-y-1 bg-white/90 text-stone-700'
                   }`}
                 >
                   {label}

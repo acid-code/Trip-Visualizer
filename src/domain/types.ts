@@ -144,6 +144,59 @@ export const TripItemSchema = z.object({
   source: z.enum(['excel', 'app', 'enriched', 'example']).default('app'),
 })
 
+export const PLAN_SECTION_COLORS = [
+  '#60a5fa',
+  '#fb923c',
+  '#34d399',
+  '#a78bfa',
+  '#f472b6',
+  '#fbbf24',
+  '#22d3ee',
+  '#f87171',
+] as const
+
+export const PlanSectionSchema = z.object({
+  id: z
+    .unknown()
+    .transform((v) => sanitizeEntityId(String(v ?? 'SEC'), 64))
+    .pipe(z.string().min(1).max(64)),
+  title: boundedStr(80, 'Ideas').pipe(z.string().min(1).max(80)),
+  color: boundedStr(16, '#60a5fa'),
+  icon: boundedStr(16, '📍'),
+  order: z.number().int().min(0).max(999).default(0),
+})
+
+export const PlanPlaceSchema = z.object({
+  id: z
+    .unknown()
+    .transform((v) => sanitizeEntityId(String(v ?? 'PP'), 64))
+    .pipe(z.string().min(1).max(64)),
+  sectionId: z
+    .unknown()
+    .transform((v) => sanitizeEntityId(String(v ?? ''), 64))
+    .pipe(z.string().min(1).max(64)),
+  name: boundedStr(300, 'Place').pipe(z.string().min(1).max(300)),
+  place: boundedStr(500),
+  city: boundedStr(120),
+  notes: boundedStr(5000),
+  lat: finiteOrNull.transform((n) =>
+    n != null && n >= -90 && n <= 90 ? n : null,
+  ),
+  lon: finiteOrNull.transform((n) =>
+    n != null && n >= -180 && n <= 180 ? n : null,
+  ),
+  url: z.unknown().transform((v) => safeHttpsUrl(String(v ?? ''))),
+  googleMapsUri: z
+    .unknown()
+    .transform((v) => safeHttpsUrl(String(v ?? '')))
+    .catch('')
+    .default(''),
+  osmId: boundedStr(64),
+  scheduledDay: optionalIsoDate,
+  dayOrder: z.number().int().min(0).max(500).nullable().default(null),
+  linkedItemId: boundedStr(64),
+})
+
 export const TripRecordSchema = z.object({
   id: z
     .unknown()
@@ -151,6 +204,8 @@ export const TripRecordSchema = z.object({
     .pipe(z.string().min(1).max(64)),
   meta: TripMetaSchema,
   items: z.array(TripItemSchema).max(2000),
+  planSections: z.array(PlanSectionSchema).max(40).optional().default([]),
+  planPlaces: z.array(PlanPlaceSchema).max(2000).optional().default([]),
   isExample: z.boolean().default(false),
   createdAt: boundedStr(40),
   updatedAt: boundedStr(40),
@@ -158,6 +213,8 @@ export const TripRecordSchema = z.object({
 
 export type TripMeta = z.infer<typeof TripMetaSchema>
 export type TripItem = z.infer<typeof TripItemSchema>
+export type PlanSection = z.infer<typeof PlanSectionSchema>
+export type PlanPlace = z.infer<typeof PlanPlaceSchema>
 export type TripRecord = z.infer<typeof TripRecordSchema>
 
 /** Allowlist parse — drops / clamps invalid fields rather than trusting client shapes. */

@@ -104,13 +104,15 @@ export async function deleteTrip(id: string): Promise<void> {
 export function makeTrip(
   meta: TripMeta,
   items: TripItem[],
-  opts?: Partial<Pick<TripRecord, 'id' | 'isExample'>>,
+  opts?: Partial<Pick<TripRecord, 'id' | 'isExample' | 'planSections' | 'planPlaces'>>,
 ): TripRecord {
   const stamp = nowIso()
   return {
     id: opts?.id ?? createId('TRIP'),
     meta,
     items,
+    planSections: opts?.planSections ?? [],
+    planPlaces: opts?.planPlaces ?? [],
     isExample: opts?.isExample ?? false,
     createdAt: stamp,
     updatedAt: stamp,
@@ -128,6 +130,18 @@ export async function ensureExampleTrip(): Promise<TripRecord> {
 }
 
 export async function duplicateTrip(source: TripRecord): Promise<TripRecord> {
+  const sectionIdMap = new Map<string, string>()
+  const planSections = (source.planSections ?? []).map((s) => {
+    const id = createId('SEC')
+    sectionIdMap.set(s.id, id)
+    return { ...s, id }
+  })
+  const planPlaces = (source.planPlaces ?? []).map((p) => ({
+    ...p,
+    id: createId('PP'),
+    sectionId: sectionIdMap.get(p.sectionId) || p.sectionId,
+    linkedItemId: '',
+  }))
   const copy = makeTrip(
     {
       ...source.meta,
@@ -140,7 +154,7 @@ export async function duplicateTrip(source: TripRecord): Promise<TripRecord> {
       id: createId(item.type[0]?.toUpperCase() ?? 'X'),
       source: 'app',
     })),
-    { isExample: false },
+    { isExample: false, planSections, planPlaces },
   )
   await saveTrip(copy)
   return copy
