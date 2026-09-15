@@ -173,7 +173,7 @@ export function ExploreSheet({
       </div>
 
       <div className="flex shrink-0 items-center gap-2 border-b border-amber-100/60 px-3 py-2">
-        <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto overscroll-x-contain touch-pan-x [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {CATEGORY_CHIPS.map((chip) => {
             const active = typeFilter === chip.id
             const n = counts[chip.id] ?? 0

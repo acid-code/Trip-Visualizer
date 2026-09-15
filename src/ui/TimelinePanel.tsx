@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { ItemType, TripItem, TripMeta } from '../domain/types'
 import { TYPE_COLORS } from '../domain/types'
@@ -6,6 +6,7 @@ import { dayIndex, stepOrderMap } from '../data/analytics'
 import { dayColor } from '../data/dayTheme'
 import { sortItems } from '../data/db'
 import { isPlaceholderBase, itemTouchesDay, listTripDays } from '../data/dayBases'
+import { createTapTracker, TOUCH_SCROLL_Y } from './scrollGesture'
 
 const TYPE_EMOJI: Record<ItemType, string> = {
   flight: '✈️',
@@ -193,6 +194,7 @@ export function TimelinePanel({
       />
       <FilterMenu
         label="Type"
+        variant="type-grid"
         valueLabel={
           typeFilter == null
             ? '🧳 All'
@@ -200,10 +202,11 @@ export function TimelinePanel({
         }
         valueColor={typeFilter ? TYPE_COLORS[typeFilter as ItemType] : undefined}
         options={[
-          { id: '', label: '🧳 All types', color: undefined },
+          { id: '', label: 'All types', emoji: '🧳' },
           ...types.map((t) => ({
             id: t,
-            label: `${TYPE_EMOJI[t as ItemType] ?? '✨'} ${t}`,
+            label: t,
+            emoji: TYPE_EMOJI[t as ItemType] ?? '✨',
             color: TYPE_COLORS[t as ItemType],
             swatch: true,
           })),
@@ -238,8 +241,8 @@ export function TimelinePanel({
         ref={listRef}
         className={
           horizontal
-            ? 'step-rail-h flex snap-x snap-mandatory gap-1 overflow-x-auto overscroll-x-contain px-1 pb-1'
-            : 'step-rail min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1'
+            ? 'step-rail-h flex snap-x snap-mandatory gap-1 overflow-x-auto overscroll-x-contain touch-pan-x [-webkit-overflow-scrolling:touch] px-1 pb-1'
+            : 'step-rail min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] pr-1'
         }
       >
         {!lockMode ? (
@@ -632,18 +635,23 @@ function FilterMenu({
   options,
   selectedId,
   onPick,
+  variant = 'list',
 }: {
   label: string
   valueLabel: string
   valueColor?: string
-  options: { id: string; label: string; color?: string; swatch?: boolean }[]
+  options: { id: string; label: string; color?: string; swatch?: boolean; emoji?: string }[]
   selectedId: string
   onPick: (id: string) => void
+  /** Type picker uses a soft color grid; day stays a scrolling list. */
+  variant?: 'list' | 'type-grid'
 }) {
   const [open, setOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null)
+
+  const menuMaxH = variant === 'type-grid' ? 280 : 220
 
   useEffect(() => {
     if (!open || !btnRef.current) {
@@ -652,9 +660,16 @@ function FilterMenu({
     }
     const place = () => {
       const r = btnRef.current!.getBoundingClientRect()
-      const width = Math.max(r.width, 168)
+      const width =
+        variant === 'type-grid'
+          ? Math.min(Math.max(r.width * 2 + 12, 260), window.innerWidth - 16)
+          : Math.max(r.width, 168)
       const left = Math.min(r.left, window.innerWidth - width - 8)
-      const menuH = Math.min(208, options.length * 40 + 8)
+      const estimated =
+        variant === 'type-grid'
+          ? Math.ceil(options.length / 2) * 64 + 48
+          : options.length * 40 + 8
+      const menuH = Math.min(menuMaxH, estimated)
       const openUp = r.top > menuH + 16
       setPos({
         top: openUp ? r.top - menuH - 6 : r.bottom + 6,
@@ -669,7 +684,7 @@ function FilterMenu({
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
     }
-  }, [open, options.length])
+  }, [open, options.length, variant, menuMaxH])
 
   useEffect(() => {
     if (!open) return
@@ -731,48 +746,148 @@ function FilterMenu({
               ref={menuRef}
               role="listbox"
               aria-label={label}
-              className="fixed z-[200] max-h-52 overflow-y-auto rounded-2xl border border-stone-200 bg-white py-1 shadow-xl"
-              style={{ top: pos.top, left: pos.left, width: pos.width }}
+              data-scrollable="filter-menu"
+              className={`fixed z-[200] rounded-2xl border border-stone-200/90 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.18)] ${TOUCH_SCROLL_Y}`}
+              style={{
+                top: pos.top,
+                left: pos.left,
+                width: pos.width,
+                maxHeight: menuMaxH,
+              }}
               onPointerDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              onTouchMove={(e) => e.stopPropagation()}
             >
-              {options.map((opt) => {
-                const on = opt.id === selectedId
-                return (
-                  <button
-                    key={opt.id || 'all'}
-                    type="button"
-                    role="option"
-                    aria-selected={on}
-                    className={`flex w-full items-center gap-2 px-2.5 py-2.5 text-left text-xs font-medium capitalize touch-manipulation ${
-                      on ? 'bg-orange-50 text-stone-900' : 'text-stone-700 active:bg-stone-50'
-                    }`}
-                    onPointerDown={(e) => {
-                      // Apply on pointerdown — mobile often drops click if the menu unmounts first
-                      e.preventDefault()
-                      e.stopPropagation()
-                      pick(opt.id)
-                    }}
-                  >
-                    {opt.swatch && opt.color ? (
-                      <span
-                        className="h-3.5 w-3.5 shrink-0 rounded-full"
-                        style={{ background: opt.color }}
-                        aria-hidden
+              {variant === 'type-grid' ? (
+                <div className="p-2">
+                  <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+                    Filter by type
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {options.map((opt) => (
+                      <FilterOptionButton
+                        key={opt.id || 'all'}
+                        opt={opt}
+                        selected={opt.id === selectedId}
+                        layout="tile"
+                        onPick={pick}
                       />
-                    ) : (
-                      <span
-                        className="h-3.5 w-3.5 shrink-0 rounded-full bg-stone-200"
-                        aria-hidden
-                      />
-                    )}
-                    <span className="truncate">{opt.label}</span>
-                  </button>
-                )
-              })}
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="py-1">
+                  {options.map((opt) => (
+                    <FilterOptionButton
+                      key={opt.id || 'all'}
+                      opt={opt}
+                      selected={opt.id === selectedId}
+                      layout="row"
+                      onPick={pick}
+                    />
+                  ))}
+                </div>
+              )}
             </div>,
             document.body,
           )
         : null}
     </div>
+  )
+}
+
+function FilterOptionButton({
+  opt,
+  selected,
+  layout,
+  onPick,
+}: {
+  opt: { id: string; label: string; color?: string; swatch?: boolean; emoji?: string }
+  selected: boolean
+  layout: 'row' | 'tile'
+  onPick: (id: string) => void
+}) {
+  const tap = useRef(createTapTracker())
+
+  const sharedPointer = {
+    onPointerDown: (e: ReactPointerEvent) => {
+      // Don't preventDefault — that blocks scrolling the menu on phones.
+      e.stopPropagation()
+      tap.current.onPointerDown(e)
+    },
+    onPointerMove: (e: ReactPointerEvent) => tap.current.onPointerMove(e),
+    onPointerUp: (e: ReactPointerEvent) => {
+      e.stopPropagation()
+      if (!tap.current.onPointerUp()) return
+      onPick(opt.id)
+    },
+    onPointerCancel: () => tap.current.onPointerCancel(),
+  }
+
+  if (layout === 'tile') {
+    const wash = opt.color ? `${opt.color}26` : selected ? '#ffedd5' : '#f5f5f4'
+    return (
+      <button
+        type="button"
+        role="option"
+        aria-selected={selected}
+        {...sharedPointer}
+        className={`flex min-h-[3.25rem] flex-col items-start justify-center gap-0.5 rounded-xl border px-2.5 py-2 text-left transition ${
+          selected
+            ? 'border-orange-300 ring-1 ring-orange-200'
+            : 'border-transparent hover:border-stone-200'
+        }`}
+        style={{ background: wash }}
+      >
+        <span className="flex items-center gap-1.5">
+          {opt.emoji ? (
+            <span className="text-base leading-none" aria-hidden>
+              {opt.emoji}
+            </span>
+          ) : opt.swatch && opt.color ? (
+            <span
+              className="h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ background: opt.color }}
+              aria-hidden
+            />
+          ) : (
+            <span className="text-base leading-none" aria-hidden>
+              🧳
+            </span>
+          )}
+          <span className="text-[12px] font-semibold capitalize text-stone-800">
+            {opt.label}
+          </span>
+        </span>
+        {selected ? (
+          <span className="text-[9px] font-bold uppercase tracking-wide text-orange-700">
+            Selected
+          </span>
+        ) : null}
+      </button>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={selected}
+      {...sharedPointer}
+      className={`flex w-full items-center gap-2 px-2.5 py-2.5 text-left text-xs font-medium capitalize ${
+        selected ? 'bg-orange-50 text-stone-900' : 'text-stone-700 active:bg-stone-50'
+      }`}
+    >
+      {opt.swatch && opt.color ? (
+        <span
+          className="h-3.5 w-3.5 shrink-0 rounded-full"
+          style={{ background: opt.color }}
+          aria-hidden
+        />
+      ) : (
+        <span className="h-3.5 w-3.5 shrink-0 rounded-full bg-stone-200" aria-hidden />
+      )}
+      <span className="truncate">{opt.label}</span>
+    </button>
   )
 }

@@ -16,6 +16,7 @@ import type {
 } from '../data/aiCoachTypes'
 import { createId } from '../data/db'
 import { TypewriterText } from './TypewriterText'
+import { MOBILE_SHEET_HEIGHT, TOUCH_SCROLL_X } from './scrollGesture'
 
 const AI_INPUT_MAX = 250
 
@@ -422,7 +423,7 @@ export function AiCoachSheet({
             <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
               Options
             </div>
-            <div className="flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:thin]">
+            <div className={`flex gap-2.5 pb-1 [scrollbar-width:thin] ${TOUCH_SCROLL_X}`}>
               {options.map((opt) => {
                 const applied = appliedOptionIds.includes(opt.id)
                 return (
@@ -513,7 +514,7 @@ export function AiCoachSheet({
 
       {detail ? (
         <div className="absolute inset-0 z-20 flex flex-col bg-stone-950/25 backdrop-blur-[2px]">
-          <div className="mt-auto max-h-[90%] overflow-y-auto rounded-t-3xl border border-stone-200 bg-white shadow-2xl">
+          <div className={`mt-auto ${MOBILE_SHEET_HEIGHT.aiCoachDetail} overflow-y-auto overscroll-contain touch-pan-y rounded-t-3xl border border-stone-200 bg-white shadow-2xl`}>
             <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-stone-100 bg-white/95 px-4 py-2.5 backdrop-blur">
               <div className="min-w-0">
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-violet-700">

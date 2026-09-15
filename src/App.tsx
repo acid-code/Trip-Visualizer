@@ -78,6 +78,7 @@ import {
   type AiCoachSessionRestore,
 } from './ui/AiCoachSheet'
 import { AiReviewChrome } from './ui/AiReviewChrome'
+import { MOBILE_SHEET_HEIGHT } from './ui/scrollGesture'
 import { formatDayChipLabel } from './data/aiCoach'
 import {
   applyCoachPatch,
@@ -2198,23 +2199,23 @@ export default function App() {
             <div
               className={`mobile-panel relative mx-2 mb-1 flex flex-col overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
                 aiOpen
-                  ? 'h-[min(68vh,30rem)]'
+                  ? MOBILE_SHEET_HEIGHT.aiCoach
                   : exploreOpen
                   ? exploreDetail
-                    ? 'h-[min(62vh,26.5rem)]'
-                    : 'h-[min(41vh,18.5rem)]'
+                    ? MOBILE_SHEET_HEIGHT.exploreDetail
+                    : MOBILE_SHEET_HEIGHT.explore
                   : aiReview
-                    ? 'h-[min(48vh,22rem)]'
+                    ? MOBILE_SHEET_HEIGHT.aiReviewSteps
                   : navTab === 'timeline'
-                    ? 'max-h-[38vh]'
+                    ? MOBILE_SHEET_HEIGHT.steps
                     : navTab === 'settings' || navTab === 'charts'
-                      ? 'h-[min(72vh,32rem)]'
+                      ? MOBILE_SHEET_HEIGHT.tall
                       : 'max-h-[52vh]'
               }`}
             >
               {aiOpen && active && !aiReview ? (
                 <div
-                  className="h-[min(68vh,30rem)]"
+                  className={`min-h-0 flex-1 ${MOBILE_SHEET_HEIGHT.aiCoach}`}
                   onTouchStart={(e) => e.stopPropagation()}
                   onTouchMove={(e) => e.stopPropagation()}
                 >
@@ -2239,7 +2240,9 @@ export default function App() {
               {exploreOpen && !aiOpen ? (
                 <div
                   className={
-                    exploreDetail ? 'h-[min(62vh,26.5rem)]' : 'h-[min(41vh,18.5rem)]'
+                    exploreDetail
+                      ? MOBILE_SHEET_HEIGHT.exploreDetail
+                      : MOBILE_SHEET_HEIGHT.explore
                   }
                   onTouchStart={(e) => e.stopPropagation()}
                   onTouchMove={(e) => e.stopPropagation()}
