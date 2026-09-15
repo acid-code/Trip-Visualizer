@@ -107,15 +107,14 @@ export async function createTripViewer(
     // Only draw when the camera/scene actually changes — huge heat win on phones.
     requestRenderMode: true,
     maximumRenderTimeChange: Infinity,
-    // Phone: let the browser pick a softer DPR. Desktop keeps sharper pixels.
-    useBrowserRecommendedResolution: phone,
+    // Full CSS→framebuffer mapping; requestRenderMode (not soft DPR) is the heat win.
+    useBrowserRecommendedResolution: false,
   })
 
-  viewer.useBrowserRecommendedResolution = phone
-  // Cap retina supersampling on phones (full DPR × continuous loop was cooking devices).
-  viewer.resolutionScale = phone
-    ? Math.min(1, 1.15 / Math.max(1, window.devicePixelRatio || 1))
-    : 1
+  viewer.useBrowserRecommendedResolution = false
+  // Slight phone soft-cap only on ultra-dense screens; keep readable detail.
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  viewer.resolutionScale = phone && dpr > 2.5 ? Math.min(1, 2.25 / dpr) : 1
   if (viewer.scene.postProcessStages.fxaa) {
     viewer.scene.postProcessStages.fxaa.enabled = false
   }
