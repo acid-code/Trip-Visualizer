@@ -631,6 +631,12 @@ textarea {
   height: 100%;
 }
 
+/* Zoom +/- sits under Journey|Plan switcher (top-right chrome). */
+.plan-phone .maplibre-plan-root .maplibregl-ctrl-top-right {
+  top: max(4.5rem, calc(env(safe-area-inset-top) + 3.6rem));
+  right: 0.65rem;
+}
+
 [data-theme="light"] .maplibre-plan-root {
   border-color: var(--glass-border);
 }

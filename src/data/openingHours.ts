@@ -283,3 +283,68 @@ export function summarizeOpenSlots(
   if (known.length) return `open at least ~ ${known.join(', ')}`
   return openingHours?.slice(0, 120) || ''
 }
+
+const WEEKDAY_LONG = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+] as const
+
+/** Pull just today’s line from Google/OSM weekday text (“Monday: 9–5; …” → “9–5”). */
+export function todayHoursSnippet(
+  openingHours: string | undefined | null,
+  now = new Date(),
+): string {
+  const raw = String(openingHours || '').trim()
+  if (!raw || raw === 'Hours on file') return ''
+  const day = WEEKDAY_LONG[now.getDay()]!
+  const parts = raw.split(/[;\n|]/).map((s) => s.trim()).filter(Boolean)
+  const hit = parts.find((p) => p.toLowerCase().startsWith(day))
+  if (hit) {
+    const after = hit.replace(/^[^:]+:\s*/i, '').trim()
+    return after.slice(0, 48)
+  }
+  // Single short blob already (not a week dump)
+  if (parts.length === 1 && raw.length <= 40) return raw
+  return ''
+}
+
+/** Quiet label for detail sheets — never dump the full week. */
+export function compactHoursLabel(args: {
+  periods?: OpeningPeriod[] | null
+  openingHours?: string | null
+  now?: Date
+}): { status: OpenStatus; label: string } {
+  const now = args.now ?? new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  const dateISO = `${y}-${m}-${d}`
+  const hh = String(now.getHours()).padStart(2, '0')
+  const mm = String(now.getMinutes()).padStart(2, '0')
+  const status = placeOpenStatus({
+    dateISO,
+    timeHM: `${hh}:${mm}`,
+    periods: args.periods,
+    openingHours: args.openingHours,
+  })
+  const today = todayHoursSnippet(args.openingHours, now)
+  if (status === 'open') {
+    return {
+      status,
+      label: today && !/^open\b/i.test(today) ? `Open · ${today}` : 'Open now',
+    }
+  }
+  if (status === 'closed') {
+    return {
+      status,
+      label: today && !/^closed\b/i.test(today) ? `Closed · ${today}` : 'Closed',
+    }
+  }
+  if (today) return { status: 'unknown', label: today }
+  return { status: 'unknown', label: '' }
+}

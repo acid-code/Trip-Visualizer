@@ -363,6 +363,115 @@ export function addPlanPlace(
   }
 }
 
+/** Match an unscheduled list idea by name + coords (one list at a time). */
+function findSimilarListPlace(
+  trip: TripRecord,
+  opts: { name: string; lat?: number | null; lon?: number | null },
+): PlanPlace | undefined {
+  const name = opts.name.trim().toLowerCase()
+  return trip.planPlaces.find((p) => {
+    if (p.scheduledDay || p.linkedItemId) return false
+    if (p.name.trim().toLowerCase() !== name) return false
+    if (
+      opts.lat != null &&
+      opts.lon != null &&
+      p.lat != null &&
+      p.lon != null &&
+      (Math.abs(p.lat - opts.lat) > 0.0008 || Math.abs(p.lon - opts.lon) > 0.0008)
+    ) {
+      return false
+    }
+    return true
+  })
+}
+
+/**
+ * Add to a list section, or move an existing unscheduled idea there.
+ * A place lives in only one Discover list at a time.
+ */
+export function upsertPlanPlaceToSection(
+  trip: TripRecord,
+  input: {
+    sectionId: string
+    name: string
+    place?: string
+    city?: string
+    lat?: number | null
+    lon?: number | null
+    notes?: string
+    url?: string
+    googleMapsUri?: string
+    osmId?: string
+  },
+): { trip: TripRecord; moved: boolean; created: boolean; sectionTitle: string } {
+  const section = trip.planSections.find((s) => s.id === input.sectionId)
+  const sectionTitle = section?.title || 'list'
+  const existing = findSimilarListPlace(trip, input)
+  if (existing) {
+    if (existing.sectionId === input.sectionId) {
+      return { trip, moved: false, created: false, sectionTitle }
+    }
+    return {
+      trip: {
+        ...trip,
+        planPlaces: trip.planPlaces.map((p) =>
+          p.id === existing.id
+            ? {
+                ...p,
+                sectionId: input.sectionId,
+                place: input.place || p.place,
+                notes: input.notes || p.notes,
+                googleMapsUri: input.googleMapsUri || p.googleMapsUri,
+                osmId: input.osmId || p.osmId,
+                lat: input.lat ?? p.lat,
+                lon: input.lon ?? p.lon,
+              }
+            : p,
+        ),
+        updatedAt: nowIso(),
+      },
+      moved: true,
+      created: false,
+      sectionTitle,
+    }
+  }
+  return {
+    trip: addPlanPlace(trip, input),
+    moved: false,
+    created: true,
+    sectionTitle,
+  }
+}
+
+/** Resolve Must see / Food / Stay ideas / Maybe from explore category. */
+export function planSectionForExploreCategory(
+  trip: TripRecord,
+  cat: string,
+): PlanSection | undefined {
+  const want =
+    cat === 'food' || cat === 'drink'
+      ? 'food'
+      : cat === 'hotel'
+        ? 'stay'
+        : cat === 'nature' || cat === 'sights' || cat === 'other'
+          ? 'must'
+          : 'maybe'
+  return trip.planSections.find((s) => {
+    const t = s.title.toLowerCase()
+    if (want === 'food') return t.includes('food') || t.includes('eat')
+    if (want === 'stay') return t.includes('stay') || t.includes('hotel')
+    if (want === 'must') return t.includes('must') || t.includes('sight')
+    return t.includes('maybe') || t.includes('optional')
+  })
+}
+
+export function planMaybeSection(trip: TripRecord): PlanSection | undefined {
+  return trip.planSections.find((s) => {
+    const t = s.title.toLowerCase()
+    return t.includes('maybe') || t.includes('optional')
+  })
+}
+
 export function reorderDayPlaces(
   trip: TripRecord,
   day: string,

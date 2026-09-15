@@ -58,8 +58,8 @@ type Props = {
   focusSuggestionId?: string | null
   onPlaceClick?: (placeId: string) => void
   onSuggestionClick?: (suggestionId: string) => void
-  /** Fired (debounced) when the map settles — Discover uses this as the Nearby anchor. */
-  onViewportIdle?: (center: { lat: number; lon: number }) => void
+  /** Fired (debounced) when the map settles — Discover uses center + visible radius. */
+  onViewportIdle?: (view: { lat: number; lon: number; radiusM: number }) => void
   className?: string
 }
 
@@ -164,7 +164,15 @@ export function PlanMapView({
     let idleTimer: ReturnType<typeof setTimeout> | null = null
     const emitIdle = () => {
       const c = map.getCenter()
-      onViewportIdleRef.current?.({ lat: c.lat, lon: c.lng })
+      const b = map.getBounds()
+      const ne = b.getNorthEast()
+      const sw = b.getSouthWest()
+      // Cover the visible map with a circle from center to farthest corner.
+      const radiusM = Math.min(
+        50_000,
+        Math.max(500, Math.ceil(viewportCornerRadiusM(c.lat, c.lng, ne.lat, ne.lng, sw.lat, sw.lng))),
+      )
+      onViewportIdleRef.current?.({ lat: c.lat, lon: c.lng, radiusM })
     }
     const onMoveEnd = () => {
       if (idleTimer) clearTimeout(idleTimer)
@@ -336,4 +344,26 @@ export function PlanMapView({
       className={`maplibre-plan-root min-h-0 flex-1 overflow-hidden ${className}`}
     />
   )
+}
+
+/** Approx metres from map center to the farthest visible corner. */
+function viewportCornerRadiusM(
+  clat: number,
+  clon: number,
+  neLat: number,
+  neLon: number,
+  swLat: number,
+  swLon: number,
+): number {
+  const R = 6371000
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const dist = (lat: number, lon: number) => {
+    const dLat = toRad(lat - clat)
+    const dLon = toRad(lon - clon)
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(clat)) * Math.cos(toRad(lat)) * Math.sin(dLon / 2) ** 2
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)))
+  }
+  return Math.max(dist(neLat, neLon), dist(swLat, swLon), dist(neLat, swLon), dist(swLat, neLon))
 }

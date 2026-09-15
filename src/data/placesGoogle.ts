@@ -303,6 +303,7 @@ export async function searchNearbyPlacesGoogle(opts: {
   categories?: ExploreCategory[]
   /** Omit includedTypes — return any nearby place type. */
   unrestricted?: boolean
+  rankPreference?: 'DISTANCE' | 'POPULARITY'
 }): Promise<ExplorePlace[]> {
   const apiKey = sanitizeSecretInput(opts.apiKey)
   if (!apiKey) throw new Error('Missing Google Maps API key')
@@ -317,6 +318,7 @@ export async function searchNearbyPlacesGoogle(opts: {
     opts.categories,
     opts.unrestricted,
   )
+  const rankPreference = opts.rankPreference === 'POPULARITY' ? 'POPULARITY' : 'DISTANCE'
 
   const res = await fetch(PLACES_NEARBY, {
     method: 'POST',
@@ -329,7 +331,7 @@ export async function searchNearbyPlacesGoogle(opts: {
       languageCode: 'en',
       ...(includedTypes ? { includedTypes } : {}),
       maxResultCount,
-      rankPreference: 'DISTANCE',
+      rankPreference,
       locationRestriction: {
         circle: {
           center: { latitude: opts.lat, longitude: opts.lon },
@@ -369,6 +371,7 @@ export async function fetchGoogleNearbyViaProxy(
     signal?: AbortSignal
     categories?: ExploreCategory[]
     unrestricted?: boolean
+    rankPreference?: 'DISTANCE' | 'POPULARITY'
   },
 ): Promise<ExplorePlace[]> {
   const override = sanitizeSecretInput(opts.apiKey ?? '')
@@ -380,6 +383,7 @@ export async function fetchGoogleNearbyViaProxy(
       lon: anchor.lon,
       radiusM: opts.radiusM ?? 1500,
       maxResultCount: opts.maxResultCount ?? GOOGLE_NEARBY_MAX,
+      rankPreference: opts.rankPreference === 'POPULARITY' ? 'POPULARITY' : 'DISTANCE',
       ...(opts.unrestricted
         ? { unrestricted: true }
         : opts.categories?.length

@@ -2,6 +2,7 @@ import {
   exploreCategoryLabel,
   type ExplorePlace,
 } from '../data/explore'
+import { compactHoursLabel } from '../data/openingHours'
 import { mapsPlaceSearchUrl, openExternalUrl } from '../data/mapsLinks'
 
 type Props = {
@@ -9,6 +10,8 @@ type Props = {
   onClose: () => void
   primaryLabel: string
   onPrimary: () => void
+  secondaryLabel?: string
+  onSecondary?: () => void
   /** Soft overlay behind the sheet (Plan floats over the map). */
   backdrop?: boolean
 }
@@ -19,6 +22,8 @@ export function ExplorePlaceDetailSheet({
   onClose,
   primaryLabel,
   onPrimary,
+  secondaryLabel,
+  onSecondary,
   backdrop = true,
 }: Props) {
   return (
@@ -92,13 +97,25 @@ export function ExplorePlaceDetailSheet({
               </button>
             ) : null}
           </div>
-          <button
-            type="button"
-            className="w-full rounded-2xl bg-[var(--coral)] py-2.5 text-sm font-semibold text-white shadow-sm hover:opacity-95"
-            onClick={onPrimary}
-          >
-            {primaryLabel}
-          </button>
+          <div className="flex gap-2">
+            {secondaryLabel && onSecondary ? (
+              <button
+                type="button"
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-2xl border border-[var(--glass-border)] bg-[var(--paper-2)] py-2.5 text-sm font-semibold text-[var(--ink)] shadow-sm hover:opacity-95"
+                onClick={onSecondary}
+              >
+                <span aria-hidden>💭</span>
+                {secondaryLabel}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="flex-1 rounded-2xl bg-[var(--coral)] py-2.5 text-sm font-semibold text-white shadow-sm hover:opacity-95"
+              onClick={onPrimary}
+            >
+              {primaryLabel}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -150,6 +167,11 @@ function DetailMeta({
   place: ExplorePlace
   compact?: boolean
 }) {
+  const hours = compactHoursLabel({
+    periods: place.openingPeriods,
+    openingHours: place.openingHours,
+  })
+
   return (
     <div className={compact ? 'flex h-full flex-col gap-1.5' : 'space-y-2'}>
       <div className="flex flex-wrap gap-1.5 text-xs text-[var(--ink-muted)]">
@@ -165,6 +187,24 @@ function DetailMeta({
             ({place.tags.source === 'google' ? 'Google' : 'OSM'})
           </span>
         </span>
+        {hours.label ? (
+          <span
+            className={`max-w-full truncate rounded-full px-2 py-0.5 text-[11px] ${
+              hours.status === 'open'
+                ? 'bg-emerald-500/15 text-[color-mix(in_srgb,#047857_75%,var(--ink))]'
+                : 'bg-[var(--paper-2)] text-[var(--ink-muted)]'
+            }`}
+            title={place.openingHours || undefined}
+          >
+            {compact
+              ? hours.status === 'open'
+                ? 'Open'
+                : hours.status === 'closed'
+                  ? 'Closed'
+                  : hours.label
+              : hours.label}
+          </span>
+        ) : null}
       </div>
       {place.summary ? (
         <p
@@ -183,11 +223,6 @@ function DetailMeta({
       {place.cuisine ? (
         <p className={`text-[var(--ink-muted)] ${compact ? 'text-[11px]' : 'text-xs'}`}>
           Cuisine: {place.cuisine}
-        </p>
-      ) : null}
-      {place.openingHours ? (
-        <p className={`text-[var(--ink-muted)] ${compact ? 'line-clamp-2 text-[11px]' : 'text-xs'}`}>
-          Hours: {place.openingHours}
         </p>
       ) : null}
     </div>

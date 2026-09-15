@@ -369,6 +369,10 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     body.categories,
     Boolean(body.unrestricted),
   )
+  const rankPreference =
+    String(body.rankPreference || '').toUpperCase() === 'POPULARITY'
+      ? 'POPULARITY'
+      : 'DISTANCE'
   const apiKey = resolveApiKey(body.apiKey)
 
   if (!apiKey || !apiKey.startsWith('AIza')) {
@@ -393,7 +397,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
         languageCode: 'en',
         ...(includedTypes ? { includedTypes } : {}),
         maxResultCount,
-        rankPreference: 'DISTANCE',
+        rankPreference,
         locationRestriction: {
           circle: {
             center: { latitude: lat, longitude: lon },
