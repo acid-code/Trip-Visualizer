@@ -30,7 +30,10 @@ export function MapSearchBar({ busy, onSearch, onClear }: Props) {
         type="button"
         className="flex h-9 w-9 touch-manipulation items-center justify-center rounded-full border border-white/25 bg-black/45 text-white shadow-lg backdrop-blur hover:bg-black/55"
         title="Search place or address"
-        onPointerUp={openBar}
+        onPointerDown={(e) => {
+          e.stopPropagation()
+        }}
+        onClick={openBar}
       >
         <span className="text-sm" aria-hidden>
           🔍

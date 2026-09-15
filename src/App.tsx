@@ -1974,9 +1974,9 @@ export default function App() {
         </div>
       ) : null}
 
-      {/* Map search — left of globe; long-press drops a pin under your finger */}
+      {/* Map search — above header so Journey chrome cannot steal taps */}
       <div
-        className={`pointer-events-none absolute z-30 ${
+        className={`pointer-events-none absolute z-50 ${
           appMode === 'plan' ? 'hidden' : ''
         } left-3 top-[max(0.75rem,env(safe-area-inset-top))]`}
       >
@@ -2003,7 +2003,7 @@ export default function App() {
         )}
       </div>
 
-      {/* Map-side header — desktop clears left panel; phone: right-only so search stays tappable */}
+      {/* Map-side header — hit targets only on controls (not the whole top band) */}
       <header
         className={`pointer-events-none absolute top-0 z-40 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] ${
           isPhone
@@ -2011,114 +2011,123 @@ export default function App() {
             : 'inset-x-0 pl-[min(24rem,90vw)]'
         }`}
       >
-        <div className="pointer-events-auto ml-auto flex max-w-lg flex-col items-end gap-1.5">
-          <SegmentedControl
-            ariaLabel="App mode"
-            value={appMode}
-            onChange={(mode) => {
-              setAppMode(mode)
-              void setSetting('appMode', mode)
-              if (mode === 'plan') {
-                setExploreOpen(false)
-                setAiOpen(false)
-                setLowerMode('none')
-                if (active) void persist(ensurePlanScaffold(active))
-              }
-            }}
-            options={[
-              { id: 'journey', label: 'Journey' },
-              { id: 'plan', label: 'Plan' },
-            ]}
-          />
+        <div className="ml-auto flex w-fit max-w-[min(14rem,46vw)] flex-col items-end gap-1">
+          <div className="pointer-events-auto">
+            <SegmentedControl
+              ariaLabel="App mode"
+              value={appMode}
+              onChange={(mode) => {
+                setAppMode(mode)
+                void setSetting('appMode', mode)
+                if (mode === 'plan') {
+                  setExploreOpen(false)
+                  setAiOpen(false)
+                  setLowerMode('none')
+                  if (active) void persist(ensurePlanScaffold(active))
+                }
+              }}
+              options={[
+                { id: 'journey', label: 'Journey' },
+                { id: 'plan', label: 'Plan' },
+              ]}
+            />
+          </div>
           {appMode === 'journey' ? (
             <>
-          <div className="text-right">
-            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-orange-300/90">
-              Trip journal
-            </div>
-            <button
-              type="button"
-              className="group max-w-full text-right disabled:cursor-default"
-              onClick={() => openTripEdit()}
-              disabled={!active}
-              title="Tap to edit trip name and start/end dates"
-              aria-label={
-                active
-                  ? `Edit trip: ${active.meta.name}. Tap to change name and dates.`
-                  : 'No active trip'
-              }
-            >
-              <h1 className="brand-mark truncate text-xl text-white drop-shadow decoration-white/40 underline-offset-4 group-hover:underline group-disabled:no-underline">
-                {active?.meta.name ?? '…'}
-              </h1>
-              <p className="text-xs text-white/70 drop-shadow">
-                {active?.meta.startDate} → {active?.meta.endDate}
-                {active?.isExample ? ' · example' : ''}
-              </p>
-            </button>
-          </div>
-          <div className="flex max-w-full flex-nowrap items-center justify-end gap-1">
-            <TripSwitcher
-              trips={trips}
-              activeId={activeId}
-              onSelect={(id) => setActiveId(id)}
-              onDelete={(id) => onDeleteTrip(id)}
-              onCreate={() => void onBlank()}
-              onPrepareDelete={() => {
-                setPanelOpen(false)
-                setExploreOpen(false)
-                setExploreDetail(null)
-                setAiOpen(false)
-                setAiRestore(null)
-                setLowerMode('none')
-                setDetailExpanded(false)
-              }}
-            />
-            <button
-              className="ui-icon-btn"
-              onClick={() => {
-                if (!aiReview) setDayFilter(null)
-                setOverviewToken((n) => n + 1)
-              }}
-            >
-              Overview
-            </button>
-            <button
-              type="button"
-              className="ui-icon-btn bg-orange-500/90 text-white border-orange-400/40"
-              title="Feature tips"
-              onClick={() => openFeatureGuide({ all: true })}
-            >
-              Tips
-            </button>
-          </div>
-          {status ? <p className="text-right text-xs text-emerald-300">{status}</p> : null}
-          {enrichProgress ? (
-            <p className="text-right text-xs text-amber-200">Enriching… {enrichProgress}</p>
-          ) : null}
-          {routesStatus ? (
-            <p className="text-right text-xs text-sky-200">{routesStatus}</p>
-          ) : null}
-            <div className="mt-1.5 flex justify-end">
-              <MapLayersControl
-                panelPlacement="below"
-                mapLook={mapLook}
-                mapStack={mapStack}
-                googleKeyConfigured={placesEnabled}
-                onLookChange={(look) => {
-                  setMapLook(look)
-                  void setSetting('mapLook', look)
-                }}
-                onStackChange={(id) => {
-                  setMapStack(id)
-                  void setSetting('mapStack', id)
-                }}
-              />
-            </div>
+              <button
+                type="button"
+                className="pointer-events-auto group max-w-full text-right disabled:cursor-default"
+                onClick={() => openTripEdit()}
+                disabled={!active}
+                title="Tap to edit trip name and start/end dates"
+                aria-label={
+                  active
+                    ? `Edit trip: ${active.meta.name}. Tap to change name and dates.`
+                    : 'No active trip'
+                }
+              >
+                <h1 className="brand-mark truncate text-sm font-semibold leading-tight text-white drop-shadow decoration-white/40 underline-offset-2 group-hover:underline group-disabled:no-underline sm:text-base">
+                  {active?.meta.name ?? '…'}
+                </h1>
+                <p className="truncate text-[10px] leading-tight text-white/70 drop-shadow">
+                  {active?.meta.startDate?.slice(5)} → {active?.meta.endDate?.slice(5)}
+                  {active?.isExample ? ' · ex' : ''}
+                </p>
+              </button>
+              <div className="pointer-events-auto flex max-w-full flex-nowrap items-center justify-end gap-1">
+                <TripSwitcher
+                  trips={trips}
+                  activeId={activeId}
+                  onSelect={(id) => setActiveId(id)}
+                  onDelete={(id) => onDeleteTrip(id)}
+                  onCreate={() => void onBlank()}
+                  onPrepareDelete={() => {
+                    setPanelOpen(false)
+                    setExploreOpen(false)
+                    setExploreDetail(null)
+                    setAiOpen(false)
+                    setAiRestore(null)
+                    setLowerMode('none')
+                    setDetailExpanded(false)
+                  }}
+                />
+                <button
+                  className="ui-icon-btn"
+                  onClick={() => {
+                    if (!aiReview) setDayFilter(null)
+                    setOverviewToken((n) => n + 1)
+                  }}
+                >
+                  Overview
+                </button>
+                <button
+                  type="button"
+                  className="ui-icon-btn bg-orange-500/90 text-white border-orange-400/40"
+                  title="Feature tips"
+                  onClick={() => openFeatureGuide({ all: true })}
+                >
+                  Tips
+                </button>
+              </div>
+              {status ? (
+                <p className="pointer-events-none max-w-full truncate text-right text-[10px] text-emerald-300">
+                  {status}
+                </p>
+              ) : null}
+              {enrichProgress ? (
+                <p className="pointer-events-none text-right text-[10px] text-amber-200">
+                  Enriching… {enrichProgress}
+                </p>
+              ) : null}
+              {routesStatus ? (
+                <p className="pointer-events-none text-right text-[10px] text-sky-200">
+                  {routesStatus}
+                </p>
+              ) : null}
+              <div className="pointer-events-auto mt-0.5 flex justify-end">
+                <MapLayersControl
+                  panelPlacement="below"
+                  mapLook={mapLook}
+                  mapStack={mapStack}
+                  googleKeyConfigured={placesEnabled}
+                  onLookChange={(look) => {
+                    setMapLook(look)
+                    void setSetting('mapLook', look)
+                  }}
+                  onStackChange={(id) => {
+                    setMapStack(id)
+                    void setSetting('mapStack', id)
+                  }}
+                />
+              </div>
             </>
           ) : (
             <>
-              {status ? <p className="text-right text-xs text-emerald-300">{status}</p> : null}
+              {status ? (
+                <p className="pointer-events-none text-right text-[10px] text-emerald-300">
+                  {status}
+                </p>
+              ) : null}
             </>
           )}
         </div>
