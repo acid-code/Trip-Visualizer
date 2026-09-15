@@ -504,11 +504,33 @@ textarea {
   transition: background var(--motion) ease, transform var(--motion) ease;
 }
 
-.ui-icon-btn:hover {
+/** Labeled header pills (Overview, Tips) — wider than icon-only buttons. */
+.ui-text-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  white-space: nowrap;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass);
+  color: var(--ink);
+  min-height: 2rem;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  backdrop-filter: blur(10px);
+  transition: background var(--motion) ease, transform var(--motion) ease;
+}
+
+.ui-icon-btn:hover,
+.ui-text-btn:hover {
   background: var(--paper-2);
 }
 
-.ui-icon-btn:active {
+.ui-icon-btn:active,
+.ui-text-btn:active {
   transform: scale(0.96);
 }
 
@@ -757,4 +779,18 @@ textarea {
   font-weight: 600;
   color: var(--ink);
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.2);
+}
+
+.plan-suggest-card {
+  width: 8.5rem;
+  border-radius: 1rem;
+  border: 1px solid var(--glass-border);
+  background: var(--paper-2);
+  padding: 0.65rem 0.7rem;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+}
+
+.plan-suggest-card-on {
+  border-color: color-mix(in srgb, var(--coral) 55%, var(--glass-border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--coral) 35%, transparent);
 }

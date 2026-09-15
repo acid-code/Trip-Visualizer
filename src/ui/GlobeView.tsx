@@ -745,7 +745,7 @@ export function GlobeView({
     const overlay = walkOverlayRef.current
     const v = viewerRef.current
     if (!overlay) return
-    if (!walkTarget || !v) {
+    if (!renderActive || !walkTarget || !v) {
       overlay.style.display = 'none'
       return
     }
@@ -774,7 +774,7 @@ export function GlobeView({
     } catch {
       overlay.style.display = 'none'
     }
-  }, [walkTarget, selectedId, tempPin, pathActionReady])
+  }, [walkTarget, selectedId, tempPin, pathActionReady, renderActive])
 
   const isFlight = walkTarget?.kind === 'flights'
   const directionsMode =
@@ -818,7 +818,7 @@ export function GlobeView({
       : '-translate-y-[3.6rem]'
 
   const pinActions =
-    typeof document !== 'undefined'
+    renderActive && typeof document !== 'undefined'
       ? createPortal(
           <div className="pointer-events-none fixed inset-0 z-[42] overflow-hidden">
             <div

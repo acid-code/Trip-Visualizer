@@ -1962,7 +1962,10 @@ export default function App() {
         <div className="absolute inset-0 z-[28] flex flex-col bg-[var(--bg)]">
           <PlanBoard
             trip={ensurePlanScaffold(active)}
+            placesEnabled={placesEnabled}
+            googleApiKey={effectiveGoogleKey || undefined}
             onChange={(next) => void persist(next)}
+            onStatus={setStatus}
             onAskAi={(prompt) => {
               const { trip: next, message } = applyLocalPlanAi(
                 ensurePlanScaffold(active),
@@ -2014,6 +2017,8 @@ export default function App() {
                 setAppMode(mode)
                 void setSetting('appMode', mode)
                 if (mode === 'plan') {
+                  clearTempPin()
+                  setRouteWalk(null)
                   setExploreOpen(false)
                   setAiOpen(false)
                   setLowerMode('none')
@@ -2066,7 +2071,8 @@ export default function App() {
                   }}
                 />
                 <button
-                  className="ui-icon-btn"
+                  type="button"
+                  className="ui-text-btn"
                   onClick={() => {
                     if (!aiReview) setDayFilter(null)
                     setOverviewToken((n) => n + 1)
@@ -2076,7 +2082,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className="ui-icon-btn bg-orange-500/90 text-white border-orange-400/40"
+                  className="ui-text-btn bg-orange-500/90 text-white border-orange-400/40"
                   title="Feature tips"
                   onClick={() => openFeatureGuide({ all: true })}
                 >

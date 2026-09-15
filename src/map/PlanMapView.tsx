@@ -34,6 +34,13 @@ const DARK_STYLE: maplibregl.StyleSpecification = {
   ],
 }
 
+export type PlanSuggestionPin = {
+  id: string
+  lat: number
+  lon: number
+  name: string
+}
+
 type Props = {
   meta: TripMeta
   sections: PlanSection[]
@@ -42,7 +49,13 @@ type Props = {
   visibleDays: Set<string> | null
   /** Color pins by section (ideas) or by day (scheduled). */
   colorBy?: 'section' | 'day'
+  /** When true, hide/dim scheduled places (Discover mode). */
+  hideScheduled?: boolean
+  suggestions?: PlanSuggestionPin[]
   focusPlaceId?: string | null
+  focusSuggestionId?: string | null
+  onPlaceClick?: (placeId: string) => void
+  onSuggestionClick?: (suggestionId: string) => void
   className?: string
 }
 
@@ -51,6 +64,7 @@ function makePinEl(opts: {
   label: string
   title: string
   dimmed?: boolean
+  ring?: string
 }): HTMLButtonElement {
   const el = document.createElement('button')
   el.type = 'button'
@@ -67,7 +81,7 @@ function makePinEl(opts: {
     'border:0',
     'background:transparent',
     'cursor:pointer',
-    opts.dimmed ? 'opacity:0.55' : 'opacity:1',
+    opts.dimmed ? 'opacity:0.4' : 'opacity:1',
   ].join(';')
 
   const bubble = document.createElement('span')
@@ -80,7 +94,7 @@ function makePinEl(opts: {
     'padding:0 5px',
     'border-radius:999px',
     `background:${opts.fill}`,
-    'border:2px solid #0b1220',
+    `border:2px solid ${opts.ring || '#0b1220'}`,
     'box-shadow:0 0 0 1px rgba(255,255,255,0.28), 0 6px 14px rgba(0,0,0,0.5)',
     'color:#fff',
     'font:700 10px/1 "Space Grotesk", system-ui, sans-serif',
@@ -98,12 +112,21 @@ export function PlanMapView({
   visibleSectionIds,
   visibleDays,
   colorBy = 'section',
+  hideScheduled = false,
+  suggestions = [],
   focusPlaceId,
+  focusSuggestionId,
+  onPlaceClick,
+  onSuggestionClick,
   className = '',
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const markersRef = useRef<maplibregl.Marker[]>([])
+  const onPlaceClickRef = useRef(onPlaceClick)
+  const onSuggestionClickRef = useRef(onSuggestionClick)
+  onPlaceClickRef.current = onPlaceClick
+  onSuggestionClickRef.current = onSuggestionClick
 
   useEffect(() => {
     if (!rootRef.current || mapRef.current) return
@@ -136,8 +159,11 @@ export function PlanMapView({
 
     const visible = places.filter((p) => {
       if (!isValidCoord(p.lat, p.lon)) return false
+      if (hideScheduled && p.scheduledDay) return false
       if (!visibleSectionIds.has(p.sectionId)) return false
-      if (visibleDays && p.scheduledDay && !visibleDays.has(p.scheduledDay)) return false
+      if (visibleDays) {
+        if (!p.scheduledDay || !visibleDays.has(p.scheduledDay)) return false
+      }
       return true
     })
 
@@ -151,10 +177,32 @@ export function PlanMapView({
         fill,
         label,
         title: day ? `${p.name} · day ${dayNum}` : p.name,
-        dimmed: !day,
+        dimmed: false,
+      })
+      el.addEventListener('click', (e) => {
+        e.stopPropagation()
+        onPlaceClickRef.current?.(p.id)
       })
       const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
         .setLngLat([p.lon!, p.lat!])
+        .addTo(map)
+      markersRef.current.push(marker)
+    }
+
+    for (const s of suggestions) {
+      if (!isValidCoord(s.lat, s.lon)) continue
+      const el = makePinEl({
+        fill: '#f59e0b',
+        label: '+',
+        title: `Suggestion · ${s.name}`,
+        ring: focusSuggestionId === s.id ? '#fde68a' : '#92400e',
+      })
+      el.addEventListener('click', (e) => {
+        e.stopPropagation()
+        onSuggestionClickRef.current?.(s.id)
+      })
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([s.lon, s.lat])
         .addTo(map)
       markersRef.current.push(marker)
     }
@@ -203,19 +251,41 @@ export function PlanMapView({
     if (map.isStyleLoaded()) ensure()
     else map.once('load', ensure)
 
+    if (focusSuggestionId) {
+      const focus = suggestions.find((s) => s.id === focusSuggestionId)
+      if (focus && isValidCoord(focus.lat, focus.lon)) {
+        map.easeTo({ center: [focus.lon, focus.lat], zoom: Math.max(map.getZoom(), 12) })
+        return
+      }
+    }
     if (focusPlaceId) {
       const focus = visible.find((p) => p.id === focusPlaceId)
       if (focus) {
         map.easeTo({ center: [focus.lon!, focus.lat!], zoom: Math.max(map.getZoom(), 11) })
-      }
-    } else if (visible.length) {
-      const bounds = new maplibregl.LngLatBounds()
-      for (const p of visible) bounds.extend([p.lon!, p.lat!])
-      if (!bounds.isEmpty()) {
-        map.fitBounds(bounds, { padding: 48, maxZoom: 12, duration: 600 })
+        return
       }
     }
-  }, [meta, sections, places, visibleSectionIds, visibleDays, colorBy, focusPlaceId])
+
+    const bounds = new maplibregl.LngLatBounds()
+    for (const p of visible) bounds.extend([p.lon!, p.lat!])
+    for (const s of suggestions) {
+      if (isValidCoord(s.lat, s.lon)) bounds.extend([s.lon, s.lat])
+    }
+    if (!bounds.isEmpty()) {
+      map.fitBounds(bounds, { padding: 56, maxZoom: 12, duration: 600 })
+    }
+  }, [
+    meta,
+    sections,
+    places,
+    visibleSectionIds,
+    visibleDays,
+    colorBy,
+    hideScheduled,
+    suggestions,
+    focusPlaceId,
+    focusSuggestionId,
+  ])
 
   return (
     <div

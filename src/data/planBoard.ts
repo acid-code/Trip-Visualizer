@@ -8,15 +8,36 @@ export const DEFAULT_PLAN_SECTIONS: Array<Omit<PlanSection, 'id'>> = [
   { title: 'Must see', color: PLAN_SECTION_COLORS[0], icon: '⭐', order: 0 },
   { title: 'Food', color: PLAN_SECTION_COLORS[1], icon: '🍽️', order: 1 },
   { title: 'Stay ideas', color: PLAN_SECTION_COLORS[3], icon: '🛏️', order: 2 },
+  { title: 'Maybe', color: PLAN_SECTION_COLORS[4], icon: '💭', order: 3 },
 ]
 
 /** Section that holds mirrors of Journey steps (auto-synced). */
 export const JOURNEY_SECTION_TITLE = 'On the trip'
 
+const MAYBE_SECTION_TITLE = 'Maybe'
+
+function ensureMaybeSection(sections: PlanSection[]): PlanSection[] {
+  if (sections.some((s) => s.title.toLowerCase() === MAYBE_SECTION_TITLE.toLowerCase())) {
+    return sections
+  }
+  const order = Math.max(0, ...sections.map((s) => s.order), 0) + 1
+  return [
+    ...sections,
+    {
+      id: createId('SEC'),
+      title: MAYBE_SECTION_TITLE,
+      color: PLAN_SECTION_COLORS[4],
+      icon: '💭',
+      order,
+    },
+  ]
+}
+
 export function ensurePlanScaffold(trip: TripRecord): TripRecord {
-  const sections = trip.planSections?.length
+  const base = trip.planSections?.length
     ? trip.planSections
     : DEFAULT_PLAN_SECTIONS.map((s) => ({ ...s, id: createId('SEC') }))
+  const sections = ensureMaybeSection(base)
   const scaffolded: TripRecord = {
     ...trip,
     planSections: sections,

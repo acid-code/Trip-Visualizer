@@ -162,27 +162,19 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
       : null
 
   return (
-    <div ref={rootRef} className="relative min-w-0 max-w-[9.5rem]">
+    <div ref={rootRef} className="relative min-w-0 max-w-[5.5rem]">
       <button
         type="button"
         className="flex w-full max-w-full items-center gap-1 rounded-full border border-white/20 bg-black/45 py-1 pl-2.5 pr-1.5 text-left text-xs text-white shadow-sm backdrop-blur hover:bg-black/55"
         aria-expanded={open}
         aria-controls={listId}
+        aria-label={active ? `Trips — current: ${active.meta.name}` : 'Trips'}
         onClick={() => {
           setOpen((v) => !v)
           setConfirmId(null)
         }}
       >
-        <span className="min-w-0 flex-1 truncate font-medium">
-          {active ? (
-            <>
-              {active.isExample ? <span className="mr-1 text-orange-300">★</span> : null}
-              {active.meta.name}
-            </>
-          ) : (
-            <span className="text-white/60">No trip</span>
-          )}
-        </span>
+        <span className="min-w-0 flex-1 truncate font-medium">Trips</span>
         <svg
           className={`h-3.5 w-3.5 shrink-0 text-white/70 transition ${open ? 'rotate-180' : ''}`}
           viewBox="0 0 20 20"
@@ -222,7 +214,9 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
                         <li
                           key={t.id}
                           className={`group flex items-center gap-1 px-1.5 ${
-                            selected ? 'bg-white/10' : 'hover:bg-white/5'
+                            selected
+                              ? 'bg-orange-500/25 ring-1 ring-inset ring-orange-300/40'
+                              : 'hover:bg-white/5'
                           }`}
                         >
                           <button
@@ -235,7 +229,11 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
                               setOpen(false)
                             }}
                           >
-                            <div className="truncate text-sm font-medium">
+                            <div
+                              className={`truncate text-sm font-medium ${
+                                selected ? 'text-orange-100' : ''
+                              }`}
+                            >
                               {t.isExample ? <span className="mr-1 text-orange-300">★</span> : null}
                               {t.meta.name}
                             </div>

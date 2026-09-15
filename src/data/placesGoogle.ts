@@ -37,8 +37,8 @@ const FIELD_MASK = [
   'places.regularOpeningHours',
 ].join(',')
 
-/** Types we care about — one request covers food / drink / sights / nature. */
-const INCLUDED_TYPES = [
+/** Broad mix — Journey Explore (client filters by chip). */
+const INCLUDED_TYPES_ALL = [
   'restaurant',
   'cafe',
   'bakery',
@@ -60,6 +60,45 @@ const INCLUDED_TYPES = [
   'marina',
   'lodging',
 ]
+
+/** Per-category types so Nearby's 20-result cap isn't eaten by restaurants. */
+const INCLUDED_TYPES_BY_CATEGORY: Record<ExploreCategory, string[]> = {
+  food: ['restaurant', 'cafe', 'bakery'],
+  drink: ['bar', 'winery', 'night_club', 'pub'],
+  sights: [
+    'museum',
+    'art_gallery',
+    'tourist_attraction',
+    'historical_landmark',
+    'church',
+    'hindu_temple',
+    'mosque',
+    'synagogue',
+    'zoo',
+    'amusement_park',
+    'aquarium',
+  ],
+  hotel: ['lodging'],
+  nature: ['park', 'beach', 'marina', 'campground', 'national_park'],
+  other: INCLUDED_TYPES_ALL,
+}
+
+/** Resolve Google `includedTypes` for an optional category filter. */
+export function includedTypesForCategories(
+  categories?: ExploreCategory[],
+): string[] {
+  if (!categories?.length) return INCLUDED_TYPES_ALL
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const cat of categories) {
+    for (const t of INCLUDED_TYPES_BY_CATEGORY[cat] ?? []) {
+      if (seen.has(t)) continue
+      seen.add(t)
+      out.push(t)
+    }
+  }
+  return out.length ? out : INCLUDED_TYPES_ALL
+}
 
 type GooglePlace = {
   id?: string
@@ -254,6 +293,7 @@ export async function searchNearbyPlacesGoogle(opts: {
   apiKey: string
   maxResultCount?: number
   signal?: AbortSignal
+  categories?: ExploreCategory[]
 }): Promise<ExplorePlace[]> {
   const apiKey = sanitizeSecretInput(opts.apiKey)
   if (!apiKey) throw new Error('Missing Google Maps API key')
@@ -264,6 +304,7 @@ export async function searchNearbyPlacesGoogle(opts: {
     Math.max(opts.maxResultCount ?? GOOGLE_NEARBY_MAX, 1),
     GOOGLE_NEARBY_MAX,
   )
+  const includedTypes = includedTypesForCategories(opts.categories)
 
   const res = await fetch(PLACES_NEARBY, {
     method: 'POST',
@@ -274,7 +315,7 @@ export async function searchNearbyPlacesGoogle(opts: {
     },
     body: JSON.stringify({
       languageCode: 'en',
-      includedTypes: INCLUDED_TYPES,
+      includedTypes,
       maxResultCount,
       rankPreference: 'DISTANCE',
       locationRestriction: {
@@ -314,6 +355,7 @@ export async function fetchGoogleNearbyViaProxy(
     radiusM?: number
     maxResultCount?: number
     signal?: AbortSignal
+    categories?: ExploreCategory[]
   },
 ): Promise<ExplorePlace[]> {
   const override = sanitizeSecretInput(opts.apiKey ?? '')
@@ -325,6 +367,7 @@ export async function fetchGoogleNearbyViaProxy(
       lon: anchor.lon,
       radiusM: opts.radiusM ?? 1500,
       maxResultCount: opts.maxResultCount ?? GOOGLE_NEARBY_MAX,
+      ...(opts.categories?.length ? { categories: opts.categories } : {}),
       ...(override ? { apiKey: override } : {}),
     }),
     signal: opts.signal,
