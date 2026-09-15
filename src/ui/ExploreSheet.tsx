@@ -6,11 +6,8 @@ import {
   type ExplorePlace,
   type ExploreSort,
 } from '../data/explore'
-import {
-  mapsNearbyExploreUrl,
-  mapsPlaceSearchUrl,
-  openExternalUrl,
-} from '../data/mapsLinks'
+import { mapsNearbyExploreUrl, openExternalUrl } from '../data/mapsLinks'
+import { ExplorePlaceDetailSheet } from './ExplorePlaceDetailSheet'
 
 type Props = {
   open: boolean
@@ -244,170 +241,12 @@ export function ExploreSheet({
       </div>
 
       {detail ? (
-        <div className="absolute inset-0 z-20 flex flex-col bg-[color-mix(in_srgb,var(--bg)_45%,transparent)] backdrop-blur-[2px]">
-          <div className="mt-auto max-h-[min(70vh,28rem)] overflow-y-auto overscroll-contain touch-pan-y rounded-t-3xl border border-[var(--glass-border)] bg-[var(--paper-solid)] text-[var(--ink)] shadow-2xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-[var(--glass-border)] bg-[var(--paper)] px-4 py-2.5 backdrop-blur">
-              <div className="min-w-0">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--teal)]">
-                  {exploreCategoryLabel(detail.category)}
-                </div>
-                <h3 className="truncate text-sm font-semibold text-[var(--ink)]">{detail.name}</h3>
-              </div>
-              <button
-                type="button"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--paper-2)] text-[var(--ink-muted)]"
-                title="Back to explore list"
-                onClick={onCloseDetail}
-              >
-                ✕
-              </button>
-            </div>
-            <div className="space-y-2.5 px-4 py-3">
-              <DetailMedia place={detail} />
-
-              {detail.images.length !== 1 ? (
-                <DetailMeta place={detail} />
-              ) : null}
-
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="rounded-full border border-[var(--glass-border)] bg-[var(--paper-2)] px-3 py-1.5 text-xs font-medium text-[var(--ink)] shadow-sm"
-                  onClick={() => {
-                    const mapsUri = detail.tags.googleMapsUri
-                    openExternalUrl(
-                      mapsUri ||
-                        mapsPlaceSearchUrl(detail.name, detail, {
-                          address: detail.address,
-                          category: detail.category,
-                          cuisine: detail.cuisine,
-                        }),
-                    )
-                  }}
-                >
-                  Google Maps · reviews
-                </button>
-                {detail.menuUrl &&
-                (detail.category === 'food' || detail.category === 'drink') ? (
-                  <button
-                    type="button"
-                    className="rounded-full border border-amber-400/40 bg-amber-500/15 px-3 py-1.5 text-xs font-medium text-[color-mix(in_srgb,#b45309_70%,var(--ink))] shadow-sm"
-                    onClick={() => openExternalUrl(detail.menuUrl)}
-                  >
-                    Menu
-                  </button>
-                ) : null}
-                {detail.website ? (
-                  <button
-                    type="button"
-                    className="rounded-full border border-[var(--glass-border)] bg-[var(--paper-2)] px-3 py-1.5 text-xs font-medium text-[var(--sky)] shadow-sm"
-                    onClick={() => openExternalUrl(detail.website)}
-                  >
-                    Website
-                  </button>
-                ) : null}
-              </div>
-
-              <button
-                type="button"
-                className="w-full rounded-2xl bg-[var(--coral)] py-2.5 text-sm font-semibold text-white shadow-sm hover:opacity-95"
-                onClick={() => onAddStep(detail)}
-              >
-                Add step
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-/** Fixed-height photo strip: fit full image height; extra photos fill width, else info sits beside. */
-function DetailMedia({ place }: { place: ExplorePlace }) {
-  const images = place.images.filter(Boolean)
-  const single = images.length <= 1
-
-  if (!images.length) {
-    return (
-      <div className="flex h-24 items-center justify-center rounded-2xl bg-[color-mix(in_srgb,var(--coral)_18%,var(--paper-2))] text-2xl">
-        📍
-      </div>
-    )
-  }
-
-  return (
-    <div className={`flex gap-3 ${single ? 'items-stretch' : 'flex-col'}`}>
-      <div
-        className={`flex h-36 gap-1.5 overflow-x-auto rounded-2xl bg-[var(--paper-2)] p-1 [scrollbar-width:thin] ${
-          single ? 'w-[min(48%,12rem)] shrink-0' : 'w-full'
-        }`}
-      >
-        {images.map((src) => (
-          <img
-            key={src}
-            src={src}
-            alt=""
-            className="h-full w-auto max-w-none shrink-0 rounded-xl object-contain"
-            draggable={false}
-          />
-        ))}
-      </div>
-      {single ? (
-        <div className="min-w-0 flex-1">
-          <DetailMeta place={place} compact />
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function DetailMeta({
-  place,
-  compact = false,
-}: {
-  place: ExplorePlace
-  compact?: boolean
-}) {
-  return (
-    <div className={compact ? 'flex h-full flex-col gap-1.5' : 'space-y-2'}>
-      <div className="flex flex-wrap gap-1.5 text-xs text-[var(--ink-muted)]">
-        <span className="rounded-full bg-[var(--paper-2)] px-2 py-0.5 tabular-nums">
-          {formatKm(place.distKm)}
-        </span>
-        <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[color-mix(in_srgb,#b45309_70%,var(--ink))]">
-          <span aria-hidden className="text-[10px]">
-            ★
-          </span>
-          {place.rating != null ? place.rating : '—'}
-          <span className="text-[9px] text-[var(--ink-muted)]">
-            ({place.tags.source === 'google' ? 'Google' : 'OSM'})
-          </span>
-        </span>
-      </div>
-      {place.summary ? (
-        <p
-          className={`leading-relaxed text-[var(--ink)] ${
-            compact ? 'line-clamp-5 text-xs' : 'text-sm'
-          }`}
-        >
-          {place.summary}
-        </p>
-      ) : null}
-      {place.address ? (
-        <p className={`text-[var(--ink-muted)] ${compact ? 'line-clamp-2 text-[11px]' : 'text-xs'}`}>
-          {place.address}
-        </p>
-      ) : null}
-      {place.cuisine ? (
-        <p className={`text-[var(--ink-muted)] ${compact ? 'text-[11px]' : 'text-xs'}`}>
-          Cuisine: {place.cuisine}
-        </p>
-      ) : null}
-      {place.openingHours ? (
-        <p className={`text-[var(--ink-muted)] ${compact ? 'line-clamp-2 text-[11px]' : 'text-xs'}`}>
-          Hours: {place.openingHours}
-        </p>
+        <ExplorePlaceDetailSheet
+          place={detail}
+          onClose={onCloseDetail}
+          primaryLabel="Add step"
+          onPrimary={() => onAddStep(detail)}
+        />
       ) : null}
     </div>
   )

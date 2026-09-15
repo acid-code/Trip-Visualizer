@@ -63,13 +63,19 @@ const INCLUDED_TYPES_BY_CATEGORY: Record<string, string[]> = {
     'zoo',
     'amusement_park',
     'aquarium',
+    'performing_arts_theater',
+    'visitor_center',
   ],
   hotel: ['lodging'],
   nature: ['park', 'beach', 'marina', 'campground', 'national_park'],
   other: INCLUDED_TYPES_ALL,
 }
 
-function includedTypesForCategories(raw: unknown): string[] {
+function includedTypesForCategories(
+  raw: unknown,
+  unrestricted?: boolean,
+): string[] | null {
+  if (unrestricted) return null
   if (!Array.isArray(raw) || !raw.length) return INCLUDED_TYPES_ALL
   const seen = new Set<string>()
   const out: string[] = []
@@ -225,7 +231,9 @@ function categoryFromTypes(primary: string, types: string[]): string {
     has('synagogue') ||
     has('zoo') ||
     has('aquarium') ||
-    has('amusement_park')
+    has('amusement_park') ||
+    has('performing_arts_theater') ||
+    has('visitor_center')
   ) {
     return 'sights'
   }
@@ -357,7 +365,10 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     Number(body.maxResultCount) || GOOGLE_NEARBY_MAX,
     GOOGLE_NEARBY_MAX,
   )
-  const includedTypes = includedTypesForCategories(body.categories)
+  const includedTypes = includedTypesForCategories(
+    body.categories,
+    Boolean(body.unrestricted),
+  )
   const apiKey = resolveApiKey(body.apiKey)
 
   if (!apiKey || !apiKey.startsWith('AIza')) {
@@ -380,7 +391,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
       },
       body: JSON.stringify({
         languageCode: 'en',
-        includedTypes,
+        ...(includedTypes ? { includedTypes } : {}),
         maxResultCount,
         rankPreference: 'DISTANCE',
         locationRestriction: {

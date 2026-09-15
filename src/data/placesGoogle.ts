@@ -77,16 +77,21 @@ const INCLUDED_TYPES_BY_CATEGORY: Record<ExploreCategory, string[]> = {
     'zoo',
     'amusement_park',
     'aquarium',
+    'performing_arts_theater',
+    'visitor_center',
   ],
   hotel: ['lodging'],
   nature: ['park', 'beach', 'marina', 'campground', 'national_park'],
   other: INCLUDED_TYPES_ALL,
 }
 
-/** Resolve Google `includedTypes` for an optional category filter. */
+/** Resolve Google `includedTypes` for an optional category filter.
+ *  Returns `null` when the caller wants no type restriction (all Table A places). */
 export function includedTypesForCategories(
   categories?: ExploreCategory[],
-): string[] {
+  unrestricted?: boolean,
+): string[] | null {
+  if (unrestricted) return null
   if (!categories?.length) return INCLUDED_TYPES_ALL
   const seen = new Set<string>()
   const out: string[] = []
@@ -173,7 +178,9 @@ function categoryFromTypes(primary: string, types: string[]): ExploreCategory {
     has('synagogue') ||
     has('zoo') ||
     has('aquarium') ||
-    has('amusement_park')
+    has('amusement_park') ||
+    has('performing_arts_theater') ||
+    has('visitor_center')
   ) {
     return 'sights'
   }
@@ -294,6 +301,8 @@ export async function searchNearbyPlacesGoogle(opts: {
   maxResultCount?: number
   signal?: AbortSignal
   categories?: ExploreCategory[]
+  /** Omit includedTypes — return any nearby place type. */
+  unrestricted?: boolean
 }): Promise<ExplorePlace[]> {
   const apiKey = sanitizeSecretInput(opts.apiKey)
   if (!apiKey) throw new Error('Missing Google Maps API key')
@@ -304,7 +313,10 @@ export async function searchNearbyPlacesGoogle(opts: {
     Math.max(opts.maxResultCount ?? GOOGLE_NEARBY_MAX, 1),
     GOOGLE_NEARBY_MAX,
   )
-  const includedTypes = includedTypesForCategories(opts.categories)
+  const includedTypes = includedTypesForCategories(
+    opts.categories,
+    opts.unrestricted,
+  )
 
   const res = await fetch(PLACES_NEARBY, {
     method: 'POST',
@@ -315,7 +327,7 @@ export async function searchNearbyPlacesGoogle(opts: {
     },
     body: JSON.stringify({
       languageCode: 'en',
-      includedTypes,
+      ...(includedTypes ? { includedTypes } : {}),
       maxResultCount,
       rankPreference: 'DISTANCE',
       locationRestriction: {
@@ -356,6 +368,7 @@ export async function fetchGoogleNearbyViaProxy(
     maxResultCount?: number
     signal?: AbortSignal
     categories?: ExploreCategory[]
+    unrestricted?: boolean
   },
 ): Promise<ExplorePlace[]> {
   const override = sanitizeSecretInput(opts.apiKey ?? '')
@@ -367,7 +380,11 @@ export async function fetchGoogleNearbyViaProxy(
       lon: anchor.lon,
       radiusM: opts.radiusM ?? 1500,
       maxResultCount: opts.maxResultCount ?? GOOGLE_NEARBY_MAX,
-      ...(opts.categories?.length ? { categories: opts.categories } : {}),
+      ...(opts.unrestricted
+        ? { unrestricted: true }
+        : opts.categories?.length
+          ? { categories: opts.categories }
+          : {}),
       ...(override ? { apiKey: override } : {}),
     }),
     signal: opts.signal,

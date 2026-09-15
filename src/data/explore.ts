@@ -609,7 +609,7 @@ export async function fetchNearbyExplore(
     if (useGoogle) {
       try {
         const gKey = opts?.googleApiKey?.trim() || undefined
-        const places = await fetchGoogleNearbyViaProxy(anchor, {
+        let places = await fetchGoogleNearbyViaProxy(anchor, {
           apiKey: gKey,
           radiusM,
           maxResultCount: limit,
@@ -617,13 +617,49 @@ export async function fetchNearbyExplore(
           categories,
         })
         if (opts?.signal?.aborted) return cacheHit ?? []
+
+        // Category-scoped Nearby often returns 0 (sparse types / bad centroid).
+        // Retry unrestricted, then keep matching categories; else fall through to OSM.
+        if (!places.length && categories?.length) {
+          logClientInfo(
+            'explore',
+            `Google Nearby empty for [${categories.join(',')}]; retrying unrestricted`,
+          )
+          const broad = await fetchGoogleNearbyViaProxy(anchor, {
+            apiKey: gKey,
+            radiusM: Math.max(radiusM, 12_000),
+            maxResultCount: limit,
+            signal: opts?.signal,
+            unrestricted: true,
+          })
+          if (opts?.signal?.aborted) return cacheHit ?? []
+          const want = new Set(categories)
+          places = broad.filter((p) => want.has(p.category))
+          if (!places.length) {
+            logClientInfo(
+              'explore',
+              'Google unrestricted had no matching categories — falling back to OSM',
+            )
+            throw new Error('google-category-empty')
+          }
+        }
+
+        if (!places.length) {
+          logClientInfo('explore', 'Google Nearby returned 0 — falling back to OSM')
+          throw new Error('google-empty')
+        }
+
         const withPhotos = attachGoogleListPhotos(places, gKey)
         const fresh = withDistances(withPhotos)
         void setCached(key, fresh)
         logClientInfo('explore', `Google Nearby ok — ${fresh.length} places`)
         return fresh
       } catch (err) {
-        logClientError('explore-google', err)
+        if (opts?.signal?.aborted) return cacheHit ?? []
+        const msg = err instanceof Error ? err.message : ''
+        if (msg !== 'google-category-empty' && msg !== 'google-empty') {
+          logClientError('explore-google', err)
+        }
         logClientInfo('explore', 'Google Nearby failed — falling back to OSM')
         // fall through to Overpass
       }
@@ -708,6 +744,23 @@ export function exploreCategoryLabel(cat: ExploreCategory): string {
       return 'Nature'
     default:
       return 'Other'
+  }
+}
+
+export function exploreCategoryEmoji(cat: ExploreCategory): string {
+  switch (cat) {
+    case 'sights':
+      return '🏛️'
+    case 'food':
+      return '🍽️'
+    case 'drink':
+      return '🍷'
+    case 'hotel':
+      return '🛏️'
+    case 'nature':
+      return '🌿'
+    default:
+      return '📍'
   }
 }
 

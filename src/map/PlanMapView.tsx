@@ -39,6 +39,8 @@ export type PlanSuggestionPin = {
   lat: number
   lon: number
   name: string
+  /** Type emoji shown inside the map circle. */
+  emoji?: string
 }
 
 type Props = {
@@ -56,26 +58,30 @@ type Props = {
   focusSuggestionId?: string | null
   onPlaceClick?: (placeId: string) => void
   onSuggestionClick?: (suggestionId: string) => void
+  /** Fired (debounced) when the map settles — Discover uses this as the Nearby anchor. */
+  onViewportIdle?: (center: { lat: number; lon: number }) => void
   className?: string
 }
 
 function makePinEl(opts: {
   fill: string
-  label: string
+  emoji: string
   title: string
   dimmed?: boolean
   ring?: string
+  selected?: boolean
 }): HTMLButtonElement {
   const el = document.createElement('button')
   el.type = 'button'
   el.title = opts.title
   el.setAttribute('aria-label', opts.title)
+  const size = opts.selected ? 34 : 30
   el.style.cssText = [
     'display:flex',
     'align-items:center',
     'justify-content:center',
-    'width:28px',
-    'height:28px',
+    `width:${size}px`,
+    `height:${size}px`,
     'margin:0',
     'padding:0',
     'border:0',
@@ -89,20 +95,33 @@ function makePinEl(opts: {
     'display:flex',
     'align-items:center',
     'justify-content:center',
-    'min-width:22px',
-    'height:22px',
-    'padding:0 5px',
+    `width:${size}px`,
+    `height:${size}px`,
     'border-radius:999px',
     `background:${opts.fill}`,
-    `border:2px solid ${opts.ring || '#0b1220'}`,
-    'box-shadow:0 0 0 1px rgba(255,255,255,0.28), 0 6px 14px rgba(0,0,0,0.5)',
-    'color:#fff',
-    'font:700 10px/1 "Space Grotesk", system-ui, sans-serif',
-    'letter-spacing:0.02em',
+    `border:2.5px solid ${opts.ring || (opts.selected ? '#fff' : '#0b1220')}`,
+    opts.selected
+      ? 'box-shadow:0 0 0 2px rgba(251,191,36,0.9), 0 8px 18px rgba(0,0,0,0.55)'
+      : 'box-shadow:0 0 0 1px rgba(255,255,255,0.28), 0 6px 14px rgba(0,0,0,0.5)',
+    'font-size:14px',
+    'line-height:1',
   ].join(';')
-  bubble.textContent = opts.label
+  bubble.textContent = opts.emoji
   el.appendChild(bubble)
   return el
+}
+
+function sectionEmoji(section: PlanSection | undefined): string {
+  const icon = section?.icon?.trim() || ''
+  // Prefer section icon when it looks like an emoji (not a letter/digit glyph).
+  if (icon && !/^[a-z0-9#@]+$/i.test(icon) && icon.length <= 4) return icon
+  const t = (section?.title || '').toLowerCase()
+  if (t.includes('food') || t.includes('eat') || t.includes('drink')) return '🍽️'
+  if (t.includes('stay') || t.includes('hotel')) return '🛏️'
+  if (t.includes('nature') || t.includes('outdoor')) return '🌿'
+  if (t.includes('must') || t.includes('sight')) return '🏛️'
+  if (t.includes('maybe') || t.includes('optional')) return '✨'
+  return '📍'
 }
 
 export function PlanMapView({
@@ -118,15 +137,19 @@ export function PlanMapView({
   focusSuggestionId,
   onPlaceClick,
   onSuggestionClick,
+  onViewportIdle,
   className = '',
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const markersRef = useRef<maplibregl.Marker[]>([])
+  const lastFitKeyRef = useRef('')
   const onPlaceClickRef = useRef(onPlaceClick)
   const onSuggestionClickRef = useRef(onSuggestionClick)
+  const onViewportIdleRef = useRef(onViewportIdle)
   onPlaceClickRef.current = onPlaceClick
   onSuggestionClickRef.current = onSuggestionClick
+  onViewportIdleRef.current = onViewportIdle
 
   useEffect(() => {
     if (!rootRef.current || mapRef.current) return
@@ -138,8 +161,21 @@ export function PlanMapView({
       attributionControl: { compact: true },
     })
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
+    let idleTimer: ReturnType<typeof setTimeout> | null = null
+    const emitIdle = () => {
+      const c = map.getCenter()
+      onViewportIdleRef.current?.({ lat: c.lat, lon: c.lng })
+    }
+    const onMoveEnd = () => {
+      if (idleTimer) clearTimeout(idleTimer)
+      idleTimer = setTimeout(emitIdle, 450)
+    }
+    map.on('load', emitIdle)
+    map.on('moveend', onMoveEnd)
     mapRef.current = map
     return () => {
+      if (idleTimer) clearTimeout(idleTimer)
+      map.off('moveend', onMoveEnd)
       for (const m of markersRef.current) m.remove()
       markersRef.current = []
       map.remove()
@@ -169,15 +205,17 @@ export function PlanMapView({
 
     for (const p of visible) {
       const day = p.scheduledDay
+      const section = sections.find((s) => s.id === p.sectionId)
       const fill =
         colorBy === 'day' && day ? dayColor(meta, day) : sectionColor(p.sectionId)
       const dayNum = day ? Math.max(1, dayIndex(meta, day)) : 0
-      const label = day ? String(dayNum) : '·'
+      const emoji = sectionEmoji(section)
       const el = makePinEl({
         fill,
-        label,
+        emoji,
         title: day ? `${p.name} · day ${dayNum}` : p.name,
         dimmed: false,
+        selected: focusPlaceId === p.id,
       })
       el.addEventListener('click', (e) => {
         e.stopPropagation()
@@ -193,9 +231,10 @@ export function PlanMapView({
       if (!isValidCoord(s.lat, s.lon)) continue
       const el = makePinEl({
         fill: '#f59e0b',
-        label: '+',
+        emoji: s.emoji || '✨',
         title: `Suggestion · ${s.name}`,
         ring: focusSuggestionId === s.id ? '#fde68a' : '#92400e',
+        selected: focusSuggestionId === s.id,
       })
       el.addEventListener('click', (e) => {
         e.stopPropagation()
@@ -266,11 +305,15 @@ export function PlanMapView({
       }
     }
 
+    // Fit to trip pins only — not suggestions (avoids Discover re-fetch loops on pan).
+    const fitKey = `${visible.map((p) => p.id).join(',')}|${hideScheduled}|${[...visibleSectionIds].join(',')}|${
+      visibleDays ? [...visibleDays].join(',') : ''
+    }`
+    if (fitKey === lastFitKeyRef.current) return
+    lastFitKeyRef.current = fitKey
+
     const bounds = new maplibregl.LngLatBounds()
     for (const p of visible) bounds.extend([p.lon!, p.lat!])
-    for (const s of suggestions) {
-      if (isValidCoord(s.lat, s.lon)) bounds.extend([s.lon, s.lat])
-    }
     if (!bounds.isEmpty()) {
       map.fitBounds(bounds, { padding: 56, maxZoom: 12, duration: 600 })
     }

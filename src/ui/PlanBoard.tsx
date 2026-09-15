@@ -13,6 +13,7 @@ import {
 import { REGION_PACKS, findRegionPack } from '../data/regionPacks'
 import { createId } from '../data/db'
 import {
+  exploreCategoryEmoji,
   exploreCategoryLabel,
   fetchNearbyExplore,
   filterAndSortExplore,
@@ -22,6 +23,7 @@ import {
 import { isValidCoord } from '../data/validate'
 import { PlanMapView } from '../map/PlanMapView'
 import { Chip, IconButton, SegmentedControl } from './primitives'
+import { ExplorePlaceDetailSheet } from './ExplorePlaceDetailSheet'
 import { TOUCH_SCROLL_X, TOUCH_SCROLL_Y } from './scrollGesture'
 
 type Props = {
@@ -37,12 +39,17 @@ type Props = {
 
 type PlanMode = 'discover' | 'days'
 
-const SUGGEST_CATS: Array<{ id: ExploreCategory; short: string }> = [
-  { id: 'food', short: 'Food' },
-  { id: 'drink', short: 'Drinks' },
-  { id: 'sights', short: 'Sights' },
-  { id: 'hotel', short: 'Hotels' },
-  { id: 'nature', short: 'Nature' },
+const SUGGEST_CATS: Array<{
+  id: ExploreCategory
+  short: string
+  emoji: string
+  blurb: string
+}> = [
+  { id: 'sights', short: 'Sights', emoji: '🏛️', blurb: 'Museums & landmarks' },
+  { id: 'food', short: 'Food', emoji: '🍽️', blurb: 'Restaurants & cafés' },
+  { id: 'drink', short: 'Drinks', emoji: '🍷', blurb: 'Bars & wine' },
+  { id: 'hotel', short: 'Hotels', emoji: '🛏️', blurb: 'Places to stay' },
+  { id: 'nature', short: 'Nature', emoji: '🌿', blurb: 'Parks & outdoors' },
 ]
 
 function tripMapAnchor(trip: TripRecord): { lat: number; lon: number } {
@@ -50,14 +57,31 @@ function tripMapAnchor(trip: TripRecord): { lat: number; lon: number } {
   for (const p of trip.planPlaces) {
     if (isValidCoord(p.lat, p.lon)) pts.push({ lat: p.lat!, lon: p.lon! })
   }
-  for (const i of trip.items) {
-    if (isValidCoord(i.lat, i.lon)) pts.push({ lat: i.lat!, lon: i.lon! })
-    if (isValidCoord(i.latTo, i.lonTo)) pts.push({ lat: i.latTo!, lon: i.lonTo! })
+  // Prefer plan pins; journey items only if the plan has no coords yet.
+  if (!pts.length) {
+    for (const i of trip.items) {
+      if (isValidCoord(i.lat, i.lon)) pts.push({ lat: i.lat!, lon: i.lon! })
+      if (isValidCoord(i.latTo, i.lonTo)) pts.push({ lat: i.latTo!, lon: i.lonTo! })
+    }
   }
   if (!pts.length) return { lat: 43.7, lon: 5.2 }
-  const lat = pts.reduce((s, p) => s + p.lat, 0) / pts.length
-  const lon = pts.reduce((s, p) => s + p.lon, 0) / pts.length
-  return { lat, lon }
+  if (pts.length === 1) return pts[0]!
+  // Medoid — mean of a multi-city trip often lands in empty countryside.
+  let best = pts[0]!
+  let bestSum = Infinity
+  for (const a of pts) {
+    let sum = 0
+    for (const b of pts) {
+      const dLat = a.lat - b.lat
+      const dLon = a.lon - b.lon
+      sum += dLat * dLat + dLon * dLon
+    }
+    if (sum < bestSum) {
+      bestSum = sum
+      best = a
+    }
+  }
+  return best
 }
 
 function sectionForExploreCategory(
@@ -106,12 +130,16 @@ export function PlanBoard({
   const [suggestions, setSuggestions] = useState<ExplorePlace[]>([])
   const [suggestBusy, setSuggestBusy] = useState(false)
   const [suggestError, setSuggestError] = useState<string | null>(null)
+  const [mapAnchor, setMapAnchor] = useState<{ lat: number; lon: number } | null>(null)
   const [focusPlaceId, setFocusPlaceId] = useState<string | null>(null)
   const [focusSuggestionId, setFocusSuggestionId] = useState<string | null>(null)
+  const [detailPlace, setDetailPlace] = useState<ExplorePlace | null>(null)
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false)
   const [draftName, setDraftName] = useState('')
   const [aiPrompt, setAiPrompt] = useState('')
   const [packsOpen, setPacksOpen] = useState(false)
   const suggestAbortRef = useRef<AbortController | null>(null)
+  const filterMenuRef = useRef<HTMLDivElement>(null)
 
   const daySafe = days.includes(activeDay) ? activeDay : (days[0] ?? '')
 
@@ -154,10 +182,32 @@ export function PlanBoard({
             lat: p.lat,
             lon: p.lon,
             name: p.name,
+            emoji: exploreCategoryEmoji(p.category),
           }))
         : [],
     [mode, filteredSuggestions],
   )
+
+  useEffect(() => {
+    if (!filterMenuOpen) return
+    const onDoc = (e: MouseEvent) => {
+      if (filterMenuRef.current?.contains(e.target as Node)) return
+      setFilterMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFilterMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [filterMenuOpen])
+
+  useEffect(() => {
+    setFilterMenuOpen(false)
+  }, [mode])
 
   const dayPlaces =
     !daySafe
@@ -173,7 +223,7 @@ export function PlanBoard({
 
   useEffect(() => {
     if (mode !== 'discover') return
-    const anchor = tripMapAnchor(trip)
+    const anchor = mapAnchor ?? tripMapAnchor(trip)
     suggestAbortRef.current?.abort()
     const ac = new AbortController()
     suggestAbortRef.current = ac
@@ -186,7 +236,7 @@ export function PlanBoard({
           useGooglePlaces: placesEnabled,
           googleApiKey: googleApiKey || undefined,
           categories: [suggestCat],
-          radiusM: 4000,
+          radiusM: 12_000,
           limit: placesEnabled ? 20 : 36,
           onCacheHit: (cached) => {
             if (!ac.signal.aborted) {
@@ -197,7 +247,7 @@ export function PlanBoard({
         })
         if (ac.signal.aborted) return
         setSuggestions(places)
-        if (!places.length) setSuggestError('No suggestions nearby — pan the trip pins or try another type')
+        if (!places.length) setSuggestError('No suggestions nearby — pan the map or try another type')
         else setSuggestError(null)
       } catch (err) {
         if (ac.signal.aborted) return
@@ -207,9 +257,19 @@ export function PlanBoard({
       }
     })()
     return () => ac.abort()
-    // Re-fetch when mode/category/places toggle changes; anchor follows trip id + place count.
+    // Re-fetch when mode/category/places toggle / map center changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, suggestCat, placesEnabled, googleApiKey, trip.id, trip.planPlaces.length, trip.items.length])
+  }, [
+    mode,
+    suggestCat,
+    placesEnabled,
+    googleApiKey,
+    trip.id,
+    trip.planPlaces.length,
+    trip.items.length,
+    mapAnchor?.lat,
+    mapAnchor?.lon,
+  ])
 
   function toggleSectionLayer(id: string) {
     setHiddenSections((prev) => {
@@ -257,6 +317,7 @@ export function PlanBoard({
       }),
     )
     setFocusSuggestionId(null)
+    setDetailPlace(null)
     onStatus?.(`Saved “${place.name}” to ${section.title}`)
   }
 
@@ -303,6 +364,16 @@ export function PlanBoard({
     onStatus?.(`Added ideas from ${pack.label}`)
   }
 
+  const activeCatMeta =
+    SUGGEST_CATS.find((c) => c.id === suggestCat) ?? SUGGEST_CATS[0]!
+  const activeDayIdx = daySafe ? Math.max(0, days.indexOf(daySafe)) : 0
+
+  function openSuggestionDetail(place: ExplorePlace) {
+    setFocusSuggestionId(place.id)
+    setFocusPlaceId(null)
+    setDetailPlace(place)
+  }
+
   return (
     <div className="plan-phone relative flex h-full min-h-0 flex-col">
       {/* Top chrome — left side only so Journey/Plan switcher stays clear */}
@@ -317,33 +388,104 @@ export function PlanBoard({
               { id: 'days', label: 'Days' },
             ]}
           />
-          {mode === 'discover' ? (
-            <div className={`flex gap-1.5 pb-0.5 ${TOUCH_SCROLL_X}`}>
-              {SUGGEST_CATS.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  className={`plan-day-chip shrink-0 ${suggestCat === c.id ? 'plan-day-chip-on' : ''}`}
-                  onClick={() => setSuggestCat(c.id)}
-                >
-                  {c.short}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className={`flex gap-1.5 pb-0.5 ${TOUCH_SCROLL_X}`}>
-              {days.map((day, idx) => (
-                <button
-                  key={day}
-                  type="button"
-                  className={`plan-day-chip shrink-0 ${daySafe === day ? 'plan-day-chip-on' : ''}`}
-                  onClick={() => setActiveDay(day)}
-                >
-                  Day {idx + 1}
-                </button>
-              ))}
-            </div>
-          )}
+          <div ref={filterMenuRef} className="relative w-fit">
+            <button
+              type="button"
+              className="plan-filter-trigger"
+              aria-expanded={filterMenuOpen}
+              aria-haspopup="listbox"
+              onClick={() => setFilterMenuOpen((v) => !v)}
+            >
+              {mode === 'discover' ? (
+                <>
+                  <span className="text-base leading-none" aria-hidden>
+                    {activeCatMeta.emoji}
+                  </span>
+                  <span className="font-semibold">{activeCatMeta.short}</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-base leading-none" aria-hidden>
+                    📅
+                  </span>
+                  <span className="font-semibold">Day {activeDayIdx + 1}</span>
+                </>
+              )}
+              <svg
+                className={`h-3.5 w-3.5 text-[var(--ink-muted)] transition ${filterMenuOpen ? 'rotate-180' : ''}`}
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                aria-hidden
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            </button>
+            {filterMenuOpen ? (
+              <div className="plan-filter-menu" role="listbox">
+                {mode === 'discover'
+                  ? SUGGEST_CATS.map((c) => {
+                      const on = c.id === suggestCat
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          role="option"
+                          aria-selected={on}
+                          className={`plan-filter-option ${on ? 'plan-filter-option-on' : ''}`}
+                          onClick={() => {
+                            setSuggestCat(c.id)
+                            setFilterMenuOpen(false)
+                          }}
+                        >
+                          <span className="plan-filter-option-emoji" aria-hidden>
+                            {c.emoji}
+                          </span>
+                          <span className="min-w-0 flex-1 text-left">
+                            <span className="block text-sm font-semibold text-[var(--ink)]">
+                              {c.short}
+                            </span>
+                            <span className="block text-[11px] text-[var(--ink-muted)]">
+                              {c.blurb}
+                            </span>
+                          </span>
+                        </button>
+                      )
+                    })
+                  : days.map((day, idx) => {
+                      const on = day === daySafe
+                      return (
+                        <button
+                          key={day}
+                          type="button"
+                          role="option"
+                          aria-selected={on}
+                          className={`plan-filter-option ${on ? 'plan-filter-option-on' : ''}`}
+                          onClick={() => {
+                            setActiveDay(day)
+                            setFilterMenuOpen(false)
+                          }}
+                        >
+                          <span className="plan-filter-option-emoji tabular-nums" aria-hidden>
+                            {idx + 1}
+                          </span>
+                          <span className="min-w-0 flex-1 text-left">
+                            <span className="block text-sm font-semibold text-[var(--ink)]">
+                              Day {idx + 1}
+                            </span>
+                            <span className="block text-[11px] text-[var(--ink-muted)]">
+                              {day}
+                            </span>
+                          </span>
+                        </button>
+                      )
+                    })}
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -363,14 +505,38 @@ export function PlanBoard({
           onPlaceClick={(id) => {
             setFocusPlaceId(id)
             setFocusSuggestionId(null)
+            setDetailPlace(null)
           }}
           onSuggestionClick={(id) => {
-            setFocusSuggestionId(id)
-            setFocusPlaceId(null)
+            const place = filteredSuggestions.find((p) => p.id === id)
+            if (place) openSuggestionDetail(place)
+          }}
+          onViewportIdle={(center) => {
+            setMapAnchor((prev) => {
+              if (
+                prev &&
+                Math.abs(prev.lat - center.lat) < 0.002 &&
+                Math.abs(prev.lon - center.lon) < 0.002
+              ) {
+                return prev
+              }
+              return center
+            })
           }}
           className="h-full"
         />
       </div>
+
+      {detailPlace ? (
+        <ExplorePlaceDetailSheet
+          place={detailPlace}
+          onClose={() => setDetailPlace(null)}
+          primaryLabel="Save to list"
+          onPrimary={() => {
+            saveSuggestion(detailPlace)
+          }}
+        />
+      ) : null}
 
       {/* Bottom sheet */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex max-h-[min(58vh,28rem)] flex-col pt-[6.75rem]">
@@ -431,11 +597,11 @@ export function PlanBoard({
                       <button
                         type="button"
                         className="w-full text-left"
-                        onClick={() => {
-                          setFocusSuggestionId(p.id)
-                          setFocusPlaceId(null)
-                        }}
+                        onClick={() => openSuggestionDetail(p)}
                       >
+                        <span className="mb-1 block text-base leading-none" aria-hidden>
+                          {exploreCategoryEmoji(p.category)}
+                        </span>
                         <span className="line-clamp-2 text-[12px] font-semibold text-[var(--ink)]">
                           {p.name}
                         </span>

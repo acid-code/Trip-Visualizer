@@ -2008,7 +2008,7 @@ export default function App() {
             : 'inset-x-0 pl-[min(24rem,90vw)]'
         }`}
       >
-        <div className="ml-auto flex w-fit max-w-[min(14rem,46vw)] flex-col items-end gap-1">
+        <div className="ml-auto flex w-fit max-w-[min(22rem,72vw)] flex-col items-end gap-1">
           <div className="pointer-events-auto">
             <SegmentedControl
               ariaLabel="App mode"

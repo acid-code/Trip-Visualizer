@@ -162,10 +162,10 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
       : null
 
   return (
-    <div ref={rootRef} className="relative min-w-0 max-w-[5.5rem]">
+    <div ref={rootRef} className="relative shrink-0">
       <button
         type="button"
-        className="flex w-full max-w-full items-center gap-1 rounded-full border border-white/20 bg-black/45 py-1 pl-2.5 pr-1.5 text-left text-xs text-white shadow-sm backdrop-blur hover:bg-black/55"
+        className="flex shrink-0 items-center gap-1 rounded-full border border-white/20 bg-black/45 py-1 pl-2.5 pr-1.5 text-left text-xs text-white shadow-sm backdrop-blur hover:bg-black/55"
         aria-expanded={open}
         aria-controls={listId}
         aria-label={active ? `Trips — current: ${active.meta.name}` : 'Trips'}
@@ -174,7 +174,7 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
           setConfirmId(null)
         }}
       >
-        <span className="min-w-0 flex-1 truncate font-medium">Trips</span>
+        <span className="whitespace-nowrap font-medium">Trips</span>
         <svg
           className={`h-3.5 w-3.5 shrink-0 text-white/70 transition ${open ? 'rotate-180' : ''}`}
           viewBox="0 0 20 20"
