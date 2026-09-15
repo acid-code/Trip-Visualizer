@@ -270,7 +270,6 @@ export default function App() {
   const [aiRestore, setAiRestore] = useState<AiCoachSessionRestore | null>(null)
   const [aiReview, setAiReview] = useState<AiReviewState | null>(null)
   const [aiReviewBusy, setAiReviewBusy] = useState(false)
-  const [lastAiDay, setLastAiDay] = useState<string | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
   const [guideTips, setGuideTips] = useState<FeatureTip[]>([])
   const [seenTipIds, setSeenTipIds] = useState<Set<string>>(() => new Set())
@@ -1480,20 +1479,6 @@ export default function App() {
     })()
   }
 
-  function closeCoveringSheets() {
-    if (exploreOpen) closeExplore()
-    if (aiOpen && !aiReview) {
-      setAiOpen(false)
-      setAiRestore(null)
-    }
-    if (lowerMode !== 'none') {
-      setStepDraft(null)
-      setAddContext(null)
-      setLowerMode('none')
-      setDetailExpanded(false)
-    }
-  }
-
   function openAiCoach() {
     if (aiReview) return
     if (exploreOpen) closeExplore()
@@ -1553,7 +1538,6 @@ export default function App() {
       error: null,
     })
     setDayFilter(args.day)
-    setLastAiDay(args.day)
     setTypeFilter(null)
     setNavTab('timeline')
     setPanelOpen(true)
@@ -2156,9 +2140,8 @@ export default function App() {
                 googleApiKey={effectiveGoogleKey || undefined}
                 restore={aiRestore}
                 onClose={closeAiCoach}
-                onDayPicked={(d) => {
-                  // Remember for AI session only — do not change Steps day filter
-                  setLastAiDay(d)
+                onDayPicked={() => {
+                  /* AI day is local to the coach — Steps filter stays put */
                 }}
                 onImplement={beginAiImplement}
               />
