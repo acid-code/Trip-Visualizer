@@ -1,13 +1,16 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 
 type Props = {
   busy?: boolean
   onSearch: (query: string) => void
   onClear?: () => void
+  /** When true, render via portal so Cesium / header cannot steal taps. */
+  portal?: boolean
 }
 
 /** Compact map search that expands on focus / tap. */
-export function MapSearchBar({ busy, onSearch, onClear }: Props) {
+export function MapSearchBar({ busy, onSearch, onClear, portal = true }: Props) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
 
@@ -24,27 +27,22 @@ export function MapSearchBar({ busy, onSearch, onClear }: Props) {
     setOpen(true)
   }
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        className="flex h-9 w-9 touch-manipulation items-center justify-center rounded-full border border-white/25 bg-black/45 text-white shadow-lg backdrop-blur hover:bg-black/55"
-        title="Search place or address"
-        onPointerDown={(e) => {
-          e.stopPropagation()
-        }}
-        onClick={openBar}
-      >
-        <span className="text-sm" aria-hidden>
-          🔍
-        </span>
-      </button>
-    )
-  }
-
-  return (
+  const ui = !open ? (
+    <button
+      type="button"
+      className="flex h-10 w-10 touch-manipulation items-center justify-center rounded-full border border-white/30 bg-black/55 text-white shadow-lg backdrop-blur hover:bg-black/65"
+      title="Search place or address"
+      aria-label="Search place or address"
+      onPointerDown={openBar}
+      onClick={openBar}
+    >
+      <span className="text-sm" aria-hidden>
+        🔍
+      </span>
+    </button>
+  ) : (
     <form
-      className="flex max-w-[min(18rem,72vw)] touch-manipulation items-center gap-1 rounded-full border border-white/25 bg-black/55 p-1 pl-3 shadow-lg backdrop-blur"
+      className="flex max-w-[min(18rem,72vw)] touch-manipulation items-center gap-1 rounded-full border border-white/30 bg-black/60 p-1 pl-3 shadow-lg backdrop-blur"
       onSubmit={submit}
       onPointerDown={(e) => e.stopPropagation()}
     >
@@ -76,5 +74,17 @@ export function MapSearchBar({ busy, onSearch, onClear }: Props) {
         ✕
       </button>
     </form>
+  )
+
+  if (!portal || typeof document === 'undefined') return ui
+
+  return createPortal(
+    <div
+      className="pointer-events-none fixed z-[200] left-3 top-[max(0.75rem,env(safe-area-inset-top))]"
+      data-coach="map-search"
+    >
+      <div className="pointer-events-auto">{ui}</div>
+    </div>,
+    document.body,
   )
 }

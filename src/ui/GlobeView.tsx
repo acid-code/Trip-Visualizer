@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
@@ -204,9 +205,10 @@ export function GlobeView({
       if (!point) return
       const p = lonLatToCanvasCss(v, point.lon, point.lat)
       if (!p) return
+      const rect = v.scene.canvas.getBoundingClientRect()
       overlay.style.display = 'flex'
-      overlay.style.left = `${p.x}px`
-      overlay.style.top = `${p.y}px`
+      overlay.style.left = `${rect.left + p.x}px`
+      overlay.style.top = `${rect.top + p.y}px`
     })
   }
 
@@ -270,9 +272,11 @@ export function GlobeView({
           overlay.style.display = 'none'
           return
         }
+        // Portal is fixed to the viewport — offset by the canvas rect.
+        const rect = v.scene.canvas.getBoundingClientRect()
         overlay.style.display = 'flex'
-        overlay.style.left = `${p.x}px`
-        overlay.style.top = `${p.y}px`
+        overlay.style.left = `${rect.left + p.x}px`
+        overlay.style.top = `${rect.top + p.y}px`
       } catch {
         overlay.style.display = 'none'
       }
@@ -696,7 +700,12 @@ export function GlobeView({
     const viewer = viewerRef.current
     if (!viewer || !tempPin || !tempFlyToken) return
     if (!isValidCoord(tempPin.lat, tempPin.lon)) return
-    flyToCoords(viewer, tempPin.lon, tempPin.lat, 380)
+    // Keep the pin mid-screen so Explore/Walk stay clear of top chrome + status.
+    flyToCoords(viewer, tempPin.lon, tempPin.lat, {
+      range: phoneFramingRef.current ? 900 : 380,
+      raisePin: phoneFramingRef.current ? 0.06 : 0.12,
+      pitchDeg: phoneFramingRef.current ? -52 : -32,
+    })
   }, [tempFlyToken, tempPin])
 
   useEffect(() => {
@@ -725,9 +734,10 @@ export function GlobeView({
         overlay.style.display = 'none'
         return
       }
+      const rect = v.scene.canvas.getBoundingClientRect()
       overlay.style.display = 'flex'
-      overlay.style.left = `${p.x}px`
-      overlay.style.top = `${p.y}px`
+      overlay.style.left = `${rect.left + p.x}px`
+      overlay.style.top = `${rect.top + p.y}px`
     } catch {
       overlay.style.display = 'none'
     }
@@ -766,54 +776,65 @@ export function GlobeView({
             ? `Open walking directions (~${etaMins} min)`
             : 'Open walking directions'
           : 'Open nearest Street View'
+  // Paths: center on the route. Pins: sit BELOW the pin so top chrome can't cover them.
   const actionLift =
     walkTarget?.kind === 'directions' || walkTarget?.kind === 'flights'
       ? etaMins != null
         ? '-translate-y-[calc(50%+0.55rem)]'
         : '-translate-y-1/2'
-      : '-translate-y-[3.6rem]'
+      : 'translate-y-3'
+
+  const pinActions =
+    typeof document !== 'undefined'
+      ? createPortal(
+          <div className="pointer-events-none fixed inset-0 z-[120] overflow-hidden">
+            <div
+              ref={walkOverlayRef}
+              className={`absolute hidden ${actionLift} -translate-x-1/2 flex-col items-center gap-0.5`}
+            >
+              {etaMins != null ? (
+                <span className="rounded bg-slate-950/70 px-1 py-px text-[9px] font-medium leading-none text-white/95 tabular-nums whitespace-nowrap">
+                  ~{etaMins} min
+                </span>
+              ) : null}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  className="pointer-events-auto flex h-8 w-8 touch-manipulation items-center justify-center rounded-full border border-white/85 bg-sky-500/95 text-[13px] leading-none shadow-md"
+                  title={actionTitle}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onOpenWalkRef.current?.()
+                  }}
+                >
+                  {actionIcon}
+                </button>
+                {walkTarget?.kind === 'point' ? (
+                  <button
+                    type="button"
+                    className="pointer-events-auto flex h-8 w-8 touch-manipulation items-center justify-center rounded-full border border-amber-200/90 bg-amber-400 text-[13px] leading-none text-amber-950 shadow-md"
+                    title="Explore nearby"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onOpenExploreRef.current?.()
+                    }}
+                  >
+                    ★
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null
 
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="absolute inset-0 touch-none" />
-      <div className="pointer-events-none absolute inset-0 z-[5] overflow-hidden">
-        <div
-          ref={walkOverlayRef}
-          className={`absolute hidden ${actionLift} -translate-x-1/2 flex-col items-center gap-0.5`}
-        >
-          {etaMins != null ? (
-            <span className="rounded bg-slate-950/70 px-1 py-px text-[9px] font-medium leading-none text-white/95 tabular-nums whitespace-nowrap">
-              ~{etaMins} min
-            </span>
-          ) : null}
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              className="pointer-events-auto flex h-[24px] w-[24px] items-center justify-center rounded-full border border-white/85 bg-sky-500/95 text-[12px] leading-none shadow-md"
-              title={actionTitle}
-              onClick={(e) => {
-                e.stopPropagation()
-                onOpenWalkRef.current?.()
-              }}
-            >
-              {actionIcon}
-            </button>
-            {walkTarget?.kind === 'point' ? (
-              <button
-                type="button"
-                className="pointer-events-auto flex h-[24px] w-[24px] items-center justify-center rounded-full border border-amber-200/90 bg-amber-400 text-[12px] leading-none text-amber-950 shadow-md"
-                title="Explore nearby"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpenExploreRef.current?.()
-                }}
-              >
-                ★
-              </button>
-            ) : null}
-          </div>
-        </div>
-      </div>
+      {pinActions}
     </div>
   )
 }

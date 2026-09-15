@@ -151,6 +151,20 @@ textarea {
   pointer-events: auto;
 }
 
+/* Closed sheet must not eat map taps above the tongues */
+.book-volume:not(:has(.book-pages[aria-hidden='false'])) .book-pages,
+.book-pages[aria-hidden='true'] {
+  pointer-events: none !important;
+}
+
+.book-volume:not(.book-volume-open) {
+  pointer-events: none;
+}
+
+.book-volume-open {
+  pointer-events: auto;
+}
+
 .book-dock-wide {
   max-width: min(26rem, 100%);
 }

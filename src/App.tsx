@@ -1974,34 +1974,23 @@ export default function App() {
         </div>
       ) : null}
 
-      {/* Map search — above header so Journey chrome cannot steal taps */}
-      <div
-        className={`pointer-events-none absolute z-50 ${
-          appMode === 'plan' ? 'hidden' : ''
-        } left-3 top-[max(0.75rem,env(safe-area-inset-top))]`}
-      >
-        <div className="pointer-events-auto" data-coach="map-search">
-          <MapSearchBar
-            busy={searchBusy}
-            onSearch={(q) => void searchForPlace(q)}
-            onClear={() => {
-              /* keep temp pin; only collapses the bar */
-            }}
-          />
+      {/* Map search — portaled above Cesium; pin hint sits bottom-left clear of Explore */}
+      {appMode !== 'plan' ? (
+        <MapSearchBar
+          busy={searchBusy}
+          onSearch={(q) => void searchForPlace(q)}
+          onClear={() => {
+            /* keep temp pin; only collapses the bar */
+          }}
+        />
+      ) : null}
+      {appMode !== 'plan' && tempPin ? (
+        <div className="pointer-events-none fixed bottom-[calc(3.4rem+env(safe-area-inset-bottom))] left-3 z-[90] max-w-[min(16rem,70vw)] rounded-xl bg-black/55 px-2.5 py-1.5 text-[10px] text-orange-100 shadow-lg backdrop-blur">
+          Pin ready · double-tap map to clear · tap ★ to explore · <span className="font-bold">+</span> to
+          save
+          {nearbyLinks.length ? ` · ${nearbyLinks.length} nearby` : ''}
         </div>
-        {tempPin ? (
-          <p className="pointer-events-none mt-1 max-w-[14rem] rounded-lg bg-black/45 px-2 py-1 text-[10px] text-orange-100 backdrop-blur">
-            Temp pin · double-tap map to clear · <span className="font-bold">+</span> to save
-            {nearbyLinks.length
-              ? ` · ${nearbyLinks.length} nearby`
-              : ''}
-          </p>
-        ) : (
-          <p className="pointer-events-none mt-1 max-w-[12rem] text-[10px] text-white/55 drop-shadow">
-            Long-press the map to drop a pin
-          </p>
-        )}
-      </div>
+      ) : null}
 
       {/* Map-side header — hit targets only on controls (not the whole top band) */}
       <header
@@ -2089,7 +2078,8 @@ export default function App() {
                   Tips
                 </button>
               </div>
-              {status ? (
+              {/* Keep pin/status noise off the top chrome so Explore stays tappable */}
+              {!tempPin && status ? (
                 <p className="pointer-events-none max-w-full truncate text-right text-[10px] text-emerald-300">
                   {status}
                 </p>
