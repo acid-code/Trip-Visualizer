@@ -1507,12 +1507,11 @@ export default function App() {
   }
 
   function closeAiCoach() {
-    const lastDay = lastAiDay || aiRestore?.day || dayFilter
     setAiOpen(false)
     setAiRestore(null)
     setNavTab('timeline')
     setPanelOpen(true)
-    if (lastDay) setDayFilter(lastDay)
+    // Leave Steps day filter alone — AI day picks must not reset it
   }
 
   function beginAiImplement(args: {
@@ -2158,7 +2157,7 @@ export default function App() {
                 restore={aiRestore}
                 onClose={closeAiCoach}
                 onDayPicked={(d) => {
-                  setDayFilter(d)
+                  // Remember for AI session only — do not change Steps day filter
                   setLastAiDay(d)
                 }}
                 onImplement={beginAiImplement}
