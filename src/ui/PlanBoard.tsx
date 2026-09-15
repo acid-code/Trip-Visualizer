@@ -17,53 +17,47 @@ import { TOUCH_SCROLL_X, TOUCH_SCROLL_Y } from './scrollGesture'
 
 type Props = {
   trip: TripRecord
-  phone?: boolean
   onChange: (next: TripRecord) => void
   onAskAi?: (prompt: string) => void
 }
 
-export function PlanBoard({ trip, phone, onChange, onAskAi }: Props) {
+type PlanTab = 'itinerary' | 'map'
+type RailFocus = string | 'lists' // day iso or lists
+
+/**
+ * Phone-first Plan board inspired by Wanderlog:
+ * Itinerary ↔ Map, day-first schedule with travel legs, Lists for unscheduled ideas.
+ */
+export function PlanBoard({ trip, onChange, onAskAi }: Props) {
   const days = listTripDays(trip.meta)
+  const [tab, setTab] = useState<PlanTab>('itinerary')
+  const [rail, setRail] = useState<RailFocus>(days[0] ?? 'lists')
   const [activeSectionId, setActiveSectionId] = useState(
     trip.planSections[0]?.id ?? '',
   )
-  const [layerMode, setLayerMode] = useState<'sections' | 'days'>('sections')
-  const [hiddenSections, setHiddenSections] = useState<Set<string>>(new Set())
-  const [hiddenDays, setHiddenDays] = useState<Set<string>>(new Set())
   const [focusPlaceId, setFocusPlaceId] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('')
   const [aiPrompt, setAiPrompt] = useState('')
+  const [packsOpen, setPacksOpen] = useState(false)
 
-  const visibleSectionIds = useMemo(() => {
-    const ids = new Set(trip.planSections.map((s) => s.id))
-    for (const id of hiddenSections) ids.delete(id)
-    return ids
-  }, [trip.planSections, hiddenSections])
+  const railSafe: RailFocus =
+    rail === 'lists' || days.includes(rail) ? rail : (days[0] ?? 'lists')
 
-  const visibleDays = useMemo(() => {
-    if (layerMode !== 'days') return null
-    const ids = new Set(days)
-    for (const id of hiddenDays) ids.delete(id)
-    return ids
-  }, [layerMode, days, hiddenDays])
+  const visibleSectionIds = useMemo(
+    () => new Set(trip.planSections.map((s) => s.id)),
+    [trip.planSections],
+  )
 
-  function toggleSection(id: string) {
-    setHiddenSections((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
+  const activeDay = railSafe !== 'lists' ? railSafe : days[0] ?? null
 
-  function toggleDay(day: string) {
-    setHiddenDays((prev) => {
-      const next = new Set(prev)
-      if (next.has(day)) next.delete(day)
-      else next.add(day)
-      return next
-    })
-  }
+  const mapVisibleDays = useMemo(() => {
+    if (railSafe === 'lists') return null
+    return new Set([railSafe])
+  }, [railSafe])
+
+  const unscheduled = trip.planPlaces.filter((p) => !p.scheduledDay)
+  const bySection = (sectionId: string) =>
+    unscheduled.filter((p) => p.sectionId === sectionId)
 
   function addIdea() {
     const sectionId = activeSectionId || trip.planSections[0]?.id
@@ -100,211 +94,330 @@ export function PlanBoard({ trip, phone, onChange, onAskAi }: Props) {
       })
     }
     onChange(next)
+    setRail('lists')
+    setTab('itinerary')
+    setPacksOpen(false)
   }
 
-  const unscheduled = trip.planPlaces.filter((p) => !p.scheduledDay)
-  const bySection = (sectionId: string) =>
-    unscheduled.filter((p) => p.sectionId === sectionId)
+  const dayPlaces =
+    activeDay == null
+      ? []
+      : trip.planPlaces
+          .filter((p) => p.scheduledDay === activeDay)
+          .sort((a, b) => (a.dayOrder ?? 0) - (b.dayOrder ?? 0))
+
+  const legs = activeDay ? dayTravelLegs(trip, activeDay) : []
+  const dayIdx = activeDay ? days.indexOf(activeDay) : -1
+  const totalKm = legs.reduce((s, l) => s + (l?.km ?? 0), 0)
+  const totalMin = legs.reduce((s, l) => s + (l?.minutes ?? 0), 0)
 
   return (
-    <div className={`flex h-full min-h-0 flex-col gap-2 ${phone ? 'px-2 pb-2 pt-2' : 'p-2'}`}>
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--teal)]">
-          Plan
-        </div>
-        <SegmentedControl
-          ariaLabel="Map layers"
-          value={layerMode}
-          onChange={setLayerMode}
-          options={[
-            { id: 'sections', label: 'Sections' },
-            { id: 'days', label: 'Days' },
-          ]}
-        />
-        <div className="ml-auto flex flex-wrap gap-1">
-          {REGION_PACKS.map((pack) => (
-            <Chip key={pack.id} onClick={() => applyPack(pack.id)} title={pack.country}>
-              + {pack.label}
-            </Chip>
-          ))}
+    <div className="plan-phone relative flex h-full min-h-0 flex-col">
+      {/* Top chrome — clears the Journey/Plan switcher on the right */}
+      <div className="plan-phone-top pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-[max(0.55rem,env(safe-area-inset-top))]">
+        <div className="pointer-events-auto flex max-w-[calc(100%-9.5rem)] flex-col gap-2">
+          <SegmentedControl
+            ariaLabel="Plan view"
+            value={tab}
+            onChange={setTab}
+            options={[
+              { id: 'itinerary', label: 'Itinerary' },
+              { id: 'map', label: 'Map' },
+            ]}
+          />
+          <div className={`flex gap-1.5 pb-0.5 ${TOUCH_SCROLL_X}`}>
+            {days.map((day, idx) => (
+              <button
+                key={day}
+                type="button"
+                className={`plan-day-chip shrink-0 ${railSafe === day ? 'plan-day-chip-on' : ''}`}
+                onClick={() => setRail(day)}
+              >
+                Day {idx + 1}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={`plan-day-chip shrink-0 ${railSafe === 'lists' ? 'plan-day-chip-on' : ''}`}
+              onClick={() => {
+                setRail('lists')
+                setTab('itinerary')
+              }}
+            >
+              Lists
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className={`flex min-h-0 flex-1 gap-2 ${phone ? 'flex-col' : 'flex-row'}`}>
-        <div
-          className={`flex min-h-0 flex-col gap-2 ${phone ? 'max-h-[42%] shrink-0' : 'w-[42%]'} ${TOUCH_SCROLL_Y}`}
-        >
-          {trip.planSections.map((section) => (
-            <SectionBlock
-              key={section.id}
-              section={section}
-              places={bySection(section.id)}
-              active={activeSectionId === section.id}
-              hidden={!visibleSectionIds.has(section.id)}
-              days={days}
-              onSelect={() => setActiveSectionId(section.id)}
-              onToggleLayer={() => toggleSection(section.id)}
-              onFocus={setFocusPlaceId}
-              onSchedule={(placeId, day) =>
-                onChange(promotePlanPlaceToStep(trip, placeId, day))
-              }
-              onRemove={(placeId) => onChange(removePlanPlace(trip, placeId))}
-            />
-          ))}
-
-          <div className="rounded-2xl border border-[var(--glass-border)] bg-[rgba(15,23,42,0.55)] p-2">
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
-              Add idea to {trip.planSections.find((s) => s.id === activeSectionId)?.title || '…'}
-            </div>
-            <div className="flex gap-1.5">
-              <input
-                value={draftName}
-                onChange={(e) => setDraftName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') addIdea()
-                }}
-                placeholder="Place name…"
-                className="min-w-0 flex-1 rounded-xl border border-[var(--glass-border)] bg-[rgba(15,23,42,0.8)] px-2.5 py-2 text-sm text-[var(--ink)] outline-none focus:border-[var(--coral)]"
-              />
-              <IconButton onClick={addIdea} disabled={!draftName.trim()}>
-                Add
-              </IconButton>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-violet-500/30 bg-violet-950/30 p-2">
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-violet-300">
-              Plan AI
-            </div>
-            <div className="flex gap-1.5">
-              <input
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder="e.g. fill Food for Provence…"
-                className="min-w-0 flex-1 rounded-xl border border-violet-400/30 bg-[rgba(15,23,42,0.8)] px-2.5 py-2 text-sm text-[var(--ink)] outline-none"
-              />
-              <IconButton
-                className="border-violet-400/40 text-violet-200"
-                onClick={() => {
-                  if (!aiPrompt.trim() || !onAskAi) return
-                  onAskAi(aiPrompt.trim())
-                  setAiPrompt('')
-                }}
-              >
-                Ask
-              </IconButton>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-          <PlanMapView
-            meta={trip.meta}
-            sections={trip.planSections}
-            places={trip.planPlaces}
-            visibleSectionIds={visibleSectionIds}
-            visibleDays={visibleDays}
-            colorBy={layerMode === 'days' ? 'day' : 'section'}
-            focusPlaceId={focusPlaceId}
-            className={phone ? 'min-h-[10rem]' : ''}
-          />
-
-          <div className={`flex gap-2 pb-1 ${TOUCH_SCROLL_X}`}>
-            {days.map((day, idx) => {
-              const dayPlaces = trip.planPlaces
-                .filter((p) => p.scheduledDay === day)
-                .sort((a, b) => (a.dayOrder ?? 0) - (b.dayOrder ?? 0))
-              const legs = dayTravelLegs(trip, day)
-              const dayHidden = hiddenDays.has(day)
-              return (
-                <div
-                  key={day}
-                  className={`w-[11.5rem] shrink-0 rounded-2xl border p-2 ${
-                    dayHidden
-                      ? 'border-[var(--glass-border)] opacity-40'
-                      : 'border-sky-500/35 bg-sky-950/25'
-                  }`}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault()
-                    const placeId = e.dataTransfer.getData('text/plan-place')
-                    if (placeId) onChange(promotePlanPlaceToStep(trip, placeId, day))
-                  }}
+      {/* Map layer — always mounted so markers stay warm; peeks under itinerary */}
+      <div
+        className={`absolute inset-0 z-0 transition-opacity ${
+          tab === 'map' ? 'opacity-100' : 'pointer-events-none opacity-0'
+        }`}
+        aria-hidden={tab !== 'map'}
+      >
+        <PlanMapView
+          meta={trip.meta}
+          sections={trip.planSections}
+          places={trip.planPlaces}
+          visibleSectionIds={visibleSectionIds}
+          visibleDays={mapVisibleDays}
+          colorBy={railSafe === 'lists' ? 'section' : 'day'}
+          focusPlaceId={focusPlaceId}
+          className="h-full"
+        />
+        {tab === 'map' && activeDay && dayPlaces.length > 0 ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-[var(--bg)] via-[var(--bg)]/80 to-transparent pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-10">
+            <div className={`pointer-events-auto flex gap-2 px-3 ${TOUCH_SCROLL_X}`}>
+              {dayPlaces.map((p, i) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="plan-map-stop shrink-0"
+                  onClick={() => setFocusPlaceId(p.id)}
                 >
-                  <div className="mb-1.5 flex items-center justify-between gap-1">
-                    <button
-                      type="button"
-                      className="text-[11px] font-bold text-sky-200"
-                      onClick={() => toggleDay(day)}
-                    >
-                      Day {idx + 1}
-                    </button>
-                    <IconButton
-                      title="Optimize route"
-                      onClick={() => onChange(optimizeDayRoute(trip, day))}
-                    >
-                      ↻
+                  <span className="plan-stop-num">{i + 1}</span>
+                  <span className="truncate">{p.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Itinerary / Lists — Wanderlog-style scroll sheet */}
+      {tab === 'itinerary' ? (
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col pt-[7.25rem]">
+          <div
+            className={`plan-itin-sheet mx-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[1.75rem] ${TOUCH_SCROLL_Y}`}
+          >
+            <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-[var(--ink-muted)]/35" />
+
+            {railSafe === 'lists' ? (
+              <div className="flex min-h-0 flex-1 flex-col gap-3 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
+                <div className="flex items-end justify-between gap-2">
+                  <div>
+                    <h2 className="text-lg font-semibold tracking-tight text-[var(--ink)]">
+                      Lists
+                    </h2>
+                    <p className="text-[12px] text-[var(--ink-muted)]">
+                      Park ideas here, then add them to a day.
+                    </p>
+                  </div>
+                  <Chip on={packsOpen} onClick={() => setPacksOpen((v) => !v)}>
+                    Packs
+                  </Chip>
+                </div>
+
+                {packsOpen ? (
+                  <div className={`flex gap-1.5 ${TOUCH_SCROLL_X}`}>
+                    {REGION_PACKS.map((pack) => (
+                      <Chip key={pack.id} onClick={() => applyPack(pack.id)} title={pack.country}>
+                        + {pack.label}
+                      </Chip>
+                    ))}
+                  </div>
+                ) : null}
+
+                {trip.planSections.map((section) => (
+                  <ListSection
+                    key={section.id}
+                    section={section}
+                    places={bySection(section.id)}
+                    active={activeSectionId === section.id}
+                    days={days}
+                    onSelect={() => setActiveSectionId(section.id)}
+                    onFocus={setFocusPlaceId}
+                    onSchedule={(placeId, day) => {
+                      onChange(promotePlanPlaceToStep(trip, placeId, day))
+                      setRail(day)
+                    }}
+                    onRemove={(placeId) => onChange(removePlanPlace(trip, placeId))}
+                  />
+                ))}
+
+                <div className="plan-card">
+                  <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
+                    Add to{' '}
+                    {trip.planSections.find((s) => s.id === activeSectionId)?.title || 'list'}
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      value={draftName}
+                      onChange={(e) => setDraftName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') addIdea()
+                      }}
+                      placeholder="Place name…"
+                      className="plan-input"
+                    />
+                    <IconButton onClick={addIdea} disabled={!draftName.trim()}>
+                      Add
                     </IconButton>
                   </div>
-                  <p className="mb-1.5 text-[10px] text-[var(--ink-muted)]">{day.slice(5)}</p>
-                  <div className="space-y-1">
-                    {dayPlaces.map((p, i) => (
-                      <div key={p.id}>
+                </div>
+
+                {onAskAi ? (
+                  <div className="plan-card plan-card-ai">
+                    <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-300/90">
+                      Ask Plan AI
+                    </div>
+                    <div className="flex gap-1.5">
+                      <input
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                        placeholder="e.g. fill Food for Provence…"
+                        className="plan-input"
+                      />
+                      <IconButton
+                        className="border-violet-400/40 text-violet-200"
+                        onClick={() => {
+                          if (!aiPrompt.trim()) return
+                          onAskAi(aiPrompt.trim())
+                          setAiPrompt('')
+                        }}
+                      >
+                        Ask
+                      </IconButton>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
+                <div className="mb-3 flex items-start justify-between gap-2">
+                  <div>
+                    <h2 className="text-lg font-semibold tracking-tight text-[var(--ink)]">
+                      Day {dayIdx + 1}
+                    </h2>
+                    <p className="text-[12px] text-[var(--ink-muted)]">
+                      {activeDay}
+                      {dayPlaces.length
+                        ? ` · ${dayPlaces.length} stop${dayPlaces.length === 1 ? '' : 's'}`
+                        : ''}
+                      {totalKm > 0
+                        ? ` · ${totalKm.toFixed(0)} km · ~${totalMin} min`
+                        : ''}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <IconButton
+                      title="Show on map"
+                      onClick={() => setTab('map')}
+                    >
+                      Map
+                    </IconButton>
+                    <IconButton
+                      title="Optimize route"
+                      disabled={dayPlaces.length < 2}
+                      onClick={() =>
+                        activeDay && onChange(optimizeDayRoute(trip, activeDay))
+                      }
+                    >
+                      Optimize
+                    </IconButton>
+                  </div>
+                </div>
+
+                <div className={`min-h-0 flex-1 space-y-0 ${TOUCH_SCROLL_Y}`}>
+                  {dayPlaces.map((p, i) => (
+                    <div key={p.id}>
+                      <div className="plan-stop-row">
                         <button
                           type="button"
-                          draggable
-                          onDragStart={(e) =>
-                            e.dataTransfer.setData('text/plan-place', p.id)
-                          }
-                          onClick={() => setFocusPlaceId(p.id)}
-                          className="w-full rounded-xl border border-[var(--glass-border)] bg-[rgba(15,23,42,0.7)] px-2 py-1.5 text-left text-[11px] font-medium"
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                          onClick={() => {
+                            setFocusPlaceId(p.id)
+                            setTab('map')
+                          }}
                         >
-                          {p.name}
+                          <span className="plan-stop-num">{i + 1}</span>
+                          <span className="min-w-0 flex-1 text-left">
+                            <span className="block truncate text-[15px] font-medium text-[var(--ink)]">
+                              {p.name}
+                            </span>
+                            {p.city ? (
+                              <span className="block truncate text-[11px] text-[var(--ink-muted)]">
+                                {p.city}
+                              </span>
+                            ) : null}
+                          </span>
                         </button>
-                        {legs[i] ? (
-                          <p className="px-1 py-0.5 text-[9px] text-[var(--ink-muted)]">
-                            → {legs[i]!.km} km · ~{legs[i]!.minutes} min
-                          </p>
-                        ) : null}
+                        <button
+                          type="button"
+                          className="shrink-0 px-1 text-[11px] font-semibold text-rose-300/90"
+                          onClick={() => onChange(unschedulePlanPlace(trip, p.id))}
+                        >
+                          Remove
+                        </button>
                       </div>
-                    ))}
-                    {!dayPlaces.length ? (
-                      <p className="rounded-xl border border-dashed border-[var(--glass-border)] px-2 py-3 text-center text-[10px] text-[var(--ink-muted)]">
-                        Drop ideas here
+                      {legs[i] ? (
+                        <div className="plan-leg">
+                          <span className="plan-leg-line" />
+                          <span>
+                            {legs[i]!.km} km · ~{legs[i]!.minutes} min
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+
+                  {!dayPlaces.length ? (
+                    <div className="rounded-2xl border border-dashed border-[var(--glass-border)] px-4 py-10 text-center">
+                      <p className="text-[15px] font-medium text-[var(--ink)]">
+                        No stops yet
                       </p>
-                    ) : null}
-                  </div>
-                  {dayPlaces.length ? (
-                    <button
-                      type="button"
-                      className="mt-1.5 text-[10px] font-semibold text-rose-300"
-                      onClick={() => {
-                        let next = trip
-                        for (const p of dayPlaces) next = unschedulePlanPlace(next, p.id)
-                        onChange(next)
-                      }}
-                    >
-                      Clear day slots
-                    </button>
+                      <p className="mt-1 text-[12px] text-[var(--ink-muted)]">
+                        Pull ideas from Lists and schedule them on this day.
+                      </p>
+                      <button
+                        type="button"
+                        className="mt-4 rounded-full bg-[var(--coral)] px-4 py-2 text-xs font-semibold text-white"
+                        onClick={() => setRail('lists')}
+                      >
+                        Open Lists
+                      </button>
+                    </div>
                   ) : null}
                 </div>
-              )
-            })}
+
+                {unscheduled.length > 0 && activeDay ? (
+                  <div className="mt-3 border-t border-[var(--glass-border)] pt-3">
+                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
+                      Add from Lists
+                    </p>
+                    <div className={`flex gap-1.5 ${TOUCH_SCROLL_X}`}>
+                      {unscheduled.slice(0, 12).map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className="plan-map-stop shrink-0"
+                          onClick={() =>
+                            onChange(promotePlanPlaceToStep(trip, p.id, activeDay))
+                          }
+                        >
+                          + {p.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
         </div>
-      </div>
+      ) : null}
     </div>
   )
 }
 
-function SectionBlock({
+function ListSection({
   section,
   places,
   active,
-  hidden,
   days,
   onSelect,
-  onToggleLayer,
   onFocus,
   onSchedule,
   onRemove,
@@ -312,53 +425,46 @@ function SectionBlock({
   section: PlanSection
   places: PlanPlace[]
   active: boolean
-  hidden: boolean
   days: string[]
   onSelect: () => void
-  onToggleLayer: () => void
   onFocus: (id: string) => void
   onSchedule: (placeId: string, day: string) => void
   onRemove: (placeId: string) => void
 }) {
   return (
-    <div
-      className={`rounded-2xl border p-2 ${
-        active ? 'border-[var(--coral)]/50 bg-[rgba(255,107,74,0.08)]' : 'border-[var(--glass-border)]'
-      } ${hidden ? 'opacity-45' : ''}`}
+    <section
+      className={`plan-card ${active ? 'ring-1 ring-[var(--coral)]/45' : ''}`}
     >
-      <div className="mb-1.5 flex items-center gap-2">
-        <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-          <span
-            className="flex h-6 w-6 items-center justify-center rounded-full text-xs"
-            style={{ background: `${section.color}33`, color: section.color }}
-          >
-            {section.icon}
-          </span>
-          <span className="truncate text-sm font-semibold">{section.title}</span>
-          <span className="text-[10px] text-[var(--ink-muted)]">{places.length}</span>
-        </button>
-        <Chip on={!hidden} onClick={onToggleLayer}>
-          layer
-        </Chip>
-      </div>
-      <div className="space-y-1">
+      <button
+        type="button"
+        onClick={onSelect}
+        className="mb-2 flex w-full items-center gap-2 text-left"
+      >
+        <span
+          className="flex h-7 w-7 items-center justify-center rounded-full text-sm"
+          style={{ background: `${section.color}33`, color: section.color }}
+        >
+          {section.icon}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[var(--ink)]">
+          {section.title}
+        </span>
+        <span className="text-[11px] text-[var(--ink-muted)]">{places.length}</span>
+      </button>
+      <div className="space-y-1.5">
         {places.map((p) => (
-          <div
-            key={p.id}
-            draggable
-            onDragStart={(e) => e.dataTransfer.setData('text/plan-place', p.id)}
-            className="flex items-center gap-1 rounded-xl border border-[var(--glass-border)] bg-[rgba(15,23,42,0.55)] px-2 py-1.5"
-          >
+          <div key={p.id} className="plan-list-row">
             <button
               type="button"
-              className="min-w-0 flex-1 truncate text-left text-xs font-medium"
+              className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-[var(--ink)]"
               onClick={() => onFocus(p.id)}
             >
               {p.name}
             </button>
             <select
-              className="max-w-[5.5rem] rounded-lg border border-[var(--glass-border)] bg-transparent px-1 py-0.5 text-[10px]"
+              className="plan-day-select"
               defaultValue=""
+              aria-label={`Schedule ${p.name}`}
               onChange={(e) => {
                 if (e.target.value) onSchedule(p.id, e.target.value)
                 e.target.value = ''
@@ -373,7 +479,7 @@ function SectionBlock({
             </select>
             <button
               type="button"
-              className="text-[10px] text-rose-300"
+              className="px-1 text-[11px] text-rose-300/90"
               onClick={() => onRemove(p.id)}
             >
               ✕
@@ -381,10 +487,12 @@ function SectionBlock({
           </div>
         ))}
         {!places.length ? (
-          <p className="px-1 py-2 text-[10px] text-[var(--ink-muted)]">Empty — add ideas or a region pack</p>
+          <p className="px-1 py-2 text-[12px] text-[var(--ink-muted)]">
+            Empty — add a place or open Packs
+          </p>
         ) : null}
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -398,7 +506,6 @@ export function applyLocalPlanAi(
     const pack = findRegionPack('provence')
     if (pack) {
       let next = trip
-      // reuse PlanBoard pack logic inline
       for (const p of pack.places) {
         if (q.includes('food') && p.section !== 'Food') continue
         if (q.includes('must') && p.section !== 'Must see') continue

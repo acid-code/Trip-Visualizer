@@ -598,3 +598,149 @@ textarea {
 [data-theme="light"] .maplibre-plan-root {
   border-color: var(--glass-border);
 }
+
+/* —— Plan (Wanderlog-style phone) —— */
+.plan-phone {
+  background: var(--bg);
+}
+
+.plan-phone-top .ui-seg {
+  width: fit-content;
+  max-width: 100%;
+  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+}
+
+.plan-day-chip {
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: color-mix(in srgb, var(--paper) 90%, transparent);
+  backdrop-filter: blur(10px);
+  padding: 0.45rem 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+}
+
+.plan-day-chip-on {
+  border-color: color-mix(in srgb, var(--coral) 55%, var(--glass-border));
+  background: color-mix(in srgb, var(--coral) 18%, var(--paper));
+  color: var(--ink);
+}
+
+.plan-itin-sheet {
+  background: var(--paper);
+  border: 1px solid var(--glass-border);
+  border-bottom: 0;
+  box-shadow: 0 -12px 40px rgba(15, 23, 42, 0.22);
+}
+
+.plan-card {
+  border-radius: 1.1rem;
+  border: 1px solid var(--glass-border);
+  background: var(--paper-2);
+  padding: 0.85rem;
+}
+
+.plan-card-ai {
+  border-color: color-mix(in srgb, #a78bfa 35%, var(--glass-border));
+  background: color-mix(in srgb, #5b21b6 12%, var(--paper-2));
+}
+
+.plan-input {
+  min-width: 0;
+  flex: 1;
+  border-radius: 0.85rem;
+  border: 1px solid var(--glass-border);
+  background: var(--paper);
+  padding: 0.55rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--ink);
+  outline: none;
+}
+
+.plan-input:focus {
+  border-color: var(--coral);
+}
+
+.plan-stop-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.75rem;
+  border-radius: 1rem;
+  border: 1px solid var(--glass-border);
+  background: var(--paper-2);
+  padding: 0.75rem 0.85rem;
+  text-align: left;
+}
+
+.plan-stop-num {
+  display: inline-flex;
+  height: 1.55rem;
+  min-width: 1.55rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--coral) 85%, #0f172a);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.plan-leg {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.35rem 0.85rem 0.45rem 1.35rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-muted);
+}
+
+.plan-leg-line {
+  width: 0.12rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--teal) 55%, transparent);
+}
+
+.plan-list-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 0.85rem;
+  border: 1px solid var(--glass-border);
+  background: var(--paper);
+  padding: 0.45rem 0.55rem;
+}
+
+.plan-day-select {
+  max-width: 4.75rem;
+  border-radius: 0.55rem;
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.65rem;
+  color: var(--ink);
+}
+
+.plan-map-stop {
+  display: inline-flex;
+  max-width: 11rem;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter: blur(10px);
+  padding: 0.45rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.2);
+}

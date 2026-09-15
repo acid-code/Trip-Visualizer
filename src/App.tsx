@@ -38,8 +38,9 @@ import {
   type DriveFileInfo,
 } from './data/googleDrive'
 import {
-  enrichTripItems,
+  enrichNeedyTripItems,
   extractCoordsFromText,
+  itemNeedsEnrich,
   locationQueryFromInput,
   lookupPlace,
   pinItemOnMap,
@@ -281,6 +282,9 @@ export default function App() {
   /** When true, keep the example trip alongside personal trips (user opened it explicitly). */
   const keepExampleRef = useRef(false)
   const routesForTripRef = useRef<string | null>(null)
+  const routesBuildingRef = useRef(false)
+  const enrichBusyRef = useRef(false)
+  const enrichAttemptedRef = useRef<Set<string>>(new Set())
   const tempPinGenRef = useRef(0)
   const exploreAbortRef = useRef<AbortController | null>(null)
 
@@ -703,28 +707,48 @@ export default function App() {
     return `${n} day${n === 1 ? '' : 's'} ready`
   }
 
+  function routesFingerprint(trip: TripRecord): string {
+    return trip.items
+      .map(
+        (i) =>
+          `${i.id}|${i.date}|${i.type}|${i.lat ?? ''}|${i.lon ?? ''}|${i.latTo ?? ''}|${i.lonTo ?? ''}`,
+      )
+      .join(';')
+  }
+
   async function buildRoutes(trip: TripRecord) {
+    const fp = routesFingerprint(trip)
+    if (routesBuildingRef.current) return
+    if (routesForTripRef.current === fp) return
+    routesBuildingRef.current = true
     setRoutesStatus('Drawing drive paths…')
-    const withDrives = await hydrateDriveRoutes(trip.items, (done, total) => {
-      setRoutesStatus(`Drive paths ${done}/${total}`)
-    })
-    setRoutesStatus('Linking same-day walks & returns to hotel…')
-    const walks = await buildWalkingConnectors(withDrives, (done, total) => {
-      setRoutesStatus(`Walk paths ${done}/${total}`)
-    })
-    setConnectors(walks)
-    const driveChanged = withDrives.some((item) => {
-      const prev = trip.items.find((p) => p.id === item.id)
-      return (item.routeCoords?.length ?? 0) !== (prev?.routeCoords?.length ?? 0)
-    })
-    // Always write hydrated geometry back into trip state when it changed so
-    // the globe’s item.routeCoords stay in sync with “Routes ready”.
-    if (driveChanged) {
-      await persist({ ...trip, items: withDrives })
+    try {
+      const withDrives = await hydrateDriveRoutes(trip.items, (done, total) => {
+        setRoutesStatus(`Drive paths ${done}/${total}`)
+      })
+      setRoutesStatus('Linking same-day walks & returns to hotel…')
+      const walks = await buildWalkingConnectors(withDrives, (done, total) => {
+        setRoutesStatus(`Walk paths ${done}/${total}`)
+      })
+      setConnectors(walks)
+      const driveChanged = withDrives.some((item) => {
+        const prev = trip.items.find((p) => p.id === item.id)
+        return (item.routeCoords?.length ?? 0) !== (prev?.routeCoords?.length ?? 0)
+      })
+      // Always write hydrated geometry back into trip state when it changed so
+      // the globe’s item.routeCoords stay in sync with “Routes ready”.
+      if (driveChanged) {
+        await persist({ ...trip, items: withDrives })
+      }
+      routesForTripRef.current = routesFingerprint({
+        ...trip,
+        items: driveChanged ? withDrives : trip.items,
+      })
+      setStatus(`Routes ready · ${walks.length} walk links`)
+    } finally {
+      routesBuildingRef.current = false
+      setRoutesStatus(null)
     }
-    routesForTripRef.current = trip.id
-    setRoutesStatus(null)
-    setStatus(`Routes ready · ${walks.length} walk links`)
   }
 
   useEffect(() => {
@@ -734,23 +758,51 @@ export default function App() {
       void persist({ ...active, items })
       return
     }
-    if (routesForTripRef.current === active.id) return
     void buildRoutes(active)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.id, active?.items.length])
+  }, [
+    active?.id,
+    active
+      ? routesFingerprint(active)
+      : '',
+  ])
 
-  async function onEnrich() {
-    if (!active) return
-    setEnrichProgress('0%')
-    const items = await enrichTripItems(active.items, (done, total) => {
-      setEnrichProgress(`${Math.round((done / total) * 100)}%`)
-    })
-    const next = { ...active, items }
-    await persist(next)
-    setEnrichProgress(null)
-    setStatus('Enrichment complete — building routes…')
-    await buildRoutes(next)
-  }
+  useEffect(() => {
+    if (!active || enrichBusyRef.current) return
+    const needy = active.items.filter(itemNeedsEnrich)
+    if (!needy.length) return
+    const keys = needy.map(
+      (i) => `${i.id}|${i.place}|${i.from}|${i.to}|${i.title}`,
+    )
+    if (keys.every((k) => enrichAttemptedRef.current.has(k))) return
+    enrichBusyRef.current = true
+    for (const k of keys) enrichAttemptedRef.current.add(k)
+    void (async () => {
+      try {
+        setEnrichProgress('0%')
+        const items = await enrichNeedyTripItems(active.items, (done, total) => {
+          setEnrichProgress(`${Math.round((done / total) * 100)}%`)
+        })
+        const next = { ...active, items }
+        await persist(next)
+        setStatus('Map pins updated — building routes…')
+        routesForTripRef.current = null
+        await buildRoutes(next)
+      } finally {
+        enrichBusyRef.current = false
+        setEnrichProgress(null)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    active?.id,
+    active?.items
+      .map(
+        (i) =>
+          `${i.id}:${i.place}:${i.from}:${i.to}:${i.lat ?? ''}:${i.lon ?? ''}:${i.latTo ?? ''}:${i.lonTo ?? ''}`,
+      )
+      .join('|') ?? '',
+  ])
 
   function openInsert(afterId: string | null = null, beforeId: string | null = null) {
     const after = afterId ? active?.items.find((i) => i.id === afterId) : null
@@ -1906,10 +1958,9 @@ export default function App() {
       )}
 
       {appMode === 'plan' && active ? (
-        <div className="absolute inset-0 z-[28] flex flex-col bg-[var(--bg)] pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <div className="absolute inset-0 z-[28] flex flex-col bg-[var(--bg)]">
           <PlanBoard
             trip={ensurePlanScaffold(active)}
-            phone={isPhone}
             onChange={(next) => void persist(next)}
             onAskAi={(prompt) => {
               const { trip: next, message } = applyLocalPlanAi(
@@ -1979,9 +2030,11 @@ export default function App() {
               { id: 'plan', label: 'Plan' },
             ]}
           />
+          {appMode === 'journey' ? (
+            <>
           <div className="text-right">
             <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-orange-300/90">
-              {appMode === 'plan' ? 'Idea board' : 'Trip journal'}
+              Trip journal
             </div>
             <button
               type="button"
@@ -2021,27 +2074,23 @@ export default function App() {
                 setDetailExpanded(false)
               }}
             />
-            {appMode === 'journey' ? (
-              <>
-                <button
-                  className="ui-icon-btn"
-                  onClick={() => {
-                    if (!aiReview) setDayFilter(null)
-                    setOverviewToken((n) => n + 1)
-                  }}
-                >
-                  Overview
-                </button>
-                <button
-                  type="button"
-                  className="ui-icon-btn bg-orange-500/90 text-white border-orange-400/40"
-                  title="Feature tips"
-                  onClick={() => openFeatureGuide({ all: true })}
-                >
-                  Tips
-                </button>
-              </>
-            ) : null}
+            <button
+              className="ui-icon-btn"
+              onClick={() => {
+                if (!aiReview) setDayFilter(null)
+                setOverviewToken((n) => n + 1)
+              }}
+            >
+              Overview
+            </button>
+            <button
+              type="button"
+              className="ui-icon-btn bg-orange-500/90 text-white border-orange-400/40"
+              title="Feature tips"
+              onClick={() => openFeatureGuide({ all: true })}
+            >
+              Tips
+            </button>
           </div>
           {status ? <p className="text-right text-xs text-emerald-300">{status}</p> : null}
           {enrichProgress ? (
@@ -2050,7 +2099,6 @@ export default function App() {
           {routesStatus ? (
             <p className="text-right text-xs text-sky-200">{routesStatus}</p>
           ) : null}
-          {appMode === 'journey' ? (
             <div className="mt-1.5 flex justify-end">
               <MapLayersControl
                 panelPlacement="below"
@@ -2067,7 +2115,12 @@ export default function App() {
                 }}
               />
             </div>
-          ) : null}
+            </>
+          ) : (
+            <>
+              {status ? <p className="text-right text-xs text-emerald-300">{status}</p> : null}
+            </>
+          )}
         </div>
       </header>
 
@@ -2239,8 +2292,6 @@ export default function App() {
                 serverPlacesConfigured={serverPlacesConfigured}
                 ionToken={ionToken}
                 walkApp={walkApp}
-                enrichProgress={enrichProgress}
-                routesStatus={routesStatus}
                 onColorModeChange={(mode) => {
                   setColorMode(mode)
                   applyColorMode(mode)
@@ -2252,11 +2303,6 @@ export default function App() {
                 onExportToDrive={() => void onExportToDrive()}
                 onImportFromDrive={(f) => void onImportFromDrive(f)}
                 onExportExampleExcel={() => void onExportExampleExcel()}
-                onEnrich={() => void onEnrich()}
-                onRebuildRoutes={() => {
-                  if (!active) return
-                  void buildRoutes(active)
-                }}
                 onAddDay={() => void addDay()}
                 onEditTrip={() => openTripEdit()}
                 onShowTips={() => openFeatureGuide({ all: true })}
@@ -2605,8 +2651,6 @@ function DataPanel({
   serverPlacesConfigured,
   ionToken,
   walkApp,
-  enrichProgress,
-  routesStatus,
   onColorModeChange,
   onOpenExample,
   onImportFile,
@@ -2614,8 +2658,6 @@ function DataPanel({
   onExportToDrive,
   onImportFromDrive,
   onExportExampleExcel,
-  onEnrich,
-  onRebuildRoutes,
   onAddDay,
   onEditTrip,
   onShowTips,
@@ -2631,8 +2673,6 @@ function DataPanel({
   serverPlacesConfigured: boolean
   ionToken: string
   walkApp: WalkAppPref
-  enrichProgress: string | null
-  routesStatus: string | null
   onColorModeChange: (mode: ColorMode) => void
   onOpenExample: () => void
   onImportFile: (f: File) => void
@@ -2640,8 +2680,6 @@ function DataPanel({
   onExportToDrive: () => void
   onImportFromDrive: (file: DriveFileInfo) => void
   onExportExampleExcel: () => void
-  onEnrich: () => void
-  onRebuildRoutes: () => void
   onAddDay: () => void
   onEditTrip: () => void
   onShowTips: () => void
@@ -2827,14 +2865,6 @@ function DataPanel({
           </button>
           <button type="button" className={btn} onClick={onOpenExample}>
             Open example
-          </button>
-        </ActionRow>
-        <ActionRow>
-          <button className={btnPrimary} onClick={onEnrich} disabled={!!enrichProgress}>
-            Enrich pinpoints
-          </button>
-          <button className={btn} disabled={!!routesStatus || !active} onClick={onRebuildRoutes}>
-            Rebuild paths
           </button>
         </ActionRow>
       </div>

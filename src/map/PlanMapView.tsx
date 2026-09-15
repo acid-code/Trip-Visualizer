@@ -1,10 +1,14 @@
 import { useEffect, useRef } from 'react'
 import * as maplibregl from 'maplibre-gl'
+import { setWorkerUrl } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import type { PlanPlace, PlanSection, TripMeta } from '../domain/types'
 import { dayColor } from '../data/dayTheme'
 import { dayIndex } from '../data/analytics'
 import { isValidCoord } from '../data/validate'
+
+setWorkerUrl(maplibreWorkerUrl)
 
 /** Esri Dark Gray Canvas — free public tiles, no API key (unlike Carto). */
 const DARK_STYLE: maplibregl.StyleSpecification = {
@@ -216,7 +220,7 @@ export function PlanMapView({
   return (
     <div
       ref={rootRef}
-      className={`maplibre-plan-root min-h-0 flex-1 overflow-hidden rounded-2xl border border-[var(--glass-border)] ${className}`}
+      className={`maplibre-plan-root min-h-0 flex-1 overflow-hidden ${className}`}
     />
   )
 }
