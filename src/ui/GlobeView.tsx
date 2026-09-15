@@ -29,6 +29,7 @@ import {
   parseTripItemId,
   pickScreenLonLat,
   routeMidpoint,
+  setGlobeRenderActive,
   syncSelectedPathHighlight,
   syncExploreEntities,
   syncTempPinEntities,
@@ -84,6 +85,8 @@ type Props = {
   openingOriginOnly?: boolean
   /** Phone: looser pin zoom + raise target above the bottom dock */
   phoneFraming?: boolean
+  /** When false, pause the WebGL render loop (Plan mode / background). */
+  renderActive?: boolean
   tempPin?: TempPinDraw | null
   nearbyLinks?: NearbyStepLink[]
   tempFlyToken?: number
@@ -141,6 +144,7 @@ export function GlobeView({
   tripFocusId = null,
   openingOriginOnly = false,
   phoneFraming = false,
+  renderActive = true,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const walkOverlayRef = useRef<HTMLDivElement>(null)
@@ -244,46 +248,54 @@ export function GlobeView({
       pressTimer = null
     }
 
+    let syncWalkRaf: number | null = null
     const syncWalkButton = () => {
-      const overlay = walkOverlayRef.current
-      const v = viewerRef.current
-      const target = walkTargetRef.current
-      if (!overlay || !v) return
-      if (!target) {
-        overlay.style.display = 'none'
-        return
-      }
-      // Path actions wait until the camera finishes framing the route
-      if (
-        (target.kind === 'directions' || target.kind === 'flights') &&
-        !pathActionReadyRef.current
-      ) {
-        overlay.style.display = 'none'
-        return
-      }
-      try {
-        const point = walkAnchorPoint(target)
-        if (!point) {
+      if (syncWalkRaf != null) return
+      syncWalkRaf = requestAnimationFrame(() => {
+        syncWalkRaf = null
+        const overlay = walkOverlayRef.current
+        const v = viewerRef.current
+        const target = walkTargetRef.current
+        if (!overlay || !v) return
+        if (!target) {
           overlay.style.display = 'none'
           return
         }
-        const p = lonLatToCanvasCss(v, point.lon, point.lat)
-        if (!p) {
+        // Path actions wait until the camera finishes framing the route
+        if (
+          (target.kind === 'directions' || target.kind === 'flights') &&
+          !pathActionReadyRef.current
+        ) {
           overlay.style.display = 'none'
           return
         }
-        // Portal is fixed to the viewport — offset by the canvas rect.
-        const rect = v.scene.canvas.getBoundingClientRect()
-        overlay.style.display = 'flex'
-        overlay.style.left = `${rect.left + p.x}px`
-        overlay.style.top = `${rect.top + p.y}px`
-      } catch {
-        overlay.style.display = 'none'
-      }
+        try {
+          const point = walkAnchorPoint(target)
+          if (!point) {
+            overlay.style.display = 'none'
+            return
+          }
+          const p = lonLatToCanvasCss(v, point.lon, point.lat)
+          if (!p) {
+            overlay.style.display = 'none'
+            return
+          }
+          // Portal is fixed to the viewport — offset by the canvas rect.
+          const rect = v.scene.canvas.getBoundingClientRect()
+          overlay.style.display = 'flex'
+          overlay.style.left = `${rect.left + p.x}px`
+          overlay.style.top = `${rect.top + p.y}px`
+        } catch {
+          overlay.style.display = 'none'
+        }
+      })
     }
 
     ;(async () => {
-      viewer = await createTripViewer(container, { ionToken })
+      viewer = await createTripViewer(container, {
+        ionToken,
+        phone: phoneFramingRef.current,
+      })
       if (cancelled) {
         viewer.destroy()
         return
@@ -543,6 +555,7 @@ export function GlobeView({
     return () => {
       cancelled = true
       clearPressTimer()
+      if (syncWalkRaf != null) cancelAnimationFrame(syncWalkRaf)
       ro?.disconnect()
       try {
         removeCam?.()
@@ -574,7 +587,27 @@ export function GlobeView({
     } catch (err) {
       console.warn('[globe] syncTripEntities failed', err)
     }
-  }, [items, connectors, meta, selectedId])
+  }, [items, connectors, meta])
+
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    try {
+      applySelectionHighlight(viewer, selectedId ?? null, focusedEntityIdRef.current)
+    } catch (err) {
+      console.warn('[globe] applySelectionHighlight failed', err)
+    }
+  }, [selectedId])
+
+  useEffect(() => {
+    const apply = () => {
+      const visible = renderActive && typeof document !== 'undefined' && !document.hidden
+      setGlobeRenderActive(viewerRef.current, visible)
+    }
+    apply()
+    document.addEventListener('visibilitychange', apply)
+    return () => document.removeEventListener('visibilitychange', apply)
+  }, [renderActive])
 
   useEffect(() => {
     const viewer = viewerRef.current

@@ -86,8 +86,9 @@ export function resolveMapStack(look: MapLook, stack: MapStack | string): MapSta
 
 export async function createTripViewer(
   container: HTMLElement,
-  _opts?: { ionToken?: string },
+  opts?: { ionToken?: string; phone?: boolean },
 ): Promise<Viewer> {
+  const phone = Boolean(opts?.phone)
   // Use Cesium’s normal baseLayer path (NOT baseLayer:false + removeAll).
   // That combo was leaving a black void with only entity points visible.
   const viewer = new Viewer(container, {
@@ -103,13 +104,18 @@ export async function createTripViewer(
     selectionIndicator: true,
     terrainProvider: new EllipsoidTerrainProvider(),
     baseLayer: esriLayer(),
-    requestRenderMode: false,
-    // 1 CSS pixel = 1 framebuffer pixel looks smeared on retina; render at device pixels.
-    useBrowserRecommendedResolution: false,
+    // Only draw when the camera/scene actually changes — huge heat win on phones.
+    requestRenderMode: true,
+    maximumRenderTimeChange: Infinity,
+    // Phone: let the browser pick a softer DPR. Desktop keeps sharper pixels.
+    useBrowserRecommendedResolution: phone,
   })
 
-  viewer.useBrowserRecommendedResolution = false
-  viewer.resolutionScale = 1
+  viewer.useBrowserRecommendedResolution = phone
+  // Cap retina supersampling on phones (full DPR × continuous loop was cooking devices).
+  viewer.resolutionScale = phone
+    ? Math.min(1, 1.15 / Math.max(1, window.devicePixelRatio || 1))
+    : 1
   if (viewer.scene.postProcessStages.fxaa) {
     viewer.scene.postProcessStages.fxaa.enabled = false
   }
@@ -118,8 +124,8 @@ export async function createTripViewer(
   viewer.scene.globe.enableLighting = false
   viewer.scene.globe.depthTestAgainstTerrain = false
   viewer.scene.fog.enabled = false
-  viewer.scene.globe.tileCacheSize = 2000
-  viewer.camera.percentageChanged = 0.08
+  viewer.scene.globe.tileCacheSize = phone ? 400 : 1200
+  viewer.camera.percentageChanged = 0.12
 
   configureTouchCameraControls(viewer)
   const stepPins = new CustomDataSource(STEP_PIN_SOURCE)
@@ -137,13 +143,40 @@ export async function createTripViewer(
   requestAnimationFrame(() => {
     try {
       viewer.resize()
-      viewer.scene.requestRender()
+      kickRender(viewer)
     } catch {
       /* ignore */
     }
   })
 
   return viewer
+}
+
+/** Ask Cesium to draw once (needed with requestRenderMode). */
+export function kickRender(viewer: Viewer | null | undefined) {
+  if (!viewer || viewer.isDestroyed()) return
+  try {
+    viewer.scene.requestRender()
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Pause / resume the WebGL loop (Plan mode, background tab). */
+export function setGlobeRenderActive(
+  viewer: Viewer | null | undefined,
+  active: boolean,
+) {
+  if (!viewer || viewer.isDestroyed()) return
+  try {
+    viewer.useDefaultRenderLoop = active
+    if (active) {
+      viewer.resize()
+      kickRender(viewer)
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Soft zoom limits — do not mutate the camera during preRender (that blacks out Cesium). */
@@ -350,6 +383,7 @@ export async function applyMapStack(
       logClientError('google3d', err)
     }
   }
+  kickRender(viewer)
 }
 
 /** Ion world terrain — intentionally no-op while diagnosing black-globe issues. */
@@ -790,6 +824,7 @@ export function syncTripEntities(
   }
 
   applySelectionHighlight(viewer, selectedId ?? null)
+  kickRender(viewer)
 }
 
 /** Update highlight/labels without destroying entities (keeps Cesium selection stable). */
@@ -831,6 +866,7 @@ export function applySelectionHighlight(
       entity.label.show = new ConstantProperty(true)
     }
   })
+  kickRender(viewer)
 }
 
 export function parseTripItemId(entityId: string): string {
@@ -983,6 +1019,7 @@ export function syncExploreEntities(
       description: place.id,
     })
   }
+  kickRender(viewer)
 }
 
 function clearSelectedPathEntities(viewer: Viewer) {
@@ -999,8 +1036,10 @@ export function syncSelectedPathHighlight(
   coords: [number, number][] | null,
 ) {
   clearSelectedPathEntities(viewer)
-  if (!coords || coords.length < 2) return
-
+  if (!coords || coords.length < 2) {
+    kickRender(viewer)
+    return
+  }
   const glow = Color.fromCssColorString('#facc15')
   const tip = Color.fromCssColorString('#fde68a')
   // Densify 2-point legs (flights) so the glow follows the great-circle like the arc
@@ -1041,6 +1080,7 @@ export function syncSelectedPathHighlight(
       },
     })
   }
+  kickRender(viewer)
 }
 
 /** Sample points along the great-circle between two [lat, lon] ends. */
@@ -1093,8 +1133,10 @@ export function syncTempPinEntities(
   nearby: TempNearbyDraw[] = [],
 ) {
   clearTempEntities(viewer)
-  if (!pin || !isValidCoord(pin.lat, pin.lon)) return
-
+  if (!pin || !isValidCoord(pin.lat, pin.lon)) {
+    kickRender(viewer)
+    return
+  }
   const accent = Color.fromCssColorString('#f97316')
   const label = pin.loading
     ? 'Looking up…'
@@ -1180,6 +1222,7 @@ export function syncTempPinEntities(
       })
     }
   })
+  kickRender(viewer)
 }
 
 /** Project a lon/lat to canvas CSS pixels (for HTML walk / explore buttons). */

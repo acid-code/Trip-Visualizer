@@ -150,23 +150,25 @@ export function PlanBoard({ trip, onChange, onAskAi }: Props) {
         </div>
       </div>
 
-      {/* Map layer — always mounted so markers stay warm; peeks under itinerary */}
+      {/* Map layer — only live while Map tab is open (saves GPU heat) */}
       <div
         className={`absolute inset-0 z-0 transition-opacity ${
           tab === 'map' ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
         aria-hidden={tab !== 'map'}
       >
-        <PlanMapView
-          meta={trip.meta}
-          sections={trip.planSections}
-          places={trip.planPlaces}
-          visibleSectionIds={visibleSectionIds}
-          visibleDays={mapVisibleDays}
-          colorBy={railSafe === 'lists' ? 'section' : 'day'}
-          focusPlaceId={focusPlaceId}
-          className="h-full"
-        />
+        {tab === 'map' ? (
+          <PlanMapView
+            meta={trip.meta}
+            sections={trip.planSections}
+            places={trip.planPlaces}
+            visibleSectionIds={visibleSectionIds}
+            visibleDays={mapVisibleDays}
+            colorBy={railSafe === 'lists' ? 'section' : 'day'}
+            focusPlaceId={focusPlaceId}
+            className="h-full"
+          />
+        ) : null}
         {tab === 'map' && activeDay && dayPlaces.length > 0 ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-[var(--bg)] via-[var(--bg)]/80 to-transparent pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-10">
             <div className={`pointer-events-auto flex gap-2 px-3 ${TOUCH_SCROLL_X}`}>

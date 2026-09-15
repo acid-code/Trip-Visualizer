@@ -1898,6 +1898,7 @@ export default function App() {
           tripFocusId={activeId}
           openingOriginOnly={isPhone}
           phoneFraming={isPhone}
+          renderActive={appMode === 'journey'}
           tempPin={tempPin}
           nearbyLinks={nearbyLinks}
           tempFlyToken={tempFlyToken}
