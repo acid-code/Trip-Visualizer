@@ -23,6 +23,15 @@ import {
   type ExploreCategory,
   type ExplorePlace,
 } from '../data/explore'
+import {
+  explorePlaceFromTextHit,
+  fetchGoogleTextViaProxy,
+} from '../data/placesGoogle'
+import {
+  extractCoordsFromText,
+  locationQueryFromInput,
+  lookupPlace,
+} from '../data/enrichment'
 import { isValidCoord } from '../data/validate'
 import { PlanMapView } from '../map/PlanMapView'
 import { Chip, IconButton, SegmentedControl } from './primitives'
@@ -109,6 +118,7 @@ export function PlanBoard({
       '',
   )
   const [hiddenSections, setHiddenSections] = useState<Set<string>>(new Set())
+  const [showNearbyPins, setShowNearbyPins] = useState(true)
   const [suggestCat, setSuggestCat] = useState<ExploreCategory | 'all'>('sights')
   const [suggestions, setSuggestions] = useState<ExplorePlace[]>([])
   const [suggestBusy, setSuggestBusy] = useState(false)
@@ -123,7 +133,10 @@ export function PlanBoard({
   const [focusSuggestionId, setFocusSuggestionId] = useState<string | null>(null)
   const [detailPlace, setDetailPlace] = useState<ExplorePlace | null>(null)
   const [filterMenuOpen, setFilterMenuOpen] = useState(false)
-  const [draftName, setDraftName] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchBusy, setSearchBusy] = useState(false)
+  /** Recommendation search replaces Nearby with a single loaded place. */
+  const [pinnedSearch, setPinnedSearch] = useState<ExplorePlace | null>(null)
   const [aiPrompt, setAiPrompt] = useState('')
   const [packsOpen, setPacksOpen] = useState(false)
   const suggestAbortRef = useRef<AbortController | null>(null)
@@ -159,14 +172,14 @@ export function PlanBoard({
   const bySection = (sectionId: string) =>
     unscheduled.filter((p) => p.sectionId === sectionId)
 
-  const filteredSuggestions = useMemo(
-    () => filterAndSortExplore(suggestions, suggestCat, 'rating'),
-    [suggestions, suggestCat],
-  )
+  const filteredSuggestions = useMemo(() => {
+    if (pinnedSearch) return [pinnedSearch]
+    return filterAndSortExplore(suggestions, suggestCat, 'rating')
+  }, [suggestions, suggestCat, pinnedSearch])
 
   const suggestionPins = useMemo(
     () =>
-      mode === 'discover'
+      mode === 'discover' && showNearbyPins
         ? filteredSuggestions.map((p) => ({
             id: p.id,
             lat: p.lat,
@@ -175,7 +188,7 @@ export function PlanBoard({
             emoji: exploreCategoryEmoji(p.category),
           }))
         : [],
-    [mode, filteredSuggestions],
+    [mode, filteredSuggestions, showNearbyPins],
   )
 
   useEffect(() => {
@@ -222,6 +235,7 @@ export function PlanBoard({
 
   useEffect(() => {
     if (mode !== 'discover') return
+    if (pinnedSearch) return
     const fallback = tripMapAnchor(trip)
     const anchor = mapView
       ? { lat: mapView.lat, lon: mapView.lon }
@@ -273,6 +287,7 @@ export function PlanBoard({
     mapView?.lat,
     mapView?.lon,
     mapView?.radiusM,
+    pinnedSearch,
   ])
 
   function toggleSectionLayer(id: string) {
@@ -284,11 +299,134 @@ export function PlanBoard({
     })
   }
 
-  function addIdea() {
-    const sectionId = activeSectionId || listSections[0]?.id
-    if (!sectionId || !draftName.trim()) return
-    onChange(addPlanPlace(trip, { sectionId, name: draftName.trim() }))
-    setDraftName('')
+  function clearPinnedSearch() {
+    setPinnedSearch(null)
+    setSearchQuery('')
+    setDetailPlace(null)
+    setFocusSuggestionId(null)
+  }
+
+  async function searchRecommendation(raw: string) {
+    const q = raw.trim()
+    if (!q) return
+    setSearchBusy(true)
+    setSuggestError(null)
+    try {
+      const anchor = mapView ?? tripMapAnchor(trip)
+      const pasted = extractCoordsFromText(q)
+      if (pasted) {
+        const place: ExplorePlace = {
+          id: `search:${pasted.lat.toFixed(5)},${pasted.lon.toFixed(5)}`,
+          name: q.length < 80 ? q : 'Pinned location',
+          lat: pasted.lat,
+          lon: pasted.lon,
+          category: 'sights',
+          osmType: 'search',
+          osmId: '',
+          wikidata: '',
+          images: [],
+          summary: 'Loaded from coordinates — save to Must see or Maybe',
+          distKm: 0,
+          rating: null,
+          cuisine: '',
+          website: '',
+          menuUrl: '',
+          openingHours: '',
+          address: `${pasted.lat.toFixed(5)}, ${pasted.lon.toFixed(5)}`,
+          tags: { source: 'search' },
+        }
+        setPinnedSearch(place)
+        setShowNearbyPins(true)
+        setSuggestCat('all')
+        setFocusSuggestionId(place.id)
+        setFocusPlaceId(null)
+        setDetailPlace(place)
+        onStatus?.('Loaded pin — save when ready')
+        return
+      }
+
+      const query = locationQueryFromInput(q) || (/^https?:\/\//i.test(q) ? '' : q)
+      if (!query) {
+        setSuggestError('Couldn’t read that link — paste a place name or Maps URL')
+        return
+      }
+
+      if (placesEnabled) {
+        const hit = await fetchGoogleTextViaProxy({
+          query,
+          apiKey: googleApiKey || undefined,
+          bias: { lat: anchor.lat, lon: anchor.lon, radiusM: mapView?.radiusM ?? 80_000 },
+        })
+        if (hit) {
+          const place = explorePlaceFromTextHit(hit, anchor, googleApiKey)
+          const typed =
+            place.category === 'food' ||
+            place.category === 'drink' ||
+            place.category === 'hotel' ||
+            place.category === 'sights' ||
+            place.category === 'nature'
+          if (typed) setSuggestCat(place.category)
+          else {
+            place.category = 'sights'
+            setSuggestCat('sights')
+          }
+          setPinnedSearch(place)
+          setShowNearbyPins(true)
+          setFocusSuggestionId(place.id)
+          setFocusPlaceId(null)
+          setDetailPlace(place)
+          onStatus?.(
+            typed
+              ? `Found ${exploreCategoryLabel(place.category).toLowerCase()} — save from Nearby`
+              : 'Loaded place — save to Must see when ready',
+          )
+          return
+        }
+      }
+
+      const lookup = await lookupPlace(query, {
+        useGooglePlaces: placesEnabled,
+        googleApiKey: googleApiKey || undefined,
+        bias: { lat: anchor.lat, lon: anchor.lon, radiusM: 80_000 },
+      })
+      if (!lookup) {
+        setSuggestError('No place found for that search')
+        return
+      }
+      const place: ExplorePlace = {
+        id: lookup.osmId || `search:${lookup.lat.toFixed(5)},${lookup.lon.toFixed(5)}`,
+        name: lookup.name || query,
+        lat: lookup.lat,
+        lon: lookup.lon,
+        category: 'sights',
+        osmType: lookup.osmId.startsWith('google:') ? 'google' : 'search',
+        osmId: lookup.osmId,
+        wikidata: '',
+        images: [],
+        summary: 'Recommendation loaded — save to Must see or Maybe',
+        distKm: 0,
+        rating: null,
+        cuisine: '',
+        website: '',
+        menuUrl: '',
+        openingHours: '',
+        address: lookup.address || '',
+        tags: {
+          source: lookup.osmId.startsWith('google:') ? 'google' : 'search',
+        },
+      }
+      setPinnedSearch(place)
+      setSuggestCat('sights')
+      setShowNearbyPins(true)
+      setFocusSuggestionId(place.id)
+      setFocusPlaceId(null)
+      setDetailPlace(place)
+      onStatus?.('Loaded place — save to Must see when ready')
+    } catch (err) {
+      setSuggestError(err instanceof Error ? err.message : 'Search failed')
+    } finally {
+      setSearchBusy(false)
+    }
   }
 
   function saveSuggestion(place: ExplorePlace, toMaybe = false) {
@@ -313,6 +451,10 @@ export function PlanBoard({
     onChange(result.trip)
     setFocusSuggestionId(null)
     setDetailPlace(null)
+    if (pinnedSearch && pinnedSearch.id === place.id) {
+      setPinnedSearch(null)
+      setSearchQuery('')
+    }
     if (!result.created && !result.moved) {
       onStatus?.(`“${place.name}” is already in ${result.sectionTitle}`)
     } else if (result.moved) {
@@ -451,6 +593,7 @@ export function PlanBoard({
                           aria-selected={on}
                           className={`plan-filter-option ${on ? 'plan-filter-option-on' : ''}`}
                           onClick={() => {
+                            setPinnedSearch(null)
                             setSuggestCat(c.id)
                             setFilterMenuOpen(false)
                           }}
@@ -616,10 +759,19 @@ export function PlanBoard({
               <div>
                 <div className="mb-1.5 flex items-center justify-between gap-2">
                   <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
-                    Nearby {suggestCat === 'all' ? 'all' : exploreCategoryLabel(suggestCat)}
-                    {suggestBusy ? ' · …' : ''}
+                    {pinnedSearch ? 'Recommendation' : `Nearby ${suggestCat === 'all' ? 'all' : exploreCategoryLabel(suggestCat)}`}
+                    {suggestBusy || searchBusy ? ' · …' : ''}
                   </p>
-                  <span className="text-[10px] tabular-nums text-[var(--ink-muted)]">
+                  <span className="flex items-center gap-2 text-[10px] tabular-nums text-[var(--ink-muted)]">
+                    {pinnedSearch ? (
+                      <button
+                        type="button"
+                        className="font-semibold text-[var(--coral)]"
+                        onClick={clearPinnedSearch}
+                      >
+                        Clear
+                      </button>
+                    ) : null}
                     {filteredSuggestions.length}
                   </span>
                 </div>
@@ -683,12 +835,19 @@ export function PlanBoard({
               </div>
 
               <div className="flex flex-wrap gap-1.5">
+                <Chip
+                  on={showNearbyPins}
+                  onClick={() => setShowNearbyPins((v) => !v)}
+                  title="Show Nearby suggestions on the map"
+                >
+                  ✨ Nearby
+                </Chip>
                 {listSections.map((section) => (
                   <Chip
                     key={section.id}
                     on={!hiddenSections.has(section.id)}
                     onClick={() => toggleSectionLayer(section.id)}
-                    title="Toggle on map"
+                    title={`Show ${section.title} on map`}
                   >
                     {section.icon} {section.title}
                   </Chip>
@@ -712,23 +871,29 @@ export function PlanBoard({
 
               <div className="plan-card">
                 <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
-                  Add to{' '}
-                  {trip.planSections.find((s) => s.id === activeSectionId)?.title || 'list'}
+                  Find a recommendation
                 </div>
-                <div className="flex gap-1.5">
+                <p className="mb-2 text-[11px] text-[var(--ink-muted)]">
+                  Paste a name, address, or Maps link — we’ll load it into Nearby so you can save it.
+                </p>
+                <form
+                  className="flex gap-1.5"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    void searchRecommendation(searchQuery)
+                  }}
+                >
                   <input
-                    value={draftName}
-                    onChange={(e) => setDraftName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') addIdea()
-                    }}
-                    placeholder="Place name…"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Place name or Maps link…"
                     className="plan-input"
+                    disabled={searchBusy}
                   />
-                  <IconButton onClick={addIdea} disabled={!draftName.trim()}>
-                    Add
+                  <IconButton type="submit" disabled={searchBusy || !searchQuery.trim()}>
+                    {searchBusy ? '…' : 'Go'}
                   </IconButton>
-                </div>
+                </form>
               </div>
 
               {onAskAi ? (
@@ -846,22 +1011,45 @@ export function PlanBoard({
                 ) : null}
               </div>
 
-              {unscheduled.length > 0 && daySafe ? (
+              {!daysAll && daySafe && unscheduled.length > 0 ? (
                 <div className="mt-3 border-t border-[var(--glass-border)] pt-3">
                   <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
-                    Add from Lists
+                    Add from saved
                   </p>
-                  <div className={`flex gap-1.5 ${TOUCH_SCROLL_X}`}>
-                    {unscheduled.slice(0, 16).map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className="plan-map-stop shrink-0"
-                        onClick={() => schedulePlace(p.id, daySafe)}
-                      >
-                        + {p.name}
-                      </button>
-                    ))}
+                  <div className={`max-h-48 space-y-1.5 overflow-y-auto ${TOUCH_SCROLL_Y}`}>
+                    {unscheduled.map((p) => {
+                      const section = trip.planSections.find((s) => s.id === p.sectionId)
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className="plan-add-stop-card"
+                          onClick={() => schedulePlace(p.id, daySafe)}
+                        >
+                          <span
+                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base"
+                            style={{
+                              background: `${section?.color || '#60a5fa'}33`,
+                            }}
+                            aria-hidden
+                          >
+                            {section?.icon || '📍'}
+                          </span>
+                          <span className="min-w-0 flex-1 text-left">
+                            <span className="block truncate text-[13px] font-semibold text-[var(--ink)]">
+                              {p.name}
+                            </span>
+                            <span className="block truncate text-[10px] text-[var(--ink-muted)]">
+                              {section?.title || 'List'}
+                              {p.city ? ` · ${p.city}` : ''}
+                            </span>
+                          </span>
+                          <span className="shrink-0 rounded-full bg-[var(--coral)] px-2.5 py-1 text-[10px] font-semibold text-white">
+                            Add
+                          </span>
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
               ) : null}
@@ -918,42 +1106,40 @@ function ListSection({
       </button>
       <div className="space-y-1.5">
         {places.map((p) => (
-          <div key={p.id} className="plan-list-row">
-            <button
-              type="button"
-              className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-[var(--ink)]"
-              onClick={() => onFocus(p.id)}
-            >
-              {p.name}
-            </button>
-            <select
-              className="plan-day-select"
-              defaultValue=""
-              aria-label={`Schedule ${p.name}`}
-              onChange={(e) => {
-                if (e.target.value) onSchedule(p.id, e.target.value)
-                e.target.value = ''
-              }}
-            >
-              <option value="">Day…</option>
+          <div key={p.id} className="plan-list-row plan-list-row-stack">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-[var(--ink)]"
+                onClick={() => onFocus(p.id)}
+              >
+                {p.name}
+              </button>
+              <button
+                type="button"
+                className="shrink-0 px-1 text-[11px] text-rose-300/90"
+                onClick={() => onRemove(p.id)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className={`flex gap-1 ${TOUCH_SCROLL_X}`}>
               {days.map((d, i) => (
-                <option key={d} value={d}>
-                  D{i + 1}
-                </option>
+                <button
+                  key={d}
+                  type="button"
+                  className="plan-day-mini shrink-0"
+                  onClick={() => onSchedule(p.id, d)}
+                >
+                  Day {i + 1}
+                </button>
               ))}
-            </select>
-            <button
-              type="button"
-              className="px-1 text-[11px] text-rose-300/90"
-              onClick={() => onRemove(p.id)}
-            >
-              ✕
-            </button>
+            </div>
           </div>
         ))}
         {!places.length ? (
           <p className="px-1 py-2 text-[12px] text-[var(--ink-muted)]">
-            Empty — save a suggestion or add a place
+            Empty — save a suggestion or find a recommendation
           </p>
         ) : null}
       </div>

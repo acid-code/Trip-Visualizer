@@ -828,6 +828,45 @@ textarea {
   padding: 0.45rem 0.55rem;
 }
 
+.plan-list-row-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.45rem;
+}
+
+.plan-day-mini {
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--paper-2);
+  padding: 0.28rem 0.55rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.plan-day-mini:active,
+.plan-day-mini:hover {
+  border-color: color-mix(in srgb, var(--coral) 45%, var(--glass-border));
+  color: var(--ink);
+  background: color-mix(in srgb, var(--coral) 12%, var(--paper));
+}
+
+.plan-add-stop-card {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.65rem;
+  border-radius: 1rem;
+  border: 1px solid var(--glass-border);
+  background: var(--paper-2);
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+}
+
+.plan-add-stop-card:active {
+  border-color: color-mix(in srgb, var(--coral) 40%, var(--glass-border));
+}
+
 .plan-day-select {
   max-width: 4.75rem;
   border-radius: 0.55rem;
