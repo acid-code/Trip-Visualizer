@@ -1974,7 +1974,7 @@ export default function App() {
         </div>
       ) : null}
 
-      {/* Map search — portaled above Cesium; pin hint sits bottom-left clear of Explore */}
+      {/* Map search — portaled above Cesium; pin hint under the search control */}
       {appMode !== 'plan' ? (
         <MapSearchBar
           busy={searchBusy}
@@ -1982,14 +1982,18 @@ export default function App() {
           onClear={() => {
             /* keep temp pin; only collapses the bar */
           }}
+          hintTone={tempPin ? 'pin' : 'quiet'}
+          hint={
+            tempPin ? (
+              <>
+                Temp pin · double-tap map to clear · <span className="font-bold">+</span> to save
+                {nearbyLinks.length ? ` · ${nearbyLinks.length} nearby` : ''}
+              </>
+            ) : (
+              <>Long-press the map to drop a pin</>
+            )
+          }
         />
-      ) : null}
-      {appMode !== 'plan' && tempPin ? (
-        <div className="pointer-events-none fixed bottom-[calc(3.4rem+env(safe-area-inset-bottom))] left-3 z-[90] max-w-[min(16rem,70vw)] rounded-xl bg-black/55 px-2.5 py-1.5 text-[10px] text-orange-100 shadow-lg backdrop-blur">
-          Pin ready · double-tap map to clear · tap ★ to explore · <span className="font-bold">+</span> to
-          save
-          {nearbyLinks.length ? ` · ${nearbyLinks.length} nearby` : ''}
-        </div>
       ) : null}
 
       {/* Map-side header — hit targets only on controls (not the whole top band) */}

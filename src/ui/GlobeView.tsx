@@ -776,13 +776,13 @@ export function GlobeView({
             ? `Open walking directions (~${etaMins} min)`
             : 'Open walking directions'
           : 'Open nearest Street View'
-  // Paths: center on the route. Pins: sit BELOW the pin so top chrome can't cover them.
+  // Paths: center on the route. Pins: sit ABOVE the pin.
   const actionLift =
     walkTarget?.kind === 'directions' || walkTarget?.kind === 'flights'
       ? etaMins != null
         ? '-translate-y-[calc(50%+0.55rem)]'
         : '-translate-y-1/2'
-      : 'translate-y-3'
+      : '-translate-y-[3.6rem]'
 
   const pinActions =
     typeof document !== 'undefined'
