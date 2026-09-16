@@ -14,7 +14,7 @@ import {
   upsertPlanPlaceToSection,
 } from '../data/planBoard'
 import { REGION_PACKS, findRegionPack } from '../data/regionPacks'
-import { createId } from '../data/db'
+import { createId, nowIso } from '../data/db'
 import {
   exploreCategoryEmoji,
   exploreCategoryLabel,
@@ -148,6 +148,8 @@ export function PlanBoard({
   const [showJourneyPins, setShowJourneyPins] = useState(true)
   const suggestAbortRef = useRef<AbortController | null>(null)
   const filterMenuRef = useRef<HTMLDivElement>(null)
+  /** Nearby layer preference while in Discover — restored when leaving Days. */
+  const discoverNearbyPrefRef = useRef(true)
 
   const daySafe = days.includes(activeDay) ? activeDay : (days[0] ?? '')
 
@@ -176,9 +178,12 @@ export function PlanBoard({
   const visibleSectionIds = useMemo(() => {
     const ids = new Set(trip.planSections.map((s) => s.id))
     for (const id of hiddenSections) ids.delete(id)
-    if (journeySection && !showJourneyPins) ids.delete(journeySection.id)
+    // Days: Journey pins always stay on. Discover: respect the Journey layer toggle.
+    if (mode === 'discover' && journeySection && !showJourneyPins) {
+      ids.delete(journeySection.id)
+    }
     return ids
-  }, [trip.planSections, hiddenSections, journeySection, showJourneyPins])
+  }, [trip.planSections, hiddenSections, journeySection, showJourneyPins, mode])
 
   const mapVisibleDays = useMemo(() => {
     if (daysAll) return null
@@ -237,7 +242,28 @@ export function PlanBoard({
   useEffect(() => {
     setFilterMenu(null)
     setSelectedUnscheduledId(null)
+    if (mode === 'days') {
+      discoverNearbyPrefRef.current = showNearbyPins
+      setShowNearbyPins(false)
+      setShowJourneyPins(true)
+      setFocusSuggestionId(null)
+      return
+    }
+    // Back to Discover — restore Nearby if it was on before Days.
+    setShowNearbyPins(discoverNearbyPrefRef.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to mode flips; capture Nearby at enter-Days time
   }, [mode])
+
+  useEffect(() => {
+    if (mode !== 'discover') return
+    discoverNearbyPrefRef.current = showNearbyPins
+  }, [mode, showNearbyPins])
+
+  useEffect(() => {
+    if (mode !== 'days') return
+    if (detailSavedId) return
+    setDetailPlace(null)
+  }, [mode, detailSavedId])
 
   function placesForDay(day: string) {
     return trip.planPlaces
@@ -526,6 +552,7 @@ export function PlanBoard({
     const ids = ordered.map((p) => p.id)
     ;[ids[idx], ids[j]] = [ids[j]!, ids[idx]!]
     onChange(reorderDayPlaces(trip, day, ids))
+    setFocusPlaceId(placeId)
   }
 
   function applyPack(packId: string) {
@@ -566,6 +593,12 @@ export function PlanBoard({
   const activeDayIdx = daySafe ? Math.max(0, days.indexOf(daySafe)) : 0
 
   function openSuggestionDetail(place: ExplorePlace) {
+    const existing = findMatchingListPlace(trip, place)
+    if (existing) {
+      openSavedPlaceDetail(existing.id)
+      setFocusSuggestionId(place.id)
+      return
+    }
     setFocusSuggestionId(place.id)
     setFocusPlaceId(null)
     setDetailSavedId(null)
@@ -574,16 +607,14 @@ export function PlanBoard({
 
   function openSavedPlaceDetail(placeId: string) {
     const p = trip.planPlaces.find((x) => x.id === placeId)
-    if (!p || !isValidCoord(p.lat, p.lon)) {
-      setFocusPlaceId(placeId)
-      return
-    }
+    if (!p) return
     const section = trip.planSections.find((s) => s.id === p.sectionId)
     const anchor = mapView
       ? { lat: mapView.lat, lon: mapView.lon }
       : tripMapAnchor(trip)
-    setFocusPlaceId(placeId)
+    setFocusPlaceId(isValidCoord(p.lat, p.lon) ? placeId : null)
     setFocusSuggestionId(null)
+    setActiveSectionId(p.sectionId)
     setDetailSavedId(p.id)
     setDetailPlace(planPlaceToExplorePlace(p, section, days, anchor))
   }
@@ -598,13 +629,36 @@ export function PlanBoard({
     return section ? `Save to ${section.title}` : 'Save'
   }
 
+  function moveSavedToMaybe(placeId: string) {
+    const maybe = planMaybeSection(trip)
+    if (!maybe) {
+      onStatus?.('No Maybe list found')
+      return
+    }
+    onChange({
+      ...trip,
+      planPlaces: trip.planPlaces.map((p) =>
+        p.id === placeId ? { ...p, sectionId: maybe.id } : p,
+      ),
+      updatedAt: nowIso(),
+    })
+    onStatus?.(`Moved to ${maybe.title}`)
+  }
+
   const detailSavedPlace = detailSavedId
     ? trip.planPlaces.find((p) => p.id === detailSavedId) ?? null
     : null
-  const detailSavedDayIdx =
-    detailSavedPlace?.scheduledDay != null
-      ? days.indexOf(detailSavedPlace.scheduledDay)
-      : -1
+  const detailSheetPlace =
+    detailSavedPlace && detailPlace
+      ? planPlaceToExplorePlace(
+          detailSavedPlace,
+          trip.planSections.find((s) => s.id === detailSavedPlace.sectionId),
+          days,
+          mapView
+            ? { lat: mapView.lat, lon: mapView.lon }
+            : tripMapAnchor(trip),
+        )
+      : detailPlace
 
   return (
     <div className="plan-phone relative flex h-full min-h-0 flex-col">
@@ -617,6 +671,8 @@ export function PlanBoard({
             journeySection={journeySection}
             showNearby={showNearbyPins}
             showJourney={showJourneyPins}
+            hideNearbyToggle={mode === 'days'}
+            hideJourneyToggle={mode === 'days'}
             hiddenSectionIds={hiddenSections}
             onToggleNearby={toggleNearbyLayer}
             onToggleJourney={() => setShowJourneyPins((v) => !v)}
@@ -839,45 +895,47 @@ export function PlanBoard({
         </div>
       </div>
 
-      {detailPlace ? (
+      {detailSheetPlace ? (
         <ExplorePlaceDetailSheet
-          place={detailPlace}
+          place={detailSheetPlace}
           onClose={closePlaceDetail}
-          primaryLabel={
-            detailSavedId
-              ? detailSavedDayIdx >= 0
-                ? `Day ${detailSavedDayIdx + 1} · Done`
-                : 'Done'
-              : saveLabelFor(detailPlace)
-          }
+          primaryTone={detailSavedId ? 'danger' : 'coral'}
+          primaryLabel={detailSavedId ? 'Remove' : saveLabelFor(detailSheetPlace)}
           onPrimary={() => {
             if (detailSavedId) {
+              onChange(removePlanPlace(trip, detailSavedId))
+              onStatus?.('Removed from list')
               closePlaceDetail()
               return
             }
-            saveSuggestion(detailPlace, false)
+            saveSuggestion(detailSheetPlace, false)
           }}
-          secondaryLabel={
-            detailSavedId
-              ? detailSavedPlace?.scheduledDay
-                ? 'Unschedule'
-                : 'Remove'
-              : 'Maybe'
-          }
+          secondaryLabel="Maybe"
           onSecondary={() => {
             if (detailSavedId) {
-              if (detailSavedPlace?.scheduledDay) {
-                onChange(unschedulePlanPlace(trip, detailSavedId))
-                onStatus?.('Moved back to lists')
-              } else {
-                onChange(removePlanPlace(trip, detailSavedId))
-                onStatus?.('Removed from list')
-              }
+              moveSavedToMaybe(detailSavedId)
               closePlaceDetail()
               return
             }
-            saveSuggestion(detailPlace, true)
+            saveSuggestion(detailSheetPlace, true)
           }}
+          days={detailSavedId ? days : undefined}
+          scheduledDay={detailSavedPlace?.scheduledDay || null}
+          onPickDay={
+            detailSavedId
+              ? (day) => {
+                  schedulePlace(detailSavedId, day)
+                }
+              : undefined
+          }
+          onClearDay={
+            detailSavedId
+              ? () => {
+                  onChange(unschedulePlanPlace(trip, detailSavedId))
+                  onStatus?.('Removed from day · still in list')
+                }
+              : undefined
+          }
         />
       ) : null}
 
@@ -999,13 +1057,16 @@ export function PlanBoard({
                   key={section.id}
                   section={section}
                   places={bySectionAll(section.id)}
-                  active={activeSectionId === section.id}
+                  active={
+                    activeSectionId === section.id ||
+                    bySectionAll(section.id).some((p) => p.id === focusPlaceId)
+                  }
+                  focusPlaceId={focusPlaceId}
                   hidden={hiddenSections.has(section.id)}
                   days={days}
                   onSelect={() => setActiveSectionId(section.id)}
                   onFocus={(id) => {
-                    setFocusPlaceId(id)
-                    setFocusSuggestionId(null)
+                    openSavedPlaceDetail(id)
                   }}
                   onSchedule={schedulePlace}
                   onUnschedule={(placeId) => {
@@ -1091,6 +1152,7 @@ export function PlanBoard({
                 >
                   <p className="plan-days-rail-label">Lists</p>
                   {listSections.map((section) => {
+                    if (hiddenSections.has(section.id)) return null
                     const places = bySectionUnscheduled(section.id)
                     if (!places.length) return null
                     return (
@@ -1108,7 +1170,8 @@ export function PlanBoard({
                         </div>
                         <div className="space-y-1">
                           {places.map((p) => {
-                            const on = selectedUnscheduledId === p.id
+                            const on =
+                              selectedUnscheduledId === p.id || focusPlaceId === p.id
                             return (
                               <button
                                 key={p.id}
@@ -1130,7 +1193,7 @@ export function PlanBoard({
                       </div>
                     )
                   })}
-                  {!unscheduled.length ? (
+                  {!unscheduled.filter((p) => !hiddenSections.has(p.sectionId)).length ? (
                     <div className="rounded-xl border border-dashed border-[var(--glass-border)] px-2 py-6 text-center">
                       <p className="text-[12px] font-medium text-[var(--ink)]">
                         All scheduled
@@ -1198,7 +1261,10 @@ export function PlanBoard({
 
                         <div className="space-y-1">
                           {places.map((p, i) => (
-                            <div key={p.id} className="plan-bucket-stop">
+                            <div
+                              key={p.id}
+                              className={`plan-bucket-stop ${focusPlaceId === p.id ? 'plan-bucket-stop-on' : ''}`}
+                            >
                               <button
                                 type="button"
                                 className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
@@ -1207,6 +1273,7 @@ export function PlanBoard({
                                   setActiveDay(day)
                                   setFocusPlaceId(p.id)
                                   setFocusSuggestionId(null)
+                                  setSelectedUnscheduledId(null)
                                 }}
                               >
                                 <span className="plan-bucket-num">{i + 1}</span>
@@ -1220,7 +1287,10 @@ export function PlanBoard({
                                   className="plan-bucket-move"
                                   aria-label="Move up"
                                   disabled={i === 0}
-                                  onClick={() => moveWithinDay(day, p.id, -1)}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    moveWithinDay(day, p.id, -1)
+                                  }}
                                 >
                                   ↑
                                 </button>
@@ -1229,7 +1299,10 @@ export function PlanBoard({
                                   className="plan-bucket-move"
                                   aria-label="Move down"
                                   disabled={i === places.length - 1}
-                                  onClick={() => moveWithinDay(day, p.id, 1)}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    moveWithinDay(day, p.id, 1)
+                                  }}
                                 >
                                   ↓
                                 </button>
@@ -1280,6 +1353,7 @@ function ListSection({
   section,
   places,
   active,
+  focusPlaceId,
   hidden,
   days,
   onSelect,
@@ -1291,6 +1365,7 @@ function ListSection({
   section: PlanSection
   places: PlanPlace[]
   active: boolean
+  focusPlaceId: string | null
   hidden: boolean
   days: string[]
   onSelect: () => void
@@ -1327,8 +1402,12 @@ function ListSection({
         {places.map((p) => {
           const dayIdx = p.scheduledDay ? days.indexOf(p.scheduledDay) : -1
           const menuOpen = dayMenuFor === p.id
+          const focused = focusPlaceId === p.id
           return (
-            <div key={p.id} className="plan-list-row">
+            <div
+              key={p.id}
+              className={`plan-list-row ${focused ? 'plan-list-row-on' : ''}`}
+            >
               <button
                 type="button"
                 className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-[var(--ink)]"
@@ -1375,19 +1454,6 @@ function ListSection({
                         D{i + 1}
                       </button>
                     ))}
-                    {p.scheduledDay ? (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="plan-day-pop-item plan-day-pop-item-off"
-                        onClick={() => {
-                          onUnschedule(p.id)
-                          setDayMenuFor(null)
-                        }}
-                      >
-                        Off day
-                      </button>
-                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -1410,6 +1476,34 @@ function ListSection({
       </div>
     </section>
   )
+}
+
+function findMatchingListPlace(
+  trip: TripRecord,
+  place: ExplorePlace,
+): PlanPlace | undefined {
+  const name = place.name.trim().toLowerCase()
+  return trip.planPlaces.find((p) => {
+    const section = trip.planSections.find((s) => s.id === p.sectionId)
+    const t = (section?.title || '').toLowerCase()
+    if (
+      t === 'journey' ||
+      t === 'on the trip' ||
+      section?.title === JOURNEY_SECTION_TITLE
+    ) {
+      return false
+    }
+    if (p.name.trim().toLowerCase() !== name) return false
+    if (
+      isValidCoord(p.lat, p.lon) &&
+      isValidCoord(place.lat, place.lon) &&
+      (Math.abs(p.lat! - place.lat) > 0.0008 ||
+        Math.abs(p.lon! - place.lon) > 0.0008)
+    ) {
+      return false
+    }
+    return true
+  })
 }
 
 function exploreCategoryFromSection(section: PlanSection | undefined): ExploreCategory {

@@ -658,14 +658,15 @@ textarea {
   right: 0.65rem;
 }
 
-/* Compact Plan layers menu — stays inside the map band above the sheet */
+/* Compact Plan layers menu — tall enough for Nearby + Journey + lists */
 .plan-map-layers-panel.map-layers-panel {
-  width: min(13.25rem, calc(100vw - 2.5rem));
-  max-height: min(10.5rem, calc(100% - 0.75rem));
+  width: min(13.5rem, calc(100vw - 2.5rem));
+  /* Don't use % height — parent is only the FAB size. */
+  max-height: min(22rem, 55vh);
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 0.45rem 0.4rem;
+  padding: 0.5rem 0.45rem;
   border-radius: 0.95rem;
 }
 
@@ -738,8 +739,12 @@ textarea {
   display: flex;
   min-width: 13.5rem;
   max-width: min(18rem, 78vw);
+  max-height: calc(5 * 3.05rem + 0.7rem);
   flex-direction: column;
   gap: 0.2rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   border-radius: 1.15rem;
   border: 1px solid var(--glass-border);
   background: color-mix(in srgb, var(--paper) 96%, transparent);
@@ -901,21 +906,32 @@ textarea {
   bottom: calc(100% + 0.3rem);
   z-index: 30;
   display: flex;
-  max-width: min(16rem, 70vw);
-  flex-wrap: wrap;
-  gap: 0.25rem;
+  width: 3.4rem;
+  max-height: calc(3 * 1.7rem + 0.55rem);
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 0.2rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   border-radius: 0.85rem;
   border: 1px solid var(--glass-border);
   background: var(--paper);
-  padding: 0.4rem;
+  padding: 0.3rem;
   box-shadow: var(--shadow);
 }
 
+.plan-day-pop-down {
+  top: calc(100% + 0.3rem);
+  bottom: auto;
+}
+
 .plan-day-pop-item {
+  flex-shrink: 0;
   border-radius: 999px;
   border: 1px solid var(--glass-border);
   background: var(--paper-2);
-  padding: 0.28rem 0.55rem;
+  padding: 0.28rem 0.35rem;
   font-size: 0.65rem;
   font-weight: 700;
   color: var(--ink-muted);
@@ -928,9 +944,36 @@ textarea {
   color: var(--ink);
 }
 
-.plan-day-pop-item-off {
-  border-color: color-mix(in srgb, #e11d48 35%, var(--glass-border));
-  color: color-mix(in srgb, #e11d48 80%, var(--ink));
+.plan-list-row-on {
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--coral) 14%, var(--paper));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--coral) 35%, transparent);
+}
+
+.plan-detail-days {
+  display: flex;
+  max-height: calc(3 * 2rem + 0.35rem);
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.plan-detail-day-chip {
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--paper-2);
+  padding: 0.35rem 0.7rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+
+.plan-detail-day-chip-on {
+  border-color: color-mix(in srgb, var(--coral) 50%, var(--glass-border));
+  background: color-mix(in srgb, var(--coral) 16%, var(--paper));
+  color: var(--ink);
 }
 
 .plan-day-badge {
@@ -1019,6 +1062,12 @@ textarea {
   padding: 0.28rem 0.35rem;
 }
 
+.plan-bucket-stop-on {
+  border-color: color-mix(in srgb, var(--coral) 45%, var(--glass-border));
+  background: color-mix(in srgb, var(--coral) 16%, var(--paper));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--coral) 22%, transparent);
+}
+
 .plan-bucket-num {
   display: inline-flex;
   height: 1.15rem;
@@ -1049,6 +1098,28 @@ textarea {
 
 .plan-bucket-move:disabled {
   opacity: 0.3;
+}
+
+.plan-route-seg-num {
+  display: inline-flex;
+  height: 1.15rem;
+  min-width: 1.15rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.28rem;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, var(--plan-route-seg-color, #38bdf8) 70%, #0f172a);
+  background: color-mix(in srgb, var(--plan-route-seg-color, #38bdf8) 88%, #0f172a);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.25) inset,
+    0 2px 8px rgba(15, 23, 42, 0.35);
+  pointer-events: none;
+  user-select: none;
 }
 
 .plan-drop-zone {

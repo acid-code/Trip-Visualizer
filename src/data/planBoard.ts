@@ -102,7 +102,9 @@ function placeFromItem(
     googleMapsUri: item.googleMapsUri || existing?.googleMapsUri || '',
     osmId: item.osmId || existing?.osmId || '',
     scheduledDay: item.date,
-    dayOrder,
+    // Keep Plan bucket order when the user reordered in Days — don't wipe it
+    // every time Journey reconcile runs.
+    dayOrder: existing?.dayOrder != null ? existing.dayOrder : dayOrder,
     linkedItemId: item.id,
   }
 }
@@ -478,13 +480,29 @@ export function reorderDayPlaces(
   orderedIds: string[],
 ): TripRecord {
   const order = new Map(orderedIds.map((id, i) => [id, i]))
+  const planPlaces = trip.planPlaces.map((p) =>
+    p.scheduledDay === day && order.has(p.id)
+      ? { ...p, dayOrder: order.get(p.id)! }
+      : p,
+  )
+
+  // Keep Journey step list order in sync (sortItems uses date + start).
+  const items = trip.items.map((it) => {
+    const place = planPlaces.find(
+      (p) => p.linkedItemId === it.id && p.scheduledDay === day,
+    )
+    if (!place || !order.has(place.id)) return it
+    const i = order.get(place.id)!
+    const mins = 9 * 60 + i * 30
+    const hh = String(Math.floor(mins / 60)).padStart(2, '0')
+    const mm = String(mins % 60).padStart(2, '0')
+    return { ...it, date: day, start: `${hh}:${mm}`, updatedAt: nowIso() }
+  })
+
   return {
     ...trip,
-    planPlaces: trip.planPlaces.map((p) =>
-      p.scheduledDay === day && order.has(p.id)
-        ? { ...p, dayOrder: order.get(p.id)! }
-        : p,
-    ),
+    items,
+    planPlaces,
     updatedAt: nowIso(),
   }
 }
@@ -516,14 +534,11 @@ export function optimizeDayRoute(trip: TripRecord, day: string): TripRecord {
     ordered.push(remaining.splice(bestIdx, 1)[0]!)
   }
 
-  const order = new Map(ordered.map((p, i) => [p.id, i]))
-  return {
-    ...trip,
-    planPlaces: trip.planPlaces.map((p) =>
-      order.has(p.id) ? { ...p, dayOrder: order.get(p.id)! } : p,
-    ),
-    updatedAt: nowIso(),
-  }
+  return reorderDayPlaces(
+    trip,
+    day,
+    ordered.map((p) => p.id),
+  )
 }
 
 function haversineKm(

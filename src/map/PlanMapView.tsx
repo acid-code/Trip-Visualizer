@@ -292,14 +292,32 @@ export function PlanMapView({
     for (const [day, list] of byDay) {
       const ordered = [...list].sort((a, b) => (a.dayOrder ?? 0) - (b.dayOrder ?? 0))
       if (ordered.length < 2) continue
+      const color = dayColor(meta, day)
       features.push({
         type: 'Feature',
-        properties: { day, color: dayColor(meta, day) },
+        properties: { day, color },
         geometry: {
           type: 'LineString',
           coordinates: ordered.map((p) => [p.lon!, p.lat!]),
         },
       })
+      // Segment badges 2…n sit on the path toward that stop (stop 1 is the pin).
+      for (let i = 1; i < ordered.length; i++) {
+        const a = ordered[i - 1]!
+        const b = ordered[i]!
+        const midLng = (a.lon! + b.lon!) / 2
+        const midLat = (a.lat! + b.lat!) / 2
+        const num = i + 1
+        const badge = document.createElement('div')
+        badge.className = 'plan-route-seg-num'
+        badge.textContent = String(num)
+        badge.title = `Stop ${num}`
+        badge.style.setProperty('--plan-route-seg-color', color)
+        const marker = new maplibregl.Marker({ element: badge, anchor: 'center' })
+          .setLngLat([midLng, midLat])
+          .addTo(map)
+        markersRef.current.push(marker)
+      }
     }
 
     const data: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features }

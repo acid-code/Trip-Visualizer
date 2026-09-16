@@ -7,6 +7,10 @@ type Props = {
   journeySection?: PlanSection | null
   showNearby: boolean
   showJourney?: boolean
+  /** Hide Nearby row (Days mode — nearby stays off). */
+  hideNearbyToggle?: boolean
+  /** Hide Journey row (Days mode — journey stays on). */
+  hideJourneyToggle?: boolean
   hiddenSectionIds: Set<string>
   onToggleNearby: () => void
   onToggleJourney?: () => void
@@ -49,6 +53,8 @@ export function PlanMapLayersControl({
   journeySection = null,
   showNearby,
   showJourney = true,
+  hideNearbyToggle = false,
+  hideJourneyToggle = false,
   hiddenSectionIds,
   onToggleNearby,
   onToggleJourney,
@@ -87,23 +93,25 @@ export function PlanMapLayersControl({
             On the map
           </div>
           <div className="flex flex-col gap-0.5">
-            <button
-              type="button"
-              className={`plan-layer-row ${showNearby ? 'plan-layer-row-on' : ''}`}
-              onClick={onToggleNearby}
-            >
-              <span className="text-sm" aria-hidden>
-                ✨
-              </span>
-              <span className="min-w-0 flex-1 text-left">
-                <span className="block text-[11px] font-semibold text-[var(--ink)]">Nearby</span>
-                <span className="block text-[9px] text-[var(--ink-muted)]">Suggestions</span>
-              </span>
-              <span
-                className={`h-2 w-2 rounded-full ${showNearby ? 'bg-[var(--coral)]' : 'bg-[var(--ink-muted)]/35'}`}
-              />
-            </button>
-            {journeySection && onToggleJourney ? (
+            {!hideNearbyToggle ? (
+              <button
+                type="button"
+                className={`plan-layer-row ${showNearby ? 'plan-layer-row-on' : ''}`}
+                onClick={onToggleNearby}
+              >
+                <span className="text-sm" aria-hidden>
+                  ✨
+                </span>
+                <span className="min-w-0 flex-1 text-left">
+                  <span className="block text-[11px] font-semibold text-[var(--ink)]">Nearby</span>
+                  <span className="block text-[9px] text-[var(--ink-muted)]">Suggestions</span>
+                </span>
+                <span
+                  className={`h-2 w-2 rounded-full ${showNearby ? 'bg-[var(--coral)]' : 'bg-[var(--ink-muted)]/35'}`}
+                />
+              </button>
+            ) : null}
+            {!hideJourneyToggle && journeySection && onToggleJourney ? (
               <button
                 type="button"
                 className={`plan-layer-row ${showJourney ? 'plan-layer-row-on' : ''}`}

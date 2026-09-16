@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   exploreCategoryLabel,
   type ExplorePlace,
@@ -14,6 +15,14 @@ type Props = {
   onSecondary?: () => void
   /** Soft overlay behind the sheet (Plan floats over the map). */
   backdrop?: boolean
+  /** Coral primary (save) vs rose primary (remove from list). */
+  primaryTone?: 'coral' | 'danger'
+  /** Optional day menu for Plan saved places (same pattern as list Day ▾). */
+  days?: string[]
+  scheduledDay?: string | null
+  onPickDay?: (day: string) => void
+  /** Tap the active day again to clear it from the day. */
+  onClearDay?: () => void
 }
 
 /** Shared place detail sheet — Journey Explore + Plan Discover. */
@@ -25,7 +34,15 @@ export function ExplorePlaceDetailSheet({
   secondaryLabel,
   onSecondary,
   backdrop = true,
+  primaryTone = 'coral',
+  days,
+  scheduledDay = null,
+  onPickDay,
+  onClearDay,
 }: Props) {
+  const [dayMenuOpen, setDayMenuOpen] = useState(false)
+  const dayIdx = scheduledDay && days ? days.indexOf(scheduledDay) : -1
+
   return (
     <div
       className={
@@ -97,6 +114,56 @@ export function ExplorePlaceDetailSheet({
               </button>
             ) : null}
           </div>
+          {days && days.length && onPickDay ? (
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
+                Day
+              </p>
+              <div className="flex items-center gap-1.5">
+                {dayIdx >= 0 ? (
+                  <button
+                    type="button"
+                    className="plan-day-badge"
+                    title={`On Day ${dayIdx + 1} — tap to remove from day`}
+                    onClick={() => onClearDay?.()}
+                  >
+                    → D{dayIdx + 1} ✕
+                  </button>
+                ) : null}
+                <div className="relative">
+                  <button
+                    type="button"
+                    className="plan-day-mini"
+                    aria-expanded={dayMenuOpen}
+                    aria-label="Choose day"
+                    title="Add to day"
+                    onClick={() => setDayMenuOpen((v) => !v)}
+                  >
+                    {dayIdx >= 0 ? `D${dayIdx + 1}` : 'Day'} ▾
+                  </button>
+                  {dayMenuOpen ? (
+                    <div className="plan-day-pop plan-day-pop-down" role="menu">
+                      {days.map((d, i) => (
+                        <button
+                          key={d}
+                          type="button"
+                          role="menuitem"
+                          className={`plan-day-pop-item ${scheduledDay === d ? 'plan-day-pop-item-on' : ''}`}
+                          onClick={() => {
+                            if (scheduledDay === d && onClearDay) onClearDay()
+                            else onPickDay(d)
+                            setDayMenuOpen(false)
+                          }}
+                        >
+                          D{i + 1}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
           <div className="flex gap-2">
             {secondaryLabel && onSecondary ? (
               <button
@@ -110,7 +177,9 @@ export function ExplorePlaceDetailSheet({
             ) : null}
             <button
               type="button"
-              className="flex-1 rounded-2xl bg-[var(--coral)] py-2.5 text-sm font-semibold text-white shadow-sm hover:opacity-95"
+              className={`flex-1 rounded-2xl py-2.5 text-sm font-semibold text-white shadow-sm hover:opacity-95 ${
+                primaryTone === 'danger' ? 'bg-rose-500' : 'bg-[var(--coral)]'
+              }`}
               onClick={onPrimary}
             >
               {primaryLabel}
