@@ -33,6 +33,7 @@ import {
   lookupPlace,
 } from '../data/enrichment'
 import { isValidCoord } from '../data/validate'
+import { distKm } from '../data/routes'
 import { PlanMapView } from '../map/PlanMapView'
 import { Chip, IconButton, SegmentedControl } from './primitives'
 import { ExplorePlaceDetailSheet } from './ExplorePlaceDetailSheet'
@@ -134,6 +135,8 @@ export function PlanBoard({
   const [focusPlaceId, setFocusPlaceId] = useState<string | null>(null)
   const [focusSuggestionId, setFocusSuggestionId] = useState<string | null>(null)
   const [detailPlace, setDetailPlace] = useState<ExplorePlace | null>(null)
+  /** When set, detail sheet is a saved Plan place (not a Nearby suggestion). */
+  const [detailSavedId, setDetailSavedId] = useState<string | null>(null)
   const [filterMenuOpen, setFilterMenuOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchBusy, setSearchBusy] = useState(false)
@@ -144,8 +147,6 @@ export function PlanBoard({
   const [packsOpen, setPacksOpen] = useState(false)
   const suggestAbortRef = useRef<AbortController | null>(null)
   const filterMenuRef = useRef<HTMLDivElement>(null)
-  const sheetRef = useRef<HTMLDivElement>(null)
-  const [sheetHeight, setSheetHeight] = useState(0)
 
   const daySafe = days.includes(activeDay) ? activeDay : (days[0] ?? '')
 
@@ -226,16 +227,6 @@ export function PlanBoard({
     setSelectedUnscheduledId(null)
   }, [mode])
 
-  useEffect(() => {
-    const el = sheetRef.current
-    if (!el || typeof ResizeObserver === 'undefined') return
-    const measure = () => setSheetHeight(Math.round(el.getBoundingClientRect().height))
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [mode])
-
   function placesForDay(day: string) {
     return trip.planPlaces
       .filter((p) => p.scheduledDay === day)
@@ -314,6 +305,7 @@ export function PlanBoard({
         setSuggestError(null)
         setFocusSuggestionId(null)
         setDetailPlace(null)
+        setDetailSavedId(null)
         setPinnedSearch(null)
         setSearchQuery('')
       }
@@ -334,6 +326,7 @@ export function PlanBoard({
     setPinnedSearch(null)
     setSearchQuery('')
     setDetailPlace(null)
+    setDetailSavedId(null)
     setFocusSuggestionId(null)
   }
 
@@ -371,6 +364,7 @@ export function PlanBoard({
         setSuggestCat('all')
         setFocusSuggestionId(place.id)
         setFocusPlaceId(null)
+        setDetailSavedId(null)
         setDetailPlace(place)
         onStatus?.('Loaded pin — save when ready')
         return
@@ -405,6 +399,7 @@ export function PlanBoard({
           setShowNearbyPins(true)
           setFocusSuggestionId(place.id)
           setFocusPlaceId(null)
+          setDetailSavedId(null)
           setDetailPlace(place)
           onStatus?.(
             typed
@@ -451,6 +446,7 @@ export function PlanBoard({
       setShowNearbyPins(true)
       setFocusSuggestionId(place.id)
       setFocusPlaceId(null)
+      setDetailSavedId(null)
       setDetailPlace(place)
       onStatus?.('Loaded place — save to Must see when ready')
     } catch (err) {
@@ -482,6 +478,7 @@ export function PlanBoard({
     onChange(result.trip)
     setFocusSuggestionId(null)
     setDetailPlace(null)
+    setDetailSavedId(null)
     if (pinnedSearch && pinnedSearch.id === place.id) {
       setPinnedSearch(null)
       setSearchQuery('')
@@ -560,7 +557,29 @@ export function PlanBoard({
   function openSuggestionDetail(place: ExplorePlace) {
     setFocusSuggestionId(place.id)
     setFocusPlaceId(null)
+    setDetailSavedId(null)
     setDetailPlace(place)
+  }
+
+  function openSavedPlaceDetail(placeId: string) {
+    const p = trip.planPlaces.find((x) => x.id === placeId)
+    if (!p || !isValidCoord(p.lat, p.lon)) {
+      setFocusPlaceId(placeId)
+      return
+    }
+    const section = trip.planSections.find((s) => s.id === p.sectionId)
+    const anchor = mapView
+      ? { lat: mapView.lat, lon: mapView.lon }
+      : tripMapAnchor(trip)
+    setFocusPlaceId(placeId)
+    setFocusSuggestionId(null)
+    setDetailSavedId(p.id)
+    setDetailPlace(planPlaceToExplorePlace(p, section, days, anchor))
+  }
+
+  function closePlaceDetail() {
+    setDetailPlace(null)
+    setDetailSavedId(null)
   }
 
   function saveLabelFor(place: ExplorePlace): string {
@@ -568,40 +587,50 @@ export function PlanBoard({
     return section ? `Save to ${section.title}` : 'Save'
   }
 
+  const detailSavedPlace = detailSavedId
+    ? trip.planPlaces.find((p) => p.id === detailSavedId) ?? null
+    : null
+  const detailSavedDayIdx =
+    detailSavedPlace?.scheduledDay != null
+      ? days.indexOf(detailSavedPlace.scheduledDay)
+      : -1
+
   return (
     <div className="plan-phone relative flex h-full min-h-0 flex-col">
-      {/* Layers FAB — mirrors Journey map layers, under Journey|Plan */}
-      <div className="pointer-events-auto absolute right-3 top-[max(4.35rem,calc(env(safe-area-inset-top)+3.45rem))] z-20">
-        <PlanMapLayersControl
-          sections={listSections}
-          showNearby={showNearbyPins}
-          hiddenSectionIds={hiddenSections}
-          onToggleNearby={toggleNearbyLayer}
-          onToggleSection={toggleSectionLayer}
-          panelPlacement="below"
-        />
-      </div>
-
-      {/* Top chrome — left side only so Journey/Plan switcher stays clear */}
-      <div className="plan-phone-top pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-[max(0.55rem,env(safe-area-inset-top))]">
-        <div className="pointer-events-auto flex max-w-[calc(100%-9.5rem)] flex-col gap-2">
-          <SegmentedControl
-            ariaLabel="Plan mode"
-            value={mode}
-            onChange={setMode}
-            options={[
-              { id: 'discover', label: 'Discover' },
-              { id: 'days', label: 'Days' },
-            ]}
+      {/* Map band — only the area above Discover/Days; Nearby uses this viewport center */}
+      <div className="relative z-0 min-h-[11rem] min-w-0 flex-1">
+        {/* Layers FAB — mirrors Journey map layers, under Journey|Plan */}
+        <div className="pointer-events-auto absolute right-3 top-[max(4.35rem,calc(env(safe-area-inset-top)+3.45rem))] z-20">
+          <PlanMapLayersControl
+            sections={listSections}
+            showNearby={showNearbyPins}
+            hiddenSectionIds={hiddenSections}
+            onToggleNearby={toggleNearbyLayer}
+            onToggleSection={toggleSectionLayer}
+            panelPlacement="below"
           />
-          <div ref={filterMenuRef} className="relative w-fit">
-            <button
-              type="button"
-              className="plan-filter-trigger"
-              aria-expanded={filterMenuOpen}
-              aria-haspopup="listbox"
-              onClick={() => setFilterMenuOpen((v) => !v)}
-            >
+        </div>
+
+        {/* Top chrome — left side only so Journey/Plan switcher stays clear */}
+        <div className="plan-phone-top pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-[max(0.55rem,env(safe-area-inset-top))]">
+          <div className="pointer-events-auto flex max-w-[calc(100%-9.5rem)] flex-col gap-2">
+            <SegmentedControl
+              ariaLabel="Plan mode"
+              value={mode}
+              onChange={setMode}
+              options={[
+                { id: 'discover', label: 'Discover' },
+                { id: 'days', label: 'Days' },
+              ]}
+            />
+            <div ref={filterMenuRef} className="relative w-fit">
+              <button
+                type="button"
+                className="plan-filter-trigger"
+                aria-expanded={filterMenuOpen}
+                aria-haspopup="listbox"
+                onClick={() => setFilterMenuOpen((v) => !v)}
+              >
               {mode === 'discover' ? (
                 <>
                   <span className="text-base leading-none" aria-hidden>
@@ -730,62 +759,89 @@ export function PlanBoard({
         </div>
       </div>
 
-      {/* Map always on */}
-      <div className="absolute inset-0 z-0">
-        <PlanMapView
-          meta={trip.meta}
-          sections={trip.planSections}
-          places={trip.planPlaces}
-          visibleSectionIds={visibleSectionIds}
-          visibleDays={mapVisibleDays}
-          colorBy={mode === 'days' ? 'day' : 'section'}
-          hideScheduled={mode === 'discover'}
-          suggestions={suggestionPins}
-          focusPlaceId={focusPlaceId}
-          focusSuggestionId={focusSuggestionId}
-          linkedItemTypes={linkedItemTypes}
-          focusPaddingBottom={sheetHeight > 0 ? sheetHeight + 12 : 280}
-          onPlaceClick={(id) => {
-            setFocusPlaceId(id)
-            setFocusSuggestionId(null)
-            setDetailPlace(null)
-          }}
-          onSuggestionClick={(id) => {
-            const place = filteredSuggestions.find((p) => p.id === id)
-            if (place) openSuggestionDetail(place)
-          }}
-          onViewportIdle={(view) => {
-            setMapView((prev) => {
-              if (
-                prev &&
-                Math.abs(prev.lat - view.lat) < 0.0015 &&
-                Math.abs(prev.lon - view.lon) < 0.0015 &&
-                Math.abs(prev.radiusM - view.radiusM) < Math.max(200, view.radiusM * 0.08)
-              ) {
-                return prev
-              }
-              return view
-            })
-          }}
-          className="h-full"
-        />
+        <div className="absolute inset-0 z-0">
+          <PlanMapView
+            meta={trip.meta}
+            sections={trip.planSections}
+            places={trip.planPlaces}
+            visibleSectionIds={visibleSectionIds}
+            visibleDays={mapVisibleDays}
+            colorBy={mode === 'days' ? 'day' : 'section'}
+            hideScheduled={false}
+            suggestions={suggestionPins}
+            focusPlaceId={focusPlaceId}
+            focusSuggestionId={focusSuggestionId}
+            linkedItemTypes={linkedItemTypes}
+            onPlaceClick={(id) => {
+              openSavedPlaceDetail(id)
+            }}
+            onSuggestionClick={(id) => {
+              const place = filteredSuggestions.find((p) => p.id === id)
+              if (place) openSuggestionDetail(place)
+            }}
+            onViewportIdle={(view) => {
+              setMapView((prev) => {
+                if (
+                  prev &&
+                  Math.abs(prev.lat - view.lat) < 0.0015 &&
+                  Math.abs(prev.lon - view.lon) < 0.0015 &&
+                  Math.abs(prev.radiusM - view.radiusM) < Math.max(200, view.radiusM * 0.08)
+                ) {
+                  return prev
+                }
+                return view
+              })
+            }}
+            className="h-full"
+          />
+        </div>
       </div>
 
       {detailPlace ? (
         <ExplorePlaceDetailSheet
           place={detailPlace}
-          onClose={() => setDetailPlace(null)}
-          primaryLabel={saveLabelFor(detailPlace)}
-          onPrimary={() => saveSuggestion(detailPlace, false)}
-          secondaryLabel="Maybe"
-          onSecondary={() => saveSuggestion(detailPlace, true)}
+          onClose={closePlaceDetail}
+          primaryLabel={
+            detailSavedId
+              ? detailSavedDayIdx >= 0
+                ? `Day ${detailSavedDayIdx + 1} · Done`
+                : 'Done'
+              : saveLabelFor(detailPlace)
+          }
+          onPrimary={() => {
+            if (detailSavedId) {
+              closePlaceDetail()
+              return
+            }
+            saveSuggestion(detailPlace, false)
+          }}
+          secondaryLabel={
+            detailSavedId
+              ? detailSavedPlace?.scheduledDay
+                ? 'Unschedule'
+                : 'Remove'
+              : 'Maybe'
+          }
+          onSecondary={() => {
+            if (detailSavedId) {
+              if (detailSavedPlace?.scheduledDay) {
+                onChange(unschedulePlanPlace(trip, detailSavedId))
+                onStatus?.('Moved back to lists')
+              } else {
+                onChange(removePlanPlace(trip, detailSavedId))
+                onStatus?.('Removed from list')
+              }
+              closePlaceDetail()
+              return
+            }
+            saveSuggestion(detailPlace, true)
+          }}
         />
       ) : null}
 
-      {/* Bottom sheet */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex max-h-[min(64vh,32rem)] flex-col pt-[6.75rem]">
+      {/* Discover / Days sheet — owns the bottom; map is only above this */}
+      <div className="relative z-10 flex h-[min(46vh,21rem)] shrink-0 flex-col">
         <div
-          ref={sheetRef}
           className={`plan-itin-sheet pointer-events-auto mx-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[1.75rem] ${TOUCH_SCROLL_Y}`}
         >
           <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-[var(--ink-muted)]/35" />
@@ -1010,7 +1066,8 @@ export function PlanBoard({
                                 className={`plan-unscheduled-chip ${on ? 'plan-unscheduled-chip-on' : ''}`}
                                 onClick={() => {
                                   setSelectedUnscheduledId(on ? null : p.id)
-                                  setFocusPlaceId(p.id)
+                                  setFocusPlaceId(on ? null : p.id)
+                                  setFocusSuggestionId(null)
                                 }}
                               >
                                 <span className="line-clamp-2 text-left text-[12px] font-semibold leading-snug text-[var(--ink)]">
@@ -1095,7 +1152,12 @@ export function PlanBoard({
                               <button
                                 type="button"
                                 className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                                onClick={() => setFocusPlaceId(p.id)}
+                                onClick={() => {
+                                  setDaysAll(false)
+                                  setActiveDay(day)
+                                  setFocusPlaceId(p.id)
+                                  setFocusSuggestionId(null)
+                                }}
                               >
                                 <span className="plan-bucket-num">{i + 1}</span>
                                 <span className="truncate text-[12px] font-medium text-[var(--ink)]">
@@ -1243,6 +1305,56 @@ function ListSection({
       </div>
     </section>
   )
+}
+
+function exploreCategoryFromSection(section: PlanSection | undefined): ExploreCategory {
+  const t = (section?.title || '').toLowerCase()
+  if (t.includes('food') || t.includes('eat') || t.includes('drink')) return 'food'
+  if (t.includes('stay') || t.includes('hotel')) return 'hotel'
+  if (t.includes('nature') || t.includes('outdoor')) return 'nature'
+  if (t.includes('maybe') || t.includes('optional')) return 'other'
+  return 'sights'
+}
+
+function planPlaceToExplorePlace(
+  p: PlanPlace,
+  section: PlanSection | undefined,
+  days: string[],
+  from: { lat: number; lon: number },
+): ExplorePlace {
+  const dayIdx = p.scheduledDay ? days.indexOf(p.scheduledDay) : -1
+  const summaryBits = [
+    section?.title ? `In ${section.title}` : 'Saved place',
+    dayIdx >= 0 ? `Scheduled · Day ${dayIdx + 1}` : null,
+    p.notes?.trim() || null,
+  ].filter(Boolean)
+
+  return {
+    id: p.id,
+    name: p.name,
+    lat: p.lat ?? 0,
+    lon: p.lon ?? 0,
+    category: exploreCategoryFromSection(section),
+    osmType: 'plan',
+    osmId: p.osmId || '',
+    wikidata: '',
+    images: [],
+    summary: summaryBits.join(' · '),
+    distKm:
+      isValidCoord(p.lat, p.lon) && isValidCoord(from.lat, from.lon)
+        ? distKm(from, { lat: p.lat!, lon: p.lon! })
+        : 0,
+    rating: null,
+    cuisine: '',
+    website: p.url || '',
+    menuUrl: '',
+    openingHours: '',
+    address: [p.place, p.city].filter(Boolean).join(', '),
+    tags: {
+      source: 'plan',
+      ...(p.googleMapsUri ? { googleMapsUri: p.googleMapsUri } : {}),
+    },
+  }
 }
 
 /** Local Plan AI: parse simple intents into places (no network). */

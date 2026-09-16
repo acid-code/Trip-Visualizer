@@ -658,11 +658,10 @@ textarea {
   right: 0.65rem;
 }
 
-/* Compact Plan layers menu — stays above the Discover/Days sheet */
+/* Compact Plan layers menu — stays inside the map band above the sheet */
 .plan-map-layers-panel.map-layers-panel {
   width: min(13.25rem, calc(100vw - 2.5rem));
-  /* Leave a gap above the bottom sheet (sheet max ~64vh / 32rem). */
-  max-height: min(10.5rem, calc(100dvh - min(64vh, 32rem) - 9.25rem));
+  max-height: min(10.5rem, calc(100% - 0.75rem));
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;

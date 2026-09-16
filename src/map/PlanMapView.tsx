@@ -63,11 +63,6 @@ type Props = {
   onViewportIdle?: (view: { lat: number; lon: number; radiusM: number }) => void
   /** Journey step type by linked item id — pins use type emoji instead of section icon. */
   linkedItemTypes?: Record<string, ItemType>
-  /**
-   * Bottom padding (px) when focusing a pin — keeps it in the visible map
-   * above the Discover/Days sheet instead of under it.
-   */
-  focusPaddingBottom?: number
   className?: string
 }
 
@@ -147,7 +142,6 @@ export function PlanMapView({
   onSuggestionClick,
   onViewportIdle,
   linkedItemTypes,
-  focusPaddingBottom = 0,
   className = '',
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -190,10 +184,21 @@ export function PlanMapView({
     }
     map.on('load', emitIdle)
     map.on('moveend', onMoveEnd)
+    map.on('resize', onMoveEnd)
     mapRef.current = map
+    const ro =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            map.resize()
+            onMoveEnd()
+          })
+        : null
+    if (rootRef.current && ro) ro.observe(rootRef.current)
     return () => {
       if (idleTimer) clearTimeout(idleTimer)
+      ro?.disconnect()
       map.off('moveend', onMoveEnd)
+      map.off('resize', onMoveEnd)
       for (const m of markersRef.current) m.remove()
       markersRef.current = []
       map.remove()
@@ -214,6 +219,9 @@ export function PlanMapView({
     const visible = places.filter((p) => {
       if (!isValidCoord(p.lat, p.lon)) return false
       if (hideScheduled && p.scheduledDay) return false
+      const isFocus = focusPlaceId != null && focusPlaceId === p.id
+      // Focused pin always stays on the map (e.g. Days list pick while a day is filtered).
+      if (isFocus) return true
       if (!visibleSectionIds.has(p.sectionId)) return false
       if (visibleDays) {
         if (!p.scheduledDay || !visibleDays.has(p.scheduledDay)) return false
@@ -317,7 +325,7 @@ export function PlanMapView({
         map.easeTo({
           center: [focus.lon, focus.lat],
           zoom: Math.max(map.getZoom(), 12),
-          padding: { top: 48, bottom: Math.max(0, focusPaddingBottom), left: 40, right: 40 },
+          padding: 40,
           duration: 450,
         })
         return
@@ -329,7 +337,7 @@ export function PlanMapView({
         map.easeTo({
           center: [focus.lon!, focus.lat!],
           zoom: Math.max(map.getZoom(), 11),
-          padding: { top: 48, bottom: Math.max(0, focusPaddingBottom), left: 40, right: 40 },
+          padding: 40,
           duration: 450,
         })
         return
@@ -347,12 +355,7 @@ export function PlanMapView({
     for (const p of visible) bounds.extend([p.lon!, p.lat!])
     if (!bounds.isEmpty()) {
       map.fitBounds(bounds, {
-        padding: {
-          top: 56,
-          bottom: Math.max(56, focusPaddingBottom || 56),
-          left: 56,
-          right: 56,
-        },
+        padding: 48,
         maxZoom: 12,
         duration: 600,
       })
@@ -369,7 +372,6 @@ export function PlanMapView({
     focusPlaceId,
     focusSuggestionId,
     linkedItemTypes,
-    focusPaddingBottom,
   ])
 
   return (
