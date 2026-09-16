@@ -1,7 +1,10 @@
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { startUpdateChecks } from './updateCheck'
+import { applyColorMode, DEFAULT_COLOR_MODE } from './data/theme'
 import './index.css'
+
+applyColorMode(DEFAULT_COLOR_MODE)
 
 // Never let update/SW bootstrap kill the app (phone black-screen after hard reset).
 try {

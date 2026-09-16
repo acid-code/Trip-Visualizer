@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
@@ -28,6 +29,7 @@ import {
   parseTripItemId,
   pickScreenLonLat,
   routeMidpoint,
+  setGlobeRenderActive,
   syncSelectedPathHighlight,
   syncExploreEntities,
   syncTempPinEntities,
@@ -83,6 +85,8 @@ type Props = {
   openingOriginOnly?: boolean
   /** Phone: looser pin zoom + raise target above the bottom dock */
   phoneFraming?: boolean
+  /** When false, pause the WebGL render loop (Plan mode / background). */
+  renderActive?: boolean
   tempPin?: TempPinDraw | null
   nearbyLinks?: NearbyStepLink[]
   tempFlyToken?: number
@@ -140,6 +144,7 @@ export function GlobeView({
   tripFocusId = null,
   openingOriginOnly = false,
   phoneFraming = false,
+  renderActive = true,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const walkOverlayRef = useRef<HTMLDivElement>(null)
@@ -204,9 +209,10 @@ export function GlobeView({
       if (!point) return
       const p = lonLatToCanvasCss(v, point.lon, point.lat)
       if (!p) return
+      const rect = v.scene.canvas.getBoundingClientRect()
       overlay.style.display = 'flex'
-      overlay.style.left = `${p.x}px`
-      overlay.style.top = `${p.y}px`
+      overlay.style.left = `${rect.left + p.x}px`
+      overlay.style.top = `${rect.top + p.y}px`
     })
   }
 
@@ -242,44 +248,54 @@ export function GlobeView({
       pressTimer = null
     }
 
+    let syncWalkRaf: number | null = null
     const syncWalkButton = () => {
-      const overlay = walkOverlayRef.current
-      const v = viewerRef.current
-      const target = walkTargetRef.current
-      if (!overlay || !v) return
-      if (!target) {
-        overlay.style.display = 'none'
-        return
-      }
-      // Path actions wait until the camera finishes framing the route
-      if (
-        (target.kind === 'directions' || target.kind === 'flights') &&
-        !pathActionReadyRef.current
-      ) {
-        overlay.style.display = 'none'
-        return
-      }
-      try {
-        const point = walkAnchorPoint(target)
-        if (!point) {
+      if (syncWalkRaf != null) return
+      syncWalkRaf = requestAnimationFrame(() => {
+        syncWalkRaf = null
+        const overlay = walkOverlayRef.current
+        const v = viewerRef.current
+        const target = walkTargetRef.current
+        if (!overlay || !v) return
+        if (!target) {
           overlay.style.display = 'none'
           return
         }
-        const p = lonLatToCanvasCss(v, point.lon, point.lat)
-        if (!p) {
+        // Path actions wait until the camera finishes framing the route
+        if (
+          (target.kind === 'directions' || target.kind === 'flights') &&
+          !pathActionReadyRef.current
+        ) {
           overlay.style.display = 'none'
           return
         }
-        overlay.style.display = 'flex'
-        overlay.style.left = `${p.x}px`
-        overlay.style.top = `${p.y}px`
-      } catch {
-        overlay.style.display = 'none'
-      }
+        try {
+          const point = walkAnchorPoint(target)
+          if (!point) {
+            overlay.style.display = 'none'
+            return
+          }
+          const p = lonLatToCanvasCss(v, point.lon, point.lat)
+          if (!p) {
+            overlay.style.display = 'none'
+            return
+          }
+          // Portal is fixed to the viewport — offset by the canvas rect.
+          const rect = v.scene.canvas.getBoundingClientRect()
+          overlay.style.display = 'flex'
+          overlay.style.left = `${rect.left + p.x}px`
+          overlay.style.top = `${rect.top + p.y}px`
+        } catch {
+          overlay.style.display = 'none'
+        }
+      })
     }
 
     ;(async () => {
-      viewer = await createTripViewer(container, { ionToken })
+      viewer = await createTripViewer(container, {
+        ionToken,
+        phone: phoneFramingRef.current,
+      })
       if (cancelled) {
         viewer.destroy()
         return
@@ -539,6 +555,7 @@ export function GlobeView({
     return () => {
       cancelled = true
       clearPressTimer()
+      if (syncWalkRaf != null) cancelAnimationFrame(syncWalkRaf)
       ro?.disconnect()
       try {
         removeCam?.()
@@ -570,7 +587,27 @@ export function GlobeView({
     } catch (err) {
       console.warn('[globe] syncTripEntities failed', err)
     }
-  }, [items, connectors, meta, selectedId])
+  }, [items, connectors, meta])
+
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    try {
+      applySelectionHighlight(viewer, selectedId ?? null, focusedEntityIdRef.current)
+    } catch (err) {
+      console.warn('[globe] applySelectionHighlight failed', err)
+    }
+  }, [selectedId])
+
+  useEffect(() => {
+    const apply = () => {
+      const visible = renderActive && typeof document !== 'undefined' && !document.hidden
+      setGlobeRenderActive(viewerRef.current, visible)
+    }
+    apply()
+    document.addEventListener('visibilitychange', apply)
+    return () => document.removeEventListener('visibilitychange', apply)
+  }, [renderActive])
 
   useEffect(() => {
     const viewer = viewerRef.current
@@ -696,14 +733,19 @@ export function GlobeView({
     const viewer = viewerRef.current
     if (!viewer || !tempPin || !tempFlyToken) return
     if (!isValidCoord(tempPin.lat, tempPin.lon)) return
-    flyToCoords(viewer, tempPin.lon, tempPin.lat, 380)
+    // Keep the pin mid-screen so Explore/Walk stay clear of top chrome + status.
+    flyToCoords(viewer, tempPin.lon, tempPin.lat, {
+      range: phoneFramingRef.current ? 900 : 380,
+      raisePin: phoneFramingRef.current ? 0.06 : 0.12,
+      pitchDeg: phoneFramingRef.current ? -52 : -32,
+    })
   }, [tempFlyToken, tempPin])
 
   useEffect(() => {
     const overlay = walkOverlayRef.current
     const v = viewerRef.current
     if (!overlay) return
-    if (!walkTarget || !v) {
+    if (!renderActive || !walkTarget || !v) {
       overlay.style.display = 'none'
       return
     }
@@ -725,13 +767,14 @@ export function GlobeView({
         overlay.style.display = 'none'
         return
       }
+      const rect = v.scene.canvas.getBoundingClientRect()
       overlay.style.display = 'flex'
-      overlay.style.left = `${p.x}px`
-      overlay.style.top = `${p.y}px`
+      overlay.style.left = `${rect.left + p.x}px`
+      overlay.style.top = `${rect.top + p.y}px`
     } catch {
       overlay.style.display = 'none'
     }
-  }, [walkTarget, selectedId, tempPin, pathActionReady])
+  }, [walkTarget, selectedId, tempPin, pathActionReady, renderActive])
 
   const isFlight = walkTarget?.kind === 'flights'
   const directionsMode =
@@ -766,6 +809,7 @@ export function GlobeView({
             ? `Open walking directions (~${etaMins} min)`
             : 'Open walking directions'
           : 'Open nearest Street View'
+  // Paths: center on the route. Pins: sit ABOVE the pin.
   const actionLift =
     walkTarget?.kind === 'directions' || walkTarget?.kind === 'flights'
       ? etaMins != null
@@ -773,47 +817,57 @@ export function GlobeView({
         : '-translate-y-1/2'
       : '-translate-y-[3.6rem]'
 
+  const pinActions =
+    renderActive && typeof document !== 'undefined'
+      ? createPortal(
+          <div className="pointer-events-none fixed inset-0 z-[42] overflow-hidden">
+            <div
+              ref={walkOverlayRef}
+              className={`absolute hidden ${actionLift} -translate-x-1/2 flex-col items-center gap-0.5`}
+            >
+              {etaMins != null ? (
+                <span className="rounded bg-slate-950/70 px-1 py-px text-[9px] font-medium leading-none text-white/95 tabular-nums whitespace-nowrap">
+                  ~{etaMins} min
+                </span>
+              ) : null}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  className="pointer-events-auto flex h-8 w-8 touch-manipulation items-center justify-center rounded-full border border-white/85 bg-sky-500/95 text-[13px] leading-none shadow-md"
+                  title={actionTitle}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onOpenWalkRef.current?.()
+                  }}
+                >
+                  {actionIcon}
+                </button>
+                {walkTarget?.kind === 'point' ? (
+                  <button
+                    type="button"
+                    className="pointer-events-auto flex h-8 w-8 touch-manipulation items-center justify-center rounded-full border border-amber-200/90 bg-amber-400 text-[13px] leading-none text-amber-950 shadow-md"
+                    title="Explore nearby"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onOpenExploreRef.current?.()
+                    }}
+                  >
+                    ★
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null
+
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="absolute inset-0 touch-none" />
-      <div className="pointer-events-none absolute inset-0 z-[5] overflow-hidden">
-        <div
-          ref={walkOverlayRef}
-          className={`absolute hidden ${actionLift} -translate-x-1/2 flex-col items-center gap-0.5`}
-        >
-          {etaMins != null ? (
-            <span className="rounded bg-slate-950/70 px-1 py-px text-[9px] font-medium leading-none text-white/95 tabular-nums whitespace-nowrap">
-              ~{etaMins} min
-            </span>
-          ) : null}
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              className="pointer-events-auto flex h-[24px] w-[24px] items-center justify-center rounded-full border border-white/85 bg-sky-500/95 text-[12px] leading-none shadow-md"
-              title={actionTitle}
-              onClick={(e) => {
-                e.stopPropagation()
-                onOpenWalkRef.current?.()
-              }}
-            >
-              {actionIcon}
-            </button>
-            {walkTarget?.kind === 'point' ? (
-              <button
-                type="button"
-                className="pointer-events-auto flex h-[24px] w-[24px] items-center justify-center rounded-full border border-amber-200/90 bg-amber-400 text-[12px] leading-none text-amber-950 shadow-md"
-                title="Explore nearby"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpenExploreRef.current?.()
-                }}
-              >
-                ★
-              </button>
-            ) : null}
-          </div>
-        </div>
-      </div>
+      {pinActions}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 /**
- * Proxy for Places API (New) Text Search — map search bar pin drop.
+ * Proxy for Places API (New) Text Search — map search + Plan recommendation lookup.
  * Fully self-contained: Vercel does not bundle ../src into /api functions.
  */
 
@@ -13,6 +13,13 @@ const TEXT_FIELD_MASK = [
   'places.displayName',
   'places.location',
   'places.formattedAddress',
+  'places.types',
+  'places.primaryType',
+  'places.rating',
+  'places.userRatingCount',
+  'places.photos',
+  'places.websiteUri',
+  'places.googleMapsUri',
 ].join(',')
 
 type VercelReq = {
@@ -33,6 +40,13 @@ type GooglePlace = {
   displayName?: { text?: string }
   location?: { latitude?: number; longitude?: number }
   formattedAddress?: string
+  types?: string[]
+  primaryType?: string
+  rating?: number
+  userRatingCount?: number
+  photos?: Array<{ name?: string }>
+  websiteUri?: string
+  googleMapsUri?: string
 }
 
 function header(req: VercelReq, name: string): string {
@@ -61,6 +75,77 @@ function resolveApiKey(bodyKey?: unknown): string {
   const fromBody = String(bodyKey ?? '').trim()
   if (fromBody.startsWith('AIza')) return fromBody
   return String(process.env.GOOGLE_MAPS_API_KEY ?? '').trim()
+}
+
+function httpsUrl(raw: string): string {
+  const s = raw.trim()
+  if (!s.startsWith('https://')) return ''
+  try {
+    return new URL(s).toString()
+  } catch {
+    return ''
+  }
+}
+
+function categoryFromTypes(primary: string, types: string[]): string {
+  const p = (primary || '').toLowerCase()
+  const all = [p, ...types.map((t) => t.toLowerCase())].filter(Boolean)
+  const has = (t: string) => all.includes(t)
+  const isLodgingType = (t: string) =>
+    t === 'lodging' ||
+    t === 'hotel' ||
+    t === 'motel' ||
+    t === 'resort_hotel' ||
+    t === 'extended_stay_hotel' ||
+    t === 'guest_house' ||
+    t === 'hostel'
+  const isFoodType = (t: string) =>
+    t === 'restaurant' ||
+    t === 'cafe' ||
+    t === 'bakery' ||
+    t === 'meal_takeaway' ||
+    t === 'meal_delivery' ||
+    t === 'food'
+  const isDrinkType = (t: string) =>
+    t === 'bar' || t === 'night_club' || t === 'pub' || t === 'winery'
+
+  if (p && isFoodType(p)) return 'food'
+  if (p && isDrinkType(p)) return 'drink'
+  if (p && isLodgingType(p)) return 'hotel'
+  if (all.some(isFoodType) && all.some(isLodgingType)) return 'food'
+  if (all.some(isDrinkType) && all.some(isLodgingType)) return 'drink'
+  if (all.some(isLodgingType)) return 'hotel'
+  if (all.some(isFoodType)) return 'food'
+  if (all.some(isDrinkType)) return 'drink'
+  if (has('vineyard')) return 'drink'
+  if (
+    has('park') ||
+    has('campground') ||
+    has('national_park') ||
+    has('natural_feature') ||
+    has('beach') ||
+    has('marina')
+  ) {
+    return 'nature'
+  }
+  if (
+    has('museum') ||
+    has('art_gallery') ||
+    has('tourist_attraction') ||
+    has('historical_landmark') ||
+    has('church') ||
+    has('hindu_temple') ||
+    has('mosque') ||
+    has('synagogue') ||
+    has('zoo') ||
+    has('aquarium') ||
+    has('amusement_park') ||
+    has('performing_arts_theater') ||
+    has('visitor_center')
+  ) {
+    return 'sights'
+  }
+  return 'other'
 }
 
 export default async function handler(req: VercelReq, res: VercelRes) {
@@ -152,6 +237,16 @@ export default async function handler(req: VercelReq, res: VercelRes) {
       return
     }
 
+    const types = gp.types || []
+    const primary = gp.primaryType || types[0] || ''
+    const photoName = gp.photos?.[0]?.name || ''
+    const rating =
+      typeof gp.rating === 'number' && Number.isFinite(gp.rating)
+        ? Math.round(gp.rating * 10) / 10
+        : null
+    const mapsUri = httpsUrl(gp.googleMapsUri || '')
+    const website = httpsUrl(gp.websiteUri || '')
+
     res.status(200).json({
       place: {
         lat,
@@ -159,6 +254,15 @@ export default async function handler(req: VercelReq, res: VercelRes) {
         name,
         address: String(gp.formattedAddress || '').trim().slice(0, 200),
         placeId: String(gp.id || '').trim().slice(0, 128),
+        category: categoryFromTypes(primary, types),
+        primaryType: primary,
+        types,
+        rating,
+        userRatingCount:
+          typeof gp.userRatingCount === 'number' ? gp.userRatingCount : null,
+        photoName,
+        googleMapsUri: mapsUri,
+        website,
       },
     })
   } catch (err) {

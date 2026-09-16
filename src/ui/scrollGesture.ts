@@ -50,8 +50,8 @@ export const MOBILE_SHEET_HEIGHT = {
   aiCoachDetail: 'max-h-[min(70vh,28rem)]',
   /** Steps strip while browsing */
   steps: 'max-h-[38vh]',
-  /** Steps while reviewing an AI draft */
-  aiReviewSteps: 'h-[min(48vh,22rem)]',
+  /** Steps while reviewing an AI draft — keep short so Save/Discard stay clear on phones */
+  aiReviewSteps: 'h-[min(30vh,13rem)]',
   /** Explore list */
   explore: 'h-[min(41vh,18.5rem)]',
   /** Explore place detail */

@@ -628,6 +628,25 @@ export async function enrichItem(item: TripItem): Promise<TripItem> {
   return next
 }
 
+/** True when an item still needs geocode / route fill (background Enrich). */
+export function itemNeedsEnrich(item: TripItem): boolean {
+  if (item.type === 'note') return false
+  const isLeg = ['flight', 'train', 'bus', 'ferry', 'drive'].includes(item.type)
+  if (isLeg) {
+    if (!isValidCoord(item.lat, item.lon) && (item.from || item.place)) return true
+    if (item.to && !isValidCoord(item.latTo, item.lonTo)) return true
+    if (
+      item.type === 'drive' &&
+      isValidCoord(item.lat, item.lon) &&
+      isValidCoord(item.latTo, item.lonTo)
+    ) {
+      return !(item.routeCoords && item.routeCoords.length >= 2)
+    }
+    return false
+  }
+  return !isValidCoord(item.lat, item.lon) && Boolean(item.place || item.title)
+}
+
 export async function enrichTripItems(
   items: TripItem[],
   onProgress?: (done: number, total: number) => void,
@@ -636,6 +655,25 @@ export async function enrichTripItems(
   for (let i = 0; i < items.length; i++) {
     out.push(await enrichItem(items[i]))
     onProgress?.(i + 1, items.length)
+  }
+  return out
+}
+
+/** Enrich only items that still need pins / summaries. */
+export async function enrichNeedyTripItems(
+  items: TripItem[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<TripItem[]> {
+  const needyIdx: number[] = []
+  for (let i = 0; i < items.length; i++) {
+    if (itemNeedsEnrich(items[i]!)) needyIdx.push(i)
+  }
+  if (!needyIdx.length) return items
+  const out = items.slice()
+  for (let n = 0; n < needyIdx.length; n++) {
+    const i = needyIdx[n]!
+    out[i] = await enrichItem(out[i]!)
+    onProgress?.(n + 1, needyIdx.length)
   }
   return out
 }

@@ -136,9 +136,15 @@ function cacheKey(
   lon: number,
   radiusM: number,
   source: 'google' | 'osm',
+  categories?: ExploreCategory[],
+  rank: 'DISTANCE' | 'POPULARITY' = 'DISTANCE',
 ): string {
-  // v8: marina / pier / harbour for Day Coach water days
-  return `v8:${source}:${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}`
+  // v10: POPULARITY rank + viewport radius for Plan Discover
+  const cat =
+    categories?.length
+      ? [...categories].sort().join('+')
+      : 'all'
+  return `v10:${source}:${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}:${cat}:${rank}`
 }
 
 async function getCached(key: string): Promise<ExplorePlace[] | null> {
@@ -551,25 +557,30 @@ export async function fetchNearbyExplore(
     onCacheHit?: (places: ExplorePlace[]) => void
     /** After a cache hit, still refresh in the background (default true). */
     refreshInBackground?: boolean
-    /** Limit OSM query size (Day Coach uses food/sights/nature only). */
+    /** Limit OSM / Google Nearby types (Plan Discover passes one category). */
     categories?: ExploreCategory[]
+    /** Prefer popular / highly visited places (Google Nearby POPULARITY). */
+    rankPreference?: 'DISTANCE' | 'POPULARITY'
   },
 ): Promise<ExplorePlace[]> {
   if (!isValidCoord(anchor.lat, anchor.lon)) return []
   const radiusM = opts?.radiusM ?? DEFAULT_RADIUS_M
   const useGoogle = Boolean(opts?.useGooglePlaces)
   const source = useGoogle ? 'google' : 'osm'
+  const categories = opts?.categories
+  const rankPreference =
+    opts?.rankPreference === 'POPULARITY' ? 'POPULARITY' : 'DISTANCE'
   logClientInfo(
     'explore',
     useGoogle
-      ? `Using Google Nearby (overrideKey=${opts?.googleApiKey ? 'yes' : 'no'})`
+      ? `Using Google Nearby (overrideKey=${opts?.googleApiKey ? 'yes' : 'no'}; cats=${categories?.join(',') || 'all'}; rank=${rankPreference})`
       : 'Using OSM/Overpass — Google Places not enabled (no server key / Data override)',
   )
   // Google Nearby hard-caps at 20 — don't request / cache more than that
   const limit = useGoogle
     ? Math.min(opts?.limit ?? GOOGLE_NEARBY_MAX, GOOGLE_NEARBY_MAX)
     : (opts?.limit ?? DEFAULT_LIMIT)
-  const key = cacheKey(anchor.lat, anchor.lon, radiusM, source)
+  const key = cacheKey(anchor.lat, anchor.lon, radiusM, source, categories, rankPreference)
 
   const withDistances = (list: ExplorePlace[]) =>
     [...list]
@@ -603,20 +614,59 @@ export async function fetchNearbyExplore(
     if (useGoogle) {
       try {
         const gKey = opts?.googleApiKey?.trim() || undefined
-        const places = await fetchGoogleNearbyViaProxy(anchor, {
+        let places = await fetchGoogleNearbyViaProxy(anchor, {
           apiKey: gKey,
           radiusM,
           maxResultCount: limit,
           signal: opts?.signal,
+          categories,
+          rankPreference,
         })
         if (opts?.signal?.aborted) return cacheHit ?? []
+
+        // Category-scoped Nearby often returns 0 (sparse types / bad centroid).
+        // Retry unrestricted, then keep matching categories; else fall through to OSM.
+        if (!places.length && categories?.length) {
+          logClientInfo(
+            'explore',
+            `Google Nearby empty for [${categories.join(',')}]; retrying unrestricted`,
+          )
+          const broad = await fetchGoogleNearbyViaProxy(anchor, {
+            apiKey: gKey,
+            radiusM: Math.max(radiusM, 12_000),
+            maxResultCount: limit,
+            signal: opts?.signal,
+            unrestricted: true,
+            rankPreference,
+          })
+          if (opts?.signal?.aborted) return cacheHit ?? []
+          const want = new Set(categories)
+          places = broad.filter((p) => want.has(p.category))
+          if (!places.length) {
+            logClientInfo(
+              'explore',
+              'Google unrestricted had no matching categories — falling back to OSM',
+            )
+            throw new Error('google-category-empty')
+          }
+        }
+
+        if (!places.length) {
+          logClientInfo('explore', 'Google Nearby returned 0 — falling back to OSM')
+          throw new Error('google-empty')
+        }
+
         const withPhotos = attachGoogleListPhotos(places, gKey)
         const fresh = withDistances(withPhotos)
         void setCached(key, fresh)
         logClientInfo('explore', `Google Nearby ok — ${fresh.length} places`)
         return fresh
       } catch (err) {
-        logClientError('explore-google', err)
+        if (opts?.signal?.aborted) return cacheHit ?? []
+        const msg = err instanceof Error ? err.message : ''
+        if (msg !== 'google-category-empty' && msg !== 'google-empty') {
+          logClientError('explore-google', err)
+        }
         logClientInfo('explore', 'Google Nearby failed — falling back to OSM')
         // fall through to Overpass
       }
@@ -647,7 +697,7 @@ export async function fetchNearbyExplore(
     if (opts?.signal?.aborted) return cacheHit ?? enriched
     const fresh = withDistances(enriched)
     // Always store OSM under the osm key (never poison the google cache after fallback).
-    const osmKey = cacheKey(anchor.lat, anchor.lon, radiusM, 'osm')
+    const osmKey = cacheKey(anchor.lat, anchor.lon, radiusM, 'osm', categories, 'DISTANCE')
     void setCached(osmKey, fresh)
     logClientInfo('explore', `OSM ok — ${fresh.length} places`)
     return fresh
@@ -701,6 +751,23 @@ export function exploreCategoryLabel(cat: ExploreCategory): string {
       return 'Nature'
     default:
       return 'Other'
+  }
+}
+
+export function exploreCategoryEmoji(cat: ExploreCategory): string {
+  switch (cat) {
+    case 'sights':
+      return '🏛️'
+    case 'food':
+      return '🍽️'
+    case 'drink':
+      return '🍷'
+    case 'hotel':
+      return '🛏️'
+    case 'nature':
+      return '🌿'
+    default:
+      return '📍'
   }
 }
 

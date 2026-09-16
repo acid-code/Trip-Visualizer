@@ -67,4 +67,9 @@ describe('MOBILE_SHEET_HEIGHT', () => {
   it('keeps normal Steps strip modest', () => {
     expect(MOBILE_SHEET_HEIGHT.steps).toMatch(/38vh/)
   })
+
+  it('keeps AI review Steps short so Save/Discard stay clear', () => {
+    expect(MOBILE_SHEET_HEIGHT.aiReviewSteps).toMatch(/30vh/)
+    expect(MOBILE_SHEET_HEIGHT.aiReviewSteps).toMatch(/13rem/)
+  })
 })

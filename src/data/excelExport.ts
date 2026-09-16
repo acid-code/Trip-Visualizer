@@ -654,6 +654,36 @@ function buildCashSheet(wb: ExcelJS.Workbook, trip: TripRecord, items: TripItem[
   }
 }
 
+function buildPlanSheet(wb: ExcelJS.Workbook, trip: TripRecord) {
+  const sheet = wb.addWorksheet('Plan', {
+    views: [{ state: 'frozen', ySplit: 1 }],
+  })
+  sheet.getCell('A1').value = 'Section'
+  sheet.getCell('B1').value = 'Name'
+  sheet.getCell('C1').value = 'City'
+  sheet.getCell('D1').value = 'Day'
+  sheet.getCell('E1').value = 'Notes'
+  sheet.getCell('F1').value = 'Lat'
+  sheet.getCell('G1').value = 'Lon'
+  styleHeaderRow(sheet.getRow(1), 7)
+  const sections = new Map(trip.planSections.map((s) => [s.id, s.title]))
+  let r = 2
+  for (const p of trip.planPlaces) {
+    sheet.getCell(r, 1).value = sections.get(p.sectionId) || p.sectionId
+    sheet.getCell(r, 2).value = p.name
+    sheet.getCell(r, 3).value = p.city
+    sheet.getCell(r, 4).value = p.scheduledDay || ''
+    sheet.getCell(r, 5).value = p.notes
+    sheet.getCell(r, 6).value = p.lat
+    sheet.getCell(r, 7).value = p.lon
+    r += 1
+  }
+  if (r === 2) {
+    sheet.getCell(2, 1).value = '(no plan ideas yet)'
+  }
+  setColWidths(sheet, [14, 28, 14, 12, 32, 10, 10])
+}
+
 export function buildTripWorkbook(trip: TripRecord): ExcelJS.Workbook {
   const wb = new ExcelJS.Workbook()
   wb.creator = 'Trip Tracker'
@@ -664,6 +694,7 @@ export function buildTripWorkbook(trip: TripRecord): ExcelJS.Workbook {
   buildTripSheet(wb, trip)
   buildStepsSheet(wb, trip, items)
   buildHotelsSheet(wb, trip, items)
+  buildPlanSheet(wb, trip)
   buildCashSheet(wb, trip, items)
 
   return wb
@@ -710,6 +741,8 @@ export function tripToBlankTemplate(): ExcelJS.Workbook {
       travelers: '',
       notes: 'Fill Steps + Hotels. Cash is filled automatically on export.',
     },
+    planSections: [],
+    planPlaces: [],
     items: [
       {
         id: 'F01',

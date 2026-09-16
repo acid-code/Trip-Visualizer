@@ -397,6 +397,8 @@ export default defineConfig(({ mode }) => {
   },
   optimizeDeps: {
     include: ['cesium', 'mersenne-twister'],
+    // MapLibre v6 worker fails Vite dep pre-bundle (missing maplibre-gl-worker.mjs).
+    exclude: ['maplibre-gl'],
   },
   build: {
     chunkSizeWarningLimit: 7000,

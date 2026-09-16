@@ -330,7 +330,7 @@ export function AiCoachSheet({
 
   return (
     <div
-      className={`relative flex h-full min-h-0 flex-col bg-gradient-to-b from-[#f6f0ff] via-[#fffaf3] to-[#fff7ed] ${
+      className={`relative flex h-full min-h-0 flex-col bg-gradient-to-b from-[#12182a] via-[#0e1522] to-[#0a1018] ${
         phone ? '' : ''
       }`}
     >

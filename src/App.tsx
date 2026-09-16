@@ -38,8 +38,9 @@ import {
   type DriveFileInfo,
 } from './data/googleDrive'
 import {
-  enrichTripItems,
+  enrichNeedyTripItems,
   extractCoordsFromText,
+  itemNeedsEnrich,
   locationQueryFromInput,
   lookupPlace,
   pinItemOnMap,
@@ -78,7 +79,17 @@ import {
   type AiCoachSessionRestore,
 } from './ui/AiCoachSheet'
 import { AiReviewChrome } from './ui/AiReviewChrome'
-import { MOBILE_SHEET_HEIGHT } from './ui/scrollGesture'
+import { SegmentedControl } from './ui/primitives'
+import { PlanBoard, applyLocalPlanAi } from './ui/PlanBoard'
+import { MapLayersControl } from './ui/MapLayersControl'
+import { JOURNEY_TONGUES, JourneyBookDock } from './ui/JourneyBookDock'
+import { ensurePlanScaffold } from './data/planBoard'
+import {
+  applyColorMode,
+  DEFAULT_COLOR_MODE,
+  isColorMode,
+  type ColorMode,
+} from './data/theme'
 import { formatDayChipLabel } from './data/aiCoach'
 import {
   applyCoachPatch,
@@ -97,12 +108,19 @@ import {
 import { hydrateGooglePlacePhoto } from './data/placesGoogle'
 import {
   FEATURE_TIPS,
+  PLAN_START_COACH_ID,
   parseSeenTipIds,
   serializeSeenTipIds,
   unseenFeatureTips,
   type FeatureTip,
 } from './data/featureGuide'
-import { DEFAULT_MAP_STACK, type MapStack } from './globe/viewer'
+import {
+  DEFAULT_MAP_LOOK,
+  DEFAULT_MAP_STACK,
+  resolveMapStack,
+  type MapLook,
+  type MapStack,
+} from './globe/viewer'
 import { firstOpenableStep } from './globe/viewer'
 import { EXAMPLE_TRIP_ID, exampleItems, exampleMeta } from './data/examples/france-south-loop'
 import { ensureDayStartBases, deleteStepAndPrune, isPlaceholderBase, itemTouchesDay, applyTripMetaRange, countTripDays, widenMetaToItems } from './data/dayBases'
@@ -139,6 +157,7 @@ import {
 } from './ui/TripMetaDialog'
 import { TripSwitcher } from './ui/TripSwitcher'
 import { TripStartCoach } from './ui/TripStartCoach'
+import { PlanStartCoach } from './ui/PlanStartCoach'
 import type { RangeReconcileMode } from './data/dayBases'
 
 type NavTab = 'timeline' | 'charts' | 'settings'
@@ -179,12 +198,19 @@ export default function App() {
   const [dayFilter, setDayFilter] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
   const [mapStack, setMapStack] = useState<MapStack>(DEFAULT_MAP_STACK)
+  const [mapLook, setMapLook] = useState<MapLook>(DEFAULT_MAP_LOOK)
+  const [colorMode, setColorMode] = useState<ColorMode>(DEFAULT_COLOR_MODE)
+  const [appMode, setAppMode] = useState<'journey' | 'plan'>('journey')
   const [googleKey, setGoogleKey] = useState('')
   const [ionToken, setIonToken] = useState('')
   /** Data-panel override only — deploy key stays on the server. */
   const effectiveGoogleKey = resolveGoogleMapsApiKey(googleKey)
   const [serverPlacesConfigured, setServerPlacesConfigured] = useState(false)
   const placesEnabled = Boolean(effectiveGoogleKey) || serverPlacesConfigured
+  const effectiveMapStack = useMemo(
+    () => resolveMapStack(mapLook, mapStack),
+    [mapLook, mapStack],
+  )
   const [walkApp, setWalkApp] = useState<WalkAppPref>('maps')
   const [status, setStatus] = useState('')
   const [overviewToken, setOverviewToken] = useState(0)
@@ -247,7 +273,6 @@ export default function App() {
   const [aiRestore, setAiRestore] = useState<AiCoachSessionRestore | null>(null)
   const [aiReview, setAiReview] = useState<AiReviewState | null>(null)
   const [aiReviewBusy, setAiReviewBusy] = useState(false)
-  const [lastAiDay, setLastAiDay] = useState<string | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
   const [guideTips, setGuideTips] = useState<FeatureTip[]>([])
   const [seenTipIds, setSeenTipIds] = useState<Set<string>>(() => new Set())
@@ -255,10 +280,15 @@ export default function App() {
     null,
   )
   const [startCoachOpen, setStartCoachOpen] = useState(false)
+  const [planStartCoachOpen, setPlanStartCoachOpen] = useState(false)
   const guideAutoShownRef = useRef(false)
+  const planCoachShownRef = useRef(false)
   /** When true, keep the example trip alongside personal trips (user opened it explicitly). */
   const keepExampleRef = useRef(false)
   const routesForTripRef = useRef<string | null>(null)
+  const routesBuildingRef = useRef(false)
+  const enrichBusyRef = useRef(false)
+  const enrichAttemptedRef = useRef<Set<string>>(new Set())
   const tempPinGenRef = useRef(0)
   const exploreAbortRef = useRef<AbortController | null>(null)
 
@@ -283,6 +313,29 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     let all = await listTrips()
+    // Fresh install / cleared storage: seed a same-day empty trip so Plan/Journey
+    // can start without requiring a full itinerary first.
+    if (all.length === 0) {
+      const trip = await createBlankTrip()
+      const withBases = applyTripMetaRange(
+        trip.meta,
+        trip.items,
+        {
+          name: trip.meta.name,
+          startDate: trip.meta.startDate,
+          endDate: trip.meta.endDate,
+        },
+        'keep-outside',
+      )
+      await saveTrip(
+        ensurePlanScaffold({
+          ...trip,
+          meta: withBases.meta,
+          items: withBases.items,
+        }),
+      )
+      all = await listTrips()
+    }
     const hasPersonal = all.some((t) => !t.isExample && t.id !== EXAMPLE_TRIP_ID)
     if (hasPersonal && !keepExampleRef.current) {
       const hadExample = all.some((t) => t.isExample || t.id === EXAMPLE_TRIP_ID)
@@ -319,12 +372,27 @@ export default function App() {
           ? savedStack
           : DEFAULT_MAP_STACK,
       )
+      const savedLook = (await getSetting('mapLook')) as MapLook | undefined
+      setMapLook(savedLook === 'modern' ? 'modern' : DEFAULT_MAP_LOOK)
+      const savedColor = await getSetting('colorMode')
+      const mode = isColorMode(savedColor) ? savedColor : DEFAULT_COLOR_MODE
+      setColorMode(mode)
+      applyColorMode(mode)
+      const savedMode = await getSetting('appMode')
+      const bootMode = savedMode === 'plan' ? 'plan' : 'journey'
+      setAppMode(bootMode)
       const walkPref = await getSetting('walkApp')
       setWalkApp(isWalkAppPref(walkPref) ? walkPref : 'maps')
       const seen = parseSeenTipIds(await getSetting('featureGuideSeen'))
       setSeenTipIds(seen)
       const unseen = unseenFeatureTips(seen)
-      if (unseen.length && !guideAutoShownRef.current) {
+      const needsPlanCoach = bootMode === 'plan' && !seen.has(PLAN_START_COACH_ID)
+      if (needsPlanCoach && !planCoachShownRef.current) {
+        // Prefer the Plan arrow coach when landing in Plan; skip modal tips this boot.
+        planCoachShownRef.current = true
+        guideAutoShownRef.current = true
+        window.setTimeout(() => setPlanStartCoachOpen(true), 420)
+      } else if (unseen.length && !guideAutoShownRef.current) {
         guideAutoShownRef.current = true
         setGuideTips(unseen)
         setGuideOpen(true)
@@ -348,7 +416,7 @@ export default function App() {
           'maps-status',
           ok
             ? 'Server GOOGLE_MAPS_API_KEY is configured — Explore will use Google Places'
-            : 'No server GOOGLE_MAPS_API_KEY — Explore uses OSM unless you paste a key in Data',
+            : 'No server GOOGLE_MAPS_API_KEY — Explore uses OSM unless you paste a key in Settings',
         )
       } catch (err) {
         setServerPlacesConfigured(false)
@@ -392,9 +460,10 @@ export default function App() {
   }, [activeId])
 
   async function persist(next: TripRecord) {
-    const meta = widenMetaToItems(next.meta, next.items)
-    const items = ensureDayStartBases(meta, next.items)
-    await saveTrip({ ...next, meta, items })
+    const withPlan = ensurePlanScaffold(next)
+    const meta = widenMetaToItems(withPlan.meta, withPlan.items)
+    const items = ensureDayStartBases(meta, withPlan.items)
+    await saveTrip({ ...withPlan, meta, items })
     setTrips(await listTrips())
   }
 
@@ -569,6 +638,8 @@ export default function App() {
         id: EXAMPLE_TRIP_ID,
         meta: exampleMeta,
         items: exampleItems,
+        planSections: [],
+        planPlaces: [],
         isExample: true,
         createdAt: nowIso(),
         updatedAt: nowIso(),
@@ -670,28 +741,48 @@ export default function App() {
     return `${n} day${n === 1 ? '' : 's'} ready`
   }
 
+  function routesFingerprint(trip: TripRecord): string {
+    return trip.items
+      .map(
+        (i) =>
+          `${i.id}|${i.date}|${i.type}|${i.lat ?? ''}|${i.lon ?? ''}|${i.latTo ?? ''}|${i.lonTo ?? ''}`,
+      )
+      .join(';')
+  }
+
   async function buildRoutes(trip: TripRecord) {
+    const fp = routesFingerprint(trip)
+    if (routesBuildingRef.current) return
+    if (routesForTripRef.current === fp) return
+    routesBuildingRef.current = true
     setRoutesStatus('Drawing drive paths…')
-    const withDrives = await hydrateDriveRoutes(trip.items, (done, total) => {
-      setRoutesStatus(`Drive paths ${done}/${total}`)
-    })
-    setRoutesStatus('Linking same-day walks & returns to hotel…')
-    const walks = await buildWalkingConnectors(withDrives, (done, total) => {
-      setRoutesStatus(`Walk paths ${done}/${total}`)
-    })
-    setConnectors(walks)
-    const driveChanged = withDrives.some((item) => {
-      const prev = trip.items.find((p) => p.id === item.id)
-      return (item.routeCoords?.length ?? 0) !== (prev?.routeCoords?.length ?? 0)
-    })
-    // Always write hydrated geometry back into trip state when it changed so
-    // the globe’s item.routeCoords stay in sync with “Routes ready”.
-    if (driveChanged) {
-      await persist({ ...trip, items: withDrives })
+    try {
+      const withDrives = await hydrateDriveRoutes(trip.items, (done, total) => {
+        setRoutesStatus(`Drive paths ${done}/${total}`)
+      })
+      setRoutesStatus('Linking same-day walks & returns to hotel…')
+      const walks = await buildWalkingConnectors(withDrives, (done, total) => {
+        setRoutesStatus(`Walk paths ${done}/${total}`)
+      })
+      setConnectors(walks)
+      const driveChanged = withDrives.some((item) => {
+        const prev = trip.items.find((p) => p.id === item.id)
+        return (item.routeCoords?.length ?? 0) !== (prev?.routeCoords?.length ?? 0)
+      })
+      // Always write hydrated geometry back into trip state when it changed so
+      // the globe’s item.routeCoords stay in sync with “Routes ready”.
+      if (driveChanged) {
+        await persist({ ...trip, items: withDrives })
+      }
+      routesForTripRef.current = routesFingerprint({
+        ...trip,
+        items: driveChanged ? withDrives : trip.items,
+      })
+      setStatus(`Routes ready · ${walks.length} walk links`)
+    } finally {
+      routesBuildingRef.current = false
+      setRoutesStatus(null)
     }
-    routesForTripRef.current = trip.id
-    setRoutesStatus(null)
-    setStatus(`Routes ready · ${walks.length} walk links`)
   }
 
   useEffect(() => {
@@ -701,23 +792,51 @@ export default function App() {
       void persist({ ...active, items })
       return
     }
-    if (routesForTripRef.current === active.id) return
     void buildRoutes(active)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.id, active?.items.length])
+  }, [
+    active?.id,
+    active
+      ? routesFingerprint(active)
+      : '',
+  ])
 
-  async function onEnrich() {
-    if (!active) return
-    setEnrichProgress('0%')
-    const items = await enrichTripItems(active.items, (done, total) => {
-      setEnrichProgress(`${Math.round((done / total) * 100)}%`)
-    })
-    const next = { ...active, items }
-    await persist(next)
-    setEnrichProgress(null)
-    setStatus('Enrichment complete — building routes…')
-    await buildRoutes(next)
-  }
+  useEffect(() => {
+    if (!active || enrichBusyRef.current) return
+    const needy = active.items.filter(itemNeedsEnrich)
+    if (!needy.length) return
+    const keys = needy.map(
+      (i) => `${i.id}|${i.place}|${i.from}|${i.to}|${i.title}`,
+    )
+    if (keys.every((k) => enrichAttemptedRef.current.has(k))) return
+    enrichBusyRef.current = true
+    for (const k of keys) enrichAttemptedRef.current.add(k)
+    void (async () => {
+      try {
+        setEnrichProgress('0%')
+        const items = await enrichNeedyTripItems(active.items, (done, total) => {
+          setEnrichProgress(`${Math.round((done / total) * 100)}%`)
+        })
+        const next = { ...active, items }
+        await persist(next)
+        setStatus('Map pins updated — building routes…')
+        routesForTripRef.current = null
+        await buildRoutes(next)
+      } finally {
+        enrichBusyRef.current = false
+        setEnrichProgress(null)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    active?.id,
+    active?.items
+      .map(
+        (i) =>
+          `${i.id}:${i.place}:${i.from}:${i.to}:${i.lat ?? ''}:${i.lon ?? ''}:${i.latTo ?? ''}:${i.lonTo ?? ''}`,
+      )
+      .join('|') ?? '',
+  ])
 
   function openInsert(afterId: string | null = null, beforeId: string | null = null) {
     const after = afterId ? active?.items.find((i) => i.id === afterId) : null
@@ -1066,7 +1185,7 @@ export default function App() {
     )
     const d = new Date(base + 'T12:00:00')
     if (Number.isNaN(d.getTime())) {
-      setStatus('Could not add day — fix the trip start/end dates in Data')
+      setStatus('Could not add day — fix the trip start/end dates in Settings')
       return
     }
     d.setDate(d.getDate() + 1)
@@ -1446,20 +1565,6 @@ export default function App() {
     })()
   }
 
-  function closeCoveringSheets() {
-    if (exploreOpen) closeExplore()
-    if (aiOpen && !aiReview) {
-      setAiOpen(false)
-      setAiRestore(null)
-    }
-    if (lowerMode !== 'none') {
-      setStepDraft(null)
-      setAddContext(null)
-      setLowerMode('none')
-      setDetailExpanded(false)
-    }
-  }
-
   function openAiCoach() {
     if (aiReview) return
     if (exploreOpen) closeExplore()
@@ -1473,12 +1578,11 @@ export default function App() {
   }
 
   function closeAiCoach() {
-    const lastDay = lastAiDay || aiRestore?.day || dayFilter
     setAiOpen(false)
     setAiRestore(null)
     setNavTab('timeline')
     setPanelOpen(true)
-    if (lastDay) setDayFilter(lastDay)
+    // Leave Steps day filter alone — AI day picks must not reset it
   }
 
   function beginAiImplement(args: {
@@ -1520,7 +1624,6 @@ export default function App() {
       error: null,
     })
     setDayFilter(args.day)
-    setLastAiDay(args.day)
     setTypeFilter(null)
     setNavTab('timeline')
     setPanelOpen(true)
@@ -1652,8 +1755,7 @@ export default function App() {
     if (active) void buildRoutes(active)
   }
 
-  /** Bottom/side tongues: a covering sheet (detail, insert, explore) always
-   *  closes first so the tapped tab’s panel is visible — same for every button. */
+  /** Bottom binders: covering sheets close first; same binder again tucks the panel. */
   function onTongue(id: NavTab | 'insert' | 'ai') {
     // AI review lock: only allow reopening Steps (other tongues stay disabled)
     if (aiReview) {
@@ -1664,10 +1766,17 @@ export default function App() {
       return
     }
 
+    // Switch binders freely — close AI/explore/detail first, then open the target
     if (id === 'ai') {
       if (aiOpen) {
         closeAiCoach()
         return
+      }
+      if (exploreOpen) closeExplore()
+      if (lowerMode !== 'none') {
+        setLowerMode('none')
+        setDetailExpanded(false)
+        setAddContext(null)
       }
       openAiCoach()
       return
@@ -1695,19 +1804,26 @@ export default function App() {
       return
     }
 
-    const covering = lowerMode !== 'none' || exploreOpen || aiOpen
-    closeCoveringSheets()
-    if (covering) {
-      setNavTab(id)
-      setPanelOpen(true)
-      return
+    // Steps / Stats / Settings — always switch on binder press
+    const wasCovering = aiOpen || exploreOpen || lowerMode !== 'none'
+    if (aiOpen) {
+      setAiOpen(false)
+      setAiRestore(null)
+    }
+    if (exploreOpen) closeExplore()
+    if (lowerMode !== 'none') {
+      setLowerMode('none')
+      setDetailExpanded(false)
+      setAddContext(null)
     }
 
-    if (panelOpen && navTab === id) {
+    // Same binder again (and nothing covering) → close
+    if (panelOpen && navTab === id && !wasCovering) {
       setPanelOpen(false)
       return
     }
 
+    // Different binder, or revealing Steps under AI → open that panel
     setNavTab(id)
     setPanelOpen(true)
   }
@@ -1795,15 +1911,19 @@ export default function App() {
   const insertActive = lowerMode === 'insert'
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[#0c1520] text-slate-100">
+    <div className="relative h-full w-full overflow-hidden bg-[var(--bg)] text-[var(--ink)]">
       {active ? (
-        <div className="absolute inset-0" data-coach="globe-map">
+        <div
+          className={`absolute inset-0 ${appMode === 'plan' ? 'invisible pointer-events-none' : ''}`}
+          data-coach="globe-map"
+          aria-hidden={appMode === 'plan'}
+        >
         <GlobeView
           items={mapItems}
           meta={displayTrip?.meta ?? active.meta}
           connectors={visibleConnectors}
           selectedId={selectedId}
-          mapStack={mapStack}
+          mapStack={effectiveMapStack}
           googleKey={effectiveGoogleKey || undefined}
           ionToken={ionToken || undefined}
           overviewToken={overviewToken}
@@ -1812,6 +1932,7 @@ export default function App() {
           tripFocusId={activeId}
           openingOriginOnly={isPhone}
           phoneFraming={isPhone}
+          renderActive={appMode === 'journey'}
           tempPin={tempPin}
           nearbyLinks={nearbyLinks}
           tempFlyToken={tempFlyToken}
@@ -1839,11 +1960,19 @@ export default function App() {
           onSelect={selectFromMap}
           onMapPress={() => {
             if (aiReview) return
-            // Keep Explore / AI open on empty-map short press; close via tongues or X
-            if (exploreOpen || aiOpen) return
+            // Tap map → tuck binders / AI / Explore
+            if (exploreOpen) closeExplore()
+            if (aiOpen) {
+              setAiOpen(false)
+              setAiRestore(null)
+            }
+            if (lowerMode !== 'none') {
+              setLowerMode('none')
+              setDetailExpanded(false)
+              setAddContext(null)
+            }
             setPanelOpen(false)
             setRouteWalk(null)
-            // Deselect step highlight (pin title / enlarged point)
             highlightStep(null)
           }}
           onMapDoubleTap={() => {
@@ -1860,124 +1989,186 @@ export default function App() {
         />
         </div>
       ) : (
-        <div className="flex h-full items-center justify-center text-slate-400">Loading…</div>
+        <div className="flex h-full items-center justify-center text-[var(--ink-muted)]">Loading…</div>
       )}
 
-      {/* Map search — left of globe; long-press drops a pin under your finger */}
-      <div
-        className={`pointer-events-none absolute z-30 ${
-          isPhone
-            ? 'left-3 top-[max(0.75rem,env(safe-area-inset-top))]'
-            : panelOpen
-              ? 'left-[min(23.5rem,90vw)] top-[max(0.75rem,env(safe-area-inset-top))]'
-              : 'left-14 top-[max(0.75rem,env(safe-area-inset-top))]'
-        }`}
-      >
-        <div className="pointer-events-auto" data-coach="map-search">
-          <MapSearchBar
-            busy={searchBusy}
-            onSearch={(q) => void searchForPlace(q)}
-            onClear={() => {
-              /* keep temp pin; only collapses the bar */
+      {appMode === 'plan' && active ? (
+        <div className="absolute inset-0 z-[28] flex flex-col bg-[var(--bg)]">
+          <PlanBoard
+            trip={ensurePlanScaffold(active)}
+            placesEnabled={placesEnabled}
+            googleApiKey={effectiveGoogleKey || undefined}
+            onChange={(next) => void persist(next)}
+            onStatus={setStatus}
+            onAskAi={(prompt) => {
+              const { trip: next, message } = applyLocalPlanAi(
+                ensurePlanScaffold(active),
+                prompt,
+              )
+              void persist(next)
+              setStatus(message)
             }}
           />
         </div>
-        {tempPin ? (
-          <p className="pointer-events-none mt-1 max-w-[14rem] rounded-lg bg-black/45 px-2 py-1 text-[10px] text-orange-100 backdrop-blur">
-            Temp pin · double-tap map to clear · <span className="font-bold">+</span> to save
-            {nearbyLinks.length
-              ? ` · ${nearbyLinks.length} nearby`
-              : ''}
-          </p>
-        ) : (
-          <p className="pointer-events-none mt-1 max-w-[12rem] text-[10px] text-white/55 drop-shadow">
-            Long-press the map to drop a pin
-          </p>
-        )}
-      </div>
+      ) : null}
 
-      {/* Map-side header — desktop clears left panel; phone: right-only so search stays tappable */}
+      {/* Map search — portaled above Cesium; pin hint under the search control */}
+      {appMode !== 'plan' ? (
+        <MapSearchBar
+          busy={searchBusy}
+          onSearch={(q) => void searchForPlace(q)}
+          onClear={() => {
+            /* keep temp pin; only collapses the bar */
+          }}
+          hintTone={tempPin ? 'pin' : 'quiet'}
+          hint={
+            tempPin ? (
+              <>
+                Pin set · ★ explore · <span className="font-bold">+</span> save
+                {nearbyLinks.length ? ` · ${nearbyLinks.length} near` : ''}
+              </>
+            ) : (
+              <>Long-press map to pin</>
+            )
+          }
+        />
+      ) : null}
+
+      {/* Map-side header — hit targets only on controls (not the whole top band) */}
       <header
-        className={`pointer-events-none absolute top-0 z-20 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] ${
+        className={`pointer-events-none absolute top-0 z-40 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] ${
           isPhone
-            ? 'right-0 max-w-[min(18rem,70vw)]'
+            ? 'inset-x-0'
             : 'inset-x-0 pl-[min(24rem,90vw)]'
         }`}
       >
-        <div className="pointer-events-auto ml-auto flex max-w-md flex-col items-end gap-1">
-          <div className="text-right">
-            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-orange-300/90">
-              Trip journal
-            </div>
-            <button
-              type="button"
-              className="group max-w-full text-right disabled:cursor-default"
-              onClick={() => openTripEdit()}
-              disabled={!active}
-              title="Tap to edit trip name and start/end dates"
-              aria-label={
-                active
-                  ? `Edit trip: ${active.meta.name}. Tap to change name and dates.`
-                  : 'No active trip'
-              }
-            >
-              <h1 className="brand-mark truncate text-xl text-white drop-shadow decoration-white/40 underline-offset-4 group-hover:underline group-disabled:no-underline">
-                {active?.meta.name ?? '…'}
-              </h1>
-              <p className="text-xs text-white/70 drop-shadow">
-                {active?.meta.startDate} → {active?.meta.endDate}
-                {active?.isExample ? ' · example' : ''}
-              </p>
-              {active ? (
-                <p className="text-[10px] text-white/45 group-hover:text-orange-200/90">
-                  Tap title to edit name &amp; dates
+        <div className="ml-auto flex w-fit max-w-[min(22rem,72vw)] flex-col items-end gap-1">
+          <div className="pointer-events-auto">
+            <SegmentedControl
+              ariaLabel="App mode"
+              value={appMode}
+              onChange={(mode) => {
+                setAppMode(mode)
+                void setSetting('appMode', mode)
+                if (mode === 'plan') {
+                  clearTempPin()
+                  setRouteWalk(null)
+                  setExploreOpen(false)
+                  setAiOpen(false)
+                  setLowerMode('none')
+                  if (active) void persist(ensurePlanScaffold(active))
+                  if (!seenTipIds.has(PLAN_START_COACH_ID) && !planCoachShownRef.current) {
+                    planCoachShownRef.current = true
+                    window.setTimeout(() => setPlanStartCoachOpen(true), 320)
+                  }
+                }
+              }}
+              options={[
+                { id: 'journey', label: 'Journey' },
+                { id: 'plan', label: 'Plan' },
+              ]}
+            />
+          </div>
+          {appMode === 'journey' ? (
+            <>
+              <button
+                type="button"
+                className="pointer-events-auto group max-w-full text-right disabled:cursor-default"
+                onClick={() => openTripEdit()}
+                disabled={!active}
+                title="Tap to edit trip name and start/end dates"
+                aria-label={
+                  active
+                    ? `Edit trip: ${active.meta.name}. Tap to change name and dates.`
+                    : 'No active trip'
+                }
+              >
+                <h1 className="brand-mark truncate text-sm font-semibold leading-tight text-white drop-shadow decoration-white/40 underline-offset-2 group-hover:underline group-disabled:no-underline sm:text-base">
+                  {active?.meta.name ?? '…'}
+                </h1>
+                <p className="truncate text-[10px] leading-tight text-white/70 drop-shadow">
+                  {active?.meta.startDate?.slice(5)} → {active?.meta.endDate?.slice(5)}
+                  {active?.isExample ? ' · ex' : ''}
+                </p>
+              </button>
+              <div className="pointer-events-auto flex max-w-full flex-nowrap items-center justify-end gap-1">
+                <TripSwitcher
+                  trips={trips}
+                  activeId={activeId}
+                  onSelect={(id) => setActiveId(id)}
+                  onDelete={(id) => onDeleteTrip(id)}
+                  onCreate={() => void onBlank()}
+                  onPrepareDelete={() => {
+                    setPanelOpen(false)
+                    setExploreOpen(false)
+                    setExploreDetail(null)
+                    setAiOpen(false)
+                    setAiRestore(null)
+                    setLowerMode('none')
+                    setDetailExpanded(false)
+                  }}
+                />
+                <button
+                  type="button"
+                  className="ui-text-btn"
+                  onClick={() => {
+                    if (!aiReview) setDayFilter(null)
+                    setOverviewToken((n) => n + 1)
+                  }}
+                >
+                  Overview
+                </button>
+                <button
+                  type="button"
+                  className="ui-text-btn bg-orange-500/90 text-white border-orange-400/40"
+                  title="Feature tips"
+                  onClick={() => openFeatureGuide({ all: true })}
+                >
+                  Tips
+                </button>
+              </div>
+              {/* Keep pin/status noise off the top chrome so Explore stays tappable */}
+              {!tempPin && status ? (
+                <p className="pointer-events-none max-w-full truncate text-right text-[10px] text-emerald-300">
+                  {status}
                 </p>
               ) : null}
-            </button>
-          </div>
-          <div className="flex max-w-full flex-nowrap items-center justify-end gap-1">
-            <TripSwitcher
-              trips={trips}
-              activeId={activeId}
-              onSelect={(id) => setActiveId(id)}
-              onDelete={(id) => onDeleteTrip(id)}
-              onCreate={() => void onBlank()}
-              onPrepareDelete={() => {
-                setPanelOpen(false)
-                setExploreOpen(false)
-                setExploreDetail(null)
-                setAiOpen(false)
-                setAiRestore(null)
-                setLowerMode('none')
-                setDetailExpanded(false)
-              }}
-            />
-            <button
-              className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-xs text-white backdrop-blur hover:bg-white/25"
-              onClick={() => {
-                // During AI draft lock, keep the coached day scoped on the map.
-                if (!aiReview) setDayFilter(null)
-                setOverviewToken((n) => n + 1)
-              }}
-            >
-              Overview
-            </button>
-            <button
-              type="button"
-              className="shrink-0 rounded-full bg-orange-500/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-orange-400"
-              title="Feature tips"
-              onClick={() => openFeatureGuide({ all: true })}
-            >
-              Tips
-            </button>
-          </div>
-          {status ? <p className="text-right text-xs text-emerald-300">{status}</p> : null}
-          {enrichProgress ? (
-            <p className="text-right text-xs text-amber-200">Enriching… {enrichProgress}</p>
-          ) : null}
-          {routesStatus ? (
-            <p className="text-right text-xs text-sky-200">{routesStatus}</p>
-          ) : null}
+              {enrichProgress ? (
+                <p className="pointer-events-none text-right text-[10px] text-amber-200">
+                  Enriching… {enrichProgress}
+                </p>
+              ) : null}
+              {routesStatus ? (
+                <p className="pointer-events-none text-right text-[10px] text-sky-200">
+                  {routesStatus}
+                </p>
+              ) : null}
+              <div className="pointer-events-auto mt-0.5 flex justify-end">
+                <MapLayersControl
+                  panelPlacement="below"
+                  mapLook={mapLook}
+                  mapStack={mapStack}
+                  googleKeyConfigured={placesEnabled}
+                  onLookChange={(look) => {
+                    setMapLook(look)
+                    void setSetting('mapLook', look)
+                  }}
+                  onStackChange={(id) => {
+                    setMapStack(id)
+                    void setSetting('mapStack', id)
+                  }}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              {status ? (
+                <p className="pointer-events-none text-right text-[10px] text-emerald-300">
+                  {status}
+                </p>
+              ) : null}
+            </>
+          )}
         </div>
       </header>
 
@@ -1991,32 +2182,79 @@ export default function App() {
         />
       ) : null}
 
-      {/* Desktop: left sidebar + side book tongues */}
-      {!isPhone ? (
-      <aside
-        className={`side-shell absolute bottom-0 left-0 top-0 z-30 flex pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.5rem,env(safe-area-inset-left))] ${
-          panelOpen || exploreOpen || aiOpen || aiReview ? 'side-shell-open' : 'side-shell-collapsed'
-        } ${exploreOpen || aiOpen ? 'side-shell-explore' : ''}`}
-      >
-        {panelOpen || exploreOpen || aiOpen || aiReview ? (
-          <div className="side-panel relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            {aiOpen && active && !aiReview ? (
+      {/* Journey book dock — divider tongues pull the sheet up from the bottom */}
+      {appMode === 'journey' ? (
+        <JourneyBookDock
+          open={(panelOpen || exploreOpen || aiOpen || !!aiReview) && lowerMode !== 'insert'}
+          wide={!isPhone}
+          pagesClassName={
+            aiOpen
+              ? 'book-pages-ai'
+              : exploreOpen
+                ? exploreDetail
+                  ? 'book-pages-explore-detail'
+                  : 'book-pages-explore'
+                : aiReview
+                  ? 'book-pages-ai-review'
+                  : navTab === 'timeline'
+                    ? 'book-pages-steps'
+                    : navTab === 'settings' || navTab === 'charts'
+                      ? 'book-pages-tall'
+                      : 'book-pages-steps'
+          }
+          tongues={JOURNEY_TONGUES}
+          isTongueOn={(id) =>
+            id === 'insert'
+              ? insertActive
+              : id === 'ai'
+                ? aiOpen && !aiReview
+                : navTab === id && !insertActive && (panelOpen || !!aiReview) && !aiOpen
+          }
+          isTongueDisabled={(id) => Boolean(aiReview) && id !== 'timeline'}
+          onTongue={(id) => onTongue(id)}
+          tongueTitle={(id) =>
+            id === 'insert'
+              ? tempPin
+                ? 'Save map pin as step'
+                : 'Insert step'
+              : id === 'ai'
+                ? AI_COACH_BETA_TIP
+                : JOURNEY_TONGUES.find((t) => t.id === id)?.label
+          }
+          renderTongueLabel={(id, label) =>
+            id === 'ai' ? <AiSparkIcon className="mx-auto h-4 w-4" /> : label
+          }
+          insertHighlight={Boolean(tempPin)}
+        >
+          {aiOpen && active && !aiReview ? (
+            <div
+              className="min-h-0 flex-1 overflow-hidden"
+              onTouchStart={(e) => e.stopPropagation()}
+              onTouchMove={(e) => e.stopPropagation()}
+            >
               <AiCoachSheet
                 open
+                phone={isPhone}
                 meta={active.meta}
                 trip={active}
                 placesEnabled={placesEnabled}
                 googleApiKey={effectiveGoogleKey || undefined}
                 restore={aiRestore}
                 onClose={closeAiCoach}
-                onDayPicked={(d) => {
-                  setDayFilter(d)
-                  setLastAiDay(d)
+                onDayPicked={() => {
+                  /* AI day is local to the coach — Steps filter stays put */
                 }}
                 onImplement={beginAiImplement}
               />
-            ) : null}
-            {exploreOpen && !aiOpen ? (
+            </div>
+          ) : null}
+
+          {exploreOpen && !aiOpen ? (
+            <div
+              className="min-h-0 flex-1 overflow-hidden"
+              onTouchStart={(e) => e.stopPropagation()}
+              onTouchMove={(e) => e.stopPropagation()}
+            >
               <ExploreSheet
                 open
                 busy={exploreBusy}
@@ -2029,395 +2267,113 @@ export default function App() {
                 onSelect={selectExplorePlace}
                 onCloseDetail={closeExploreDetail}
                 onAddStep={addStepFromExplore}
+                phone={isPhone}
               />
-            ) : null}
-
-            {/* Stay mounted under Explore — avoid display:none so scrollLeft/Top survive */}
-            <div
-              className={
-                exploreOpen || aiOpen
-                  ? 'pointer-events-none invisible absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-hidden'
-                  : 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'
-              }
-              aria-hidden={exploreOpen || aiOpen}
-            >
-            <div className="flex items-center justify-between gap-2 border-b border-stone-200/80 px-3 py-2">
-              <div className="text-xs font-semibold uppercase tracking-wide text-stone-400">
-                {navTab === 'timeline' ? 'Steps' : navTab === 'charts' ? 'Stats' : 'Data'}
-              </div>
-              <button
-                type="button"
-                className="rounded-full px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 disabled:opacity-40"
-                onClick={() => {
-                  if (aiReview) return
-                  setPanelOpen(false)
-                }}
-                disabled={Boolean(aiReview)}
-                title={aiReview ? 'Steps stay open while reviewing AI changes' : 'Collapse panel'}
-              >
-                ‹ Map
-              </button>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-hidden">
-              {navTab === 'timeline' && displayTrip ? (
-                <div className="h-full min-h-0 px-2 pb-2 pt-1" data-coach="trip-steps">
-                  <TimelinePanel
-                    meta={displayTrip.meta}
-                    items={displayTrip.items}
-                    selectedId={selectedId}
-                    dayFilter={dayFilter}
-                    typeFilter={typeFilter}
-                    onSelect={highlightStep}
-                    onOpenDetail={selectFromList}
-                    onDayFilter={setDayFilter}
-                    onTypeFilter={setTypeFilter}
-                    onInsertBetween={(after, before) => openInsert(after, before)}
-                    onAddDay={() => void addDay()}
-                    onDeleteStep={(id) => void deleteStep(id)}
-                    layout="vertical"
-                    detailOpen={lowerMode === 'detail'}
-                    lockMode={Boolean(aiReview)}
-                  />
-                </div>
-              ) : null}
-
-              {navTab === 'charts' && active ? (
-                <div className="h-full min-h-0 px-2 pb-2 pt-1">
-                  <ChartsPanel
-                    meta={active.meta}
-                    items={active.items}
-                    onHomeCurrencyChange={(code) =>
-                      void updateActive((t) => ({
-                        ...t,
-                        meta: { ...t.meta, homeCurrency: normalizeCurrency(code) },
-                      }))
-                    }
-                  />
-                </div>
-              ) : null}
-
-              {navTab === 'settings' ? (
-                <div className="h-full min-h-0 space-y-3 overflow-y-auto overscroll-contain px-3 pb-4 pt-2 text-sm text-stone-800">
-                  <DataPanel
-                    active={active}
-                    mapStack={mapStack}
-                    googleKey={googleKey}
-                    serverPlacesConfigured={serverPlacesConfigured}
-                    ionToken={ionToken}
-                    walkApp={walkApp}
-                    enrichProgress={enrichProgress}
-                    routesStatus={routesStatus}
-                    onOpenExample={() => void onOpenExample()}
-                    onImportFile={(f) => void onImportFile(f)}
-                    onExport={() => void onExport()}
-                    onExportToDrive={() => void onExportToDrive()}
-                    onImportFromDrive={(f) => void onImportFromDrive(f)}
-                    onExportExampleExcel={() => void onExportExampleExcel()}
-                    onEnrich={() => void onEnrich()}
-                    onRebuildRoutes={() => {
-                      if (!active) return
-                      void buildRoutes(active)
-                    }}
-                    onAddDay={() => void addDay()}
-                    onEditTrip={() => openTripEdit()}
-                    onShowTips={() => openFeatureGuide({ all: true })}
-                    onStatus={setStatus}
-                    setMapStack={(id) => {
-                      setMapStack(id)
-                      void setSetting('mapStack', id)
-                    }}
-                    setWalkApp={(pref) => {
-                      setWalkApp(pref)
-                      void setSetting('walkApp', pref)
-                    }}
-                    setGoogleKey={setGoogleKey}
-                    setIonToken={setIonToken}
-                    updateActive={updateActive}
-                  />
-                </div>
-              ) : null}
-            </div>
-            </div>
-          </div>
-        ) : null}
-
-        <nav className="book-tongues" aria-label="Sidebar">
-          {(
-            [
-              { id: 'timeline' as const, label: 'Steps' },
-              { id: 'charts' as const, label: 'Stats' },
-              { id: 'insert' as const, label: '+' },
-              { id: 'ai' as const, label: 'AI' },
-              { id: 'settings' as const, label: 'Data' },
-            ] as const
-          ).map((t) => {
-            const activeTongue =
-              t.id === 'insert'
-                ? insertActive
-                : t.id === 'ai'
-                  ? aiOpen && !aiReview
-                  : navTab === t.id && !insertActive && !aiOpen
-            const disabled = Boolean(aiReview) && t.id !== 'timeline'
-            return (
-              <button
-                key={t.id}
-                type="button"
-                disabled={disabled}
-                className={`book-tongue ${activeTongue ? 'book-tongue-on' : ''} ${
-                  t.id === 'insert' ? 'book-tongue-plus' : ''
-                } ${t.id === 'ai' ? 'book-tongue-ai' : ''} ${
-                  t.id === 'insert' && tempPin ? 'ring-2 ring-orange-400 ring-offset-1' : ''
-                } ${disabled ? 'opacity-40' : ''}`}
-                onClick={() => onTongue(t.id)}
-                title={
-                  t.id === 'insert'
-                    ? tempPin
-                      ? 'Save map pin as step'
-                      : 'Insert step'
-                    : t.id === 'ai'
-                      ? AI_COACH_BETA_TIP
-                      : t.label
-                }
-              >
-                {t.id === 'ai' ? (
-                  <AiSparkIcon className="book-tongue-ai-glyph" />
-                ) : (
-                  t.label
-                )}
-              </button>
-            )
-          })}
-        </nav>
-      </aside>
-      ) : null}
-
-      {/* Phone: map-first — horizontal steps strip + bottom book tongues */}
-      {isPhone ? (
-        <div className="mobile-dock absolute inset-x-0 bottom-0 z-30 flex flex-col pb-[max(0.25rem,env(safe-area-inset-bottom))]">
-          {(panelOpen || exploreOpen || aiOpen || aiReview) && lowerMode !== 'insert' ? (
-            <div
-              className={`mobile-panel relative mx-2 mb-1 flex flex-col overflow-hidden rounded-2xl border border-stone-200/90 shadow-[0_-8px_28px_rgba(15,23,42,0.28)] ${
-                aiOpen
-                  ? MOBILE_SHEET_HEIGHT.aiCoach
-                  : exploreOpen
-                  ? exploreDetail
-                    ? MOBILE_SHEET_HEIGHT.exploreDetail
-                    : MOBILE_SHEET_HEIGHT.explore
-                  : aiReview
-                    ? MOBILE_SHEET_HEIGHT.aiReviewSteps
-                  : navTab === 'timeline'
-                    ? MOBILE_SHEET_HEIGHT.steps
-                    : navTab === 'settings' || navTab === 'charts'
-                      ? MOBILE_SHEET_HEIGHT.tall
-                      : 'max-h-[52vh]'
-              }`}
-            >
-              {aiOpen && active && !aiReview ? (
-                <div
-                  className={`min-h-0 flex-1 ${MOBILE_SHEET_HEIGHT.aiCoach}`}
-                  onTouchStart={(e) => e.stopPropagation()}
-                  onTouchMove={(e) => e.stopPropagation()}
-                >
-                  <AiCoachSheet
-                    open
-                    phone
-                    meta={active.meta}
-                    trip={active}
-                    placesEnabled={placesEnabled}
-                    googleApiKey={effectiveGoogleKey || undefined}
-                    restore={aiRestore}
-                    onClose={closeAiCoach}
-                    onDayPicked={(d) => {
-                      setDayFilter(d)
-                      setLastAiDay(d)
-                    }}
-                    onImplement={beginAiImplement}
-                  />
-                </div>
-              ) : null}
-
-              {exploreOpen && !aiOpen ? (
-                <div
-                  className={
-                    exploreDetail
-                      ? MOBILE_SHEET_HEIGHT.exploreDetail
-                      : MOBILE_SHEET_HEIGHT.explore
-                  }
-                  onTouchStart={(e) => e.stopPropagation()}
-                  onTouchMove={(e) => e.stopPropagation()}
-                >
-                  <ExploreSheet
-                    open
-                    busy={exploreBusy}
-                    error={exploreError}
-                    places={explorePlaces}
-                    selectedId={exploreFocusId}
-                    detail={exploreDetail}
-                    anchor={exploreAnchor}
-                    onClose={closeExplore}
-                    onSelect={selectExplorePlace}
-                    onCloseDetail={closeExploreDetail}
-                    onAddStep={addStepFromExplore}
-                    phone
-                  />
-                </div>
-              ) : null}
-
-              {/* Keep Steps mounted under Explore — visibility:hidden keeps scroll position */}
-              {navTab === 'timeline' && displayTrip ? (
-                <div
-                  className={
-                    exploreOpen || aiOpen
-                      ? 'pointer-events-none invisible absolute inset-x-0 top-0 px-2 pb-2 pt-2'
-                      : 'px-2 pb-2 pt-2'
-                  }
-                  data-coach="trip-steps"
-                  aria-hidden={exploreOpen || aiOpen}
-                >
-                  <TimelinePanel
-                    meta={displayTrip.meta}
-                    items={displayTrip.items}
-                    selectedId={selectedId}
-                    dayFilter={dayFilter}
-                    typeFilter={typeFilter}
-                    onSelect={highlightStep}
-                    onOpenDetail={selectFromList}
-                    onDayFilter={setDayFilter}
-                    onTypeFilter={setTypeFilter}
-                    onInsertBetween={(after, before) => openInsert(after, before)}
-                    onAddDay={() => void addDay()}
-                    onDeleteStep={(id) => void deleteStep(id)}
-                    layout="horizontal"
-                    lockMode={Boolean(aiReview)}
-                  />
-                </div>
-              ) : null}
-
-              {!exploreOpen && !aiOpen && navTab === 'charts' && active ? (
-                <div
-                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] px-2 pb-2 pt-2"
-                  onTouchStart={(e) => e.stopPropagation()}
-                  onTouchMove={(e) => e.stopPropagation()}
-                >
-                  <ChartsPanel
-                    meta={active.meta}
-                    items={active.items}
-                    ownScroll={false}
-                    onHomeCurrencyChange={(code) =>
-                      void updateActive((t) => ({
-                        ...t,
-                        meta: { ...t.meta, homeCurrency: normalizeCurrency(code) },
-                      }))
-                    }
-                  />
-                </div>
-              ) : null}
-
-              {!exploreOpen && !aiOpen && navTab === 'settings' ? (
-                <div
-                  className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch] px-3 pb-3 pt-2 text-sm text-stone-800"
-                  onTouchStart={(e) => e.stopPropagation()}
-                  onTouchMove={(e) => e.stopPropagation()}
-                >
-                  <DataPanel
-                    active={active}
-                    mapStack={mapStack}
-                    googleKey={googleKey}
-                    serverPlacesConfigured={serverPlacesConfigured}
-                    ionToken={ionToken}
-                    walkApp={walkApp}
-                    enrichProgress={enrichProgress}
-                    routesStatus={routesStatus}
-                    onOpenExample={() => void onOpenExample()}
-                    onImportFile={(f) => void onImportFile(f)}
-                    onExport={() => void onExport()}
-                    onExportToDrive={() => void onExportToDrive()}
-                    onImportFromDrive={(f) => void onImportFromDrive(f)}
-                    onExportExampleExcel={() => void onExportExampleExcel()}
-                    onEnrich={() => void onEnrich()}
-                    onRebuildRoutes={() => {
-                      if (!active) return
-                      void buildRoutes(active)
-                    }}
-                    onAddDay={() => void addDay()}
-                    onEditTrip={() => openTripEdit()}
-                    onShowTips={() => openFeatureGuide({ all: true })}
-                    onStatus={setStatus}
-                    setMapStack={(id) => {
-                      setMapStack(id)
-                      void setSetting('mapStack', id)
-                    }}
-                    setWalkApp={(pref) => {
-                      setWalkApp(pref)
-                      void setSetting('walkApp', pref)
-                    }}
-                    setGoogleKey={setGoogleKey}
-                    setIonToken={setIonToken}
-                    updateActive={updateActive}
-                  />
-                </div>
-              ) : null}
             </div>
           ) : null}
 
-          <nav className="book-tongues-bottom mx-2" aria-label="Phone navigation">
-            {(
-              [
-                { id: 'timeline' as const, label: 'Steps' },
-                { id: 'charts' as const, label: 'Stats' },
-                { id: 'insert' as const, label: '+' },
-                { id: 'ai' as const, label: 'AI' },
-                { id: 'settings' as const, label: 'Data' },
-              ] as const
-            ).map((t) => {
-              const activeTongue =
-                t.id === 'insert'
-                  ? insertActive
-                  : t.id === 'ai'
-                    ? aiOpen && !aiReview
-                    : navTab === t.id && !insertActive && panelOpen && !aiOpen
-              const disabled = Boolean(aiReview) && t.id !== 'timeline'
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  disabled={disabled}
-                  className={`book-tongue-bottom ${activeTongue ? 'book-tongue-on' : ''} ${
-                    t.id === 'insert' ? 'book-tongue-bottom-plus' : ''
-                  } ${t.id === 'ai' ? 'book-tongue-bottom-ai' : ''} ${
-                    t.id === 'insert' && tempPin ? 'ring-2 ring-orange-400' : ''
-                  } ${disabled ? 'opacity-40' : ''}`}
-                  onClick={() => onTongue(t.id)}
-                  title={
-                  t.id === 'insert'
-                    ? tempPin
-                      ? 'Save map pin as step'
-                      : 'Insert step'
-                    : t.id === 'ai'
-                      ? AI_COACH_BETA_TIP
-                      : t.label
-                }
-                >
-                  {t.id === 'ai' ? (
-                    <span className="inline-flex justify-center">
-                      <AiSparkIcon className="mx-auto h-4 w-4" />
-                    </span>
-                  ) : (
-                    t.label
-                  )}
-                </button>
-              )
-            })}
-          </nav>
-        </div>
+          {navTab === 'timeline' && displayTrip ? (
+            <div
+              className={
+                exploreOpen || aiOpen
+                  ? 'pointer-events-none invisible absolute inset-0 flex min-h-0 flex-col overflow-hidden px-2 pb-2 pt-2'
+                  : 'flex min-h-0 flex-1 flex-col overflow-hidden px-2 pb-2 pt-2'
+              }
+              data-coach="trip-steps"
+              aria-hidden={exploreOpen || aiOpen}
+            >
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <TimelinePanel
+                  meta={displayTrip.meta}
+                  items={displayTrip.items}
+                  selectedId={selectedId}
+                  dayFilter={dayFilter}
+                  typeFilter={typeFilter}
+                  onSelect={highlightStep}
+                  onOpenDetail={selectFromList}
+                  onDayFilter={setDayFilter}
+                  onTypeFilter={setTypeFilter}
+                  onInsertBetween={(after, before) => openInsert(after, before)}
+                  onAddDay={() => void addDay()}
+                  onDeleteStep={(id) => void deleteStep(id)}
+                  layout={isPhone ? 'horizontal' : 'vertical'}
+                  detailOpen={!isPhone && lowerMode === 'detail'}
+                  lockMode={Boolean(aiReview)}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          {!exploreOpen && !aiOpen && navTab === 'charts' && active ? (
+            <div
+              className="flex min-h-0 flex-1 flex-col overflow-hidden px-2 pb-2 pt-2"
+              onTouchStart={(e) => e.stopPropagation()}
+              onTouchMove={(e) => e.stopPropagation()}
+            >
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch]">
+                <ChartsPanel
+                  meta={active.meta}
+                  items={active.items}
+                  ownScroll={false}
+                  onHomeCurrencyChange={(code) =>
+                    void updateActive((t) => ({
+                      ...t,
+                      meta: { ...t.meta, homeCurrency: normalizeCurrency(code) },
+                    }))
+                  }
+                />
+              </div>
+            </div>
+          ) : null}
+
+          {!exploreOpen && !aiOpen && navTab === 'settings' ? (
+            <div
+              className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-3 pt-2 text-sm"
+              onTouchStart={(e) => e.stopPropagation()}
+              onTouchMove={(e) => e.stopPropagation()}
+            >
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch]">
+              <DataPanel
+                active={active}
+                colorMode={colorMode}
+                googleKey={googleKey}
+                serverPlacesConfigured={serverPlacesConfigured}
+                ionToken={ionToken}
+                walkApp={walkApp}
+                onColorModeChange={(mode) => {
+                  setColorMode(mode)
+                  applyColorMode(mode)
+                  void setSetting('colorMode', mode)
+                }}
+                onOpenExample={() => void onOpenExample()}
+                onImportFile={(f) => void onImportFile(f)}
+                onExport={() => void onExport()}
+                onExportToDrive={() => void onExportToDrive()}
+                onImportFromDrive={(f) => void onImportFromDrive(f)}
+                onExportExampleExcel={() => void onExportExampleExcel()}
+                onAddDay={() => void addDay()}
+                onEditTrip={() => openTripEdit()}
+                onShowTips={() => openFeatureGuide({ all: true })}
+                onStatus={setStatus}
+                setWalkApp={(pref) => {
+                  setWalkApp(pref)
+                  void setSetting('walkApp', pref)
+                }}
+                setGoogleKey={setGoogleKey}
+                setIonToken={setIonToken}
+                updateActive={updateActive}
+              />
+              </div>
+            </div>
+          ) : null}
+        </JourneyBookDock>
       ) : null}
 
       {/* Detail / Insert bottom sheet — covers steps on phone; tongues stay reachable */}
       {lowerOpen ? (
         <section
-          className={`journal-sheet absolute inset-x-0 z-40 flex flex-col rounded-t-[1.75rem] border shadow-[0_-12px_40px_rgba(15,23,42,0.35)] transition-all ${
-            isPhone ? 'bottom-[3.6rem]' : 'bottom-0'
+          className={`journal-sheet absolute inset-x-0 z-50 flex flex-col rounded-t-[1.75rem] border shadow-[0_-12px_40px_rgba(15,23,42,0.35)] transition-all ${
+            'bottom-[3.1rem]'
           } ${
             lowerMode === 'insert'
               ? isPhone
@@ -2524,6 +2480,13 @@ export default function App() {
         open={startCoachOpen}
         tripName={active?.meta.name}
         onDismiss={() => setStartCoachOpen(false)}
+      />
+      <PlanStartCoach
+        open={planStartCoachOpen}
+        onDismiss={() => {
+          setPlanStartCoachOpen(false)
+          void markTipsSeen([PLAN_START_COACH_ID])
+        }}
       />
     </div>
   )
@@ -2738,52 +2701,44 @@ function DriveSyncPanel({
 
 function DataPanel({
   active,
-  mapStack,
+  colorMode,
   googleKey,
   serverPlacesConfigured,
   ionToken,
   walkApp,
-  enrichProgress,
-  routesStatus,
+  onColorModeChange,
   onOpenExample,
   onImportFile,
   onExport,
   onExportToDrive,
   onImportFromDrive,
   onExportExampleExcel,
-  onEnrich,
-  onRebuildRoutes,
   onAddDay,
   onEditTrip,
   onShowTips,
   onStatus,
-  setMapStack,
   setWalkApp,
   setGoogleKey,
   setIonToken,
   updateActive,
 }: {
   active: TripRecord | null
-  mapStack: MapStack
+  colorMode: ColorMode
   googleKey: string
   serverPlacesConfigured: boolean
   ionToken: string
   walkApp: WalkAppPref
-  enrichProgress: string | null
-  routesStatus: string | null
+  onColorModeChange: (mode: ColorMode) => void
   onOpenExample: () => void
   onImportFile: (f: File) => void
   onExport: () => void
   onExportToDrive: () => void
   onImportFromDrive: (file: DriveFileInfo) => void
   onExportExampleExcel: () => void
-  onEnrich: () => void
-  onRebuildRoutes: () => void
   onAddDay: () => void
   onEditTrip: () => void
   onShowTips: () => void
   onStatus: (msg: string) => void
-  setMapStack: (id: MapStack) => void
   setWalkApp: (pref: WalkAppPref) => void
   setGoogleKey: (v: string) => void
   setIonToken: (v: string) => void
@@ -2791,176 +2746,42 @@ function DataPanel({
 }) {
   return (
     <>
-      <div className="rounded-2xl border border-sky-200 bg-sky-50/80 p-3">
-        <div className="text-xs font-semibold uppercase tracking-wide text-sky-700">
-          Feature tips
-        </div>
-        <p className="mt-1 text-xs text-stone-600">
-          Short illustrated walkthrough for friends and family. New tips only appear once —
-          reopen anytime from here or the Tips button.
+      <div className="settings-card">
+        <div className="settings-card-title">Appearance</div>
+        <SegmentedControl
+          ariaLabel="Color mode"
+          value={colorMode}
+          onChange={onColorModeChange}
+          options={[
+            { id: 'light', label: 'Cream' },
+            { id: 'dark', label: 'Dark' },
+          ]}
+        />
+        <p className="mt-2 text-[11px] leading-snug text-[var(--ink-muted)]">
+          Cream is the warm paper look; Dark is the glass night shell.
         </p>
-        <button type="button" className={`${btnPrimary} mt-2`} onClick={onShowTips}>
-          Show tips
-        </button>
-      </div>
-
-      <ActionRow>
-        <button type="button" className={btnPrimary} onClick={onOpenExample}>
-          Open example
-        </button>
-      </ActionRow>
-
-      <ActionRow>
-        <label className={btn}>
-          Import Excel
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) onImportFile(f)
-              e.target.value = ''
-            }}
-          />
-        </label>
-        <button type="button" className={btn} onClick={onExport} disabled={!active}>
-          Export Excel
-        </button>
-        <button type="button" className={btn} onClick={onExportExampleExcel}>
-          Download example .xlsx
-        </button>
-      </ActionRow>
-
-      <DriveSyncPanel
-        active={active}
-        onExportToDrive={onExportToDrive}
-        onImportFromDrive={onImportFromDrive}
-        onStatus={onStatus}
-      />
-
-      <button className={btnPrimary} onClick={onEnrich} disabled={!!enrichProgress}>
-        Enrich pinpoints (Nominatim / Wikidata / OSRM)
-      </button>
-      <button className={btn} disabled={!!routesStatus || !active} onClick={onRebuildRoutes}>
-        Rebuild drive + walk paths
-      </button>
-
-      <div className="rounded-2xl border border-stone-200 bg-white p-3 shadow-sm">
-        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-400">
-          Map stack
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {(
-            [
-              ['esri', 'Esri imagery'],
-              ['osm', 'OpenStreetMap'],
-              ['google3d', 'Google Photorealistic 3D'],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              className={`rounded-full px-3 py-1 text-xs ${
-                mapStack === id
-                  ? 'bg-[var(--coral)] text-white'
-                  : 'border border-stone-200 bg-stone-50 text-stone-700'
-              }`}
-              onClick={() => setMapStack(id)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="mt-3">
-          <div className="text-xs text-stone-500">🚶 figure opens</div>
-          <div className="mt-1 flex flex-wrap gap-2">
-            {(
-              [
-                ['maps', 'Street View'],
-                ['earth', 'Google Earth'],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={`rounded-full px-3 py-1 text-xs ${
-                  walkApp === id
-                    ? 'bg-sky-600 text-white'
-                    : 'border border-stone-200 bg-stone-50 text-stone-700'
-                }`}
-                onClick={() => setWalkApp(id)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="mt-1 text-[10px] text-stone-400">
-            Pins → Street View / Earth (nearest pano, no API key). Walk / drive / transit →
-            directions. Flight paths → Google Flights (✈️).
-          </p>
-        </div>
-        <label className="mt-3 block text-xs text-stone-500">
-          Google Maps / Places key
-          <input
-            className="mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm text-stone-800"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={googleKey}
-            onChange={(e) => setGoogleKey(sanitizeSecretInput(e.target.value))}
-            onBlur={() => void setSetting('googleMapsKey', googleKey)}
-            placeholder={
-              serverPlacesConfigured
-                ? 'Override server key…'
-                : 'Paste key…'
-            }
-          />
-          <span className="mt-1 block text-[10px] text-stone-400">
-            {serverPlacesConfigured
-              ? 'Leave blank to use the server key (GOOGLE_MAPS_API_KEY on Vercel). Paste your own here to override — saved only in this browser. Photoreal 3D needs a key here (browser Map Tiles).'
-              : 'Optional override for Places. Prefer setting GOOGLE_MAPS_API_KEY on Vercel (server-only, not VITE_). Photoreal 3D tiles need a key pasted here.'}
-          </span>
-        </label>
-        <label className="mt-3 block text-xs text-stone-500">
-          Cesium ion token (optional terrain elevation)
-          <input
-            className="mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm text-stone-800"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={ionToken}
-            onChange={(e) => setIonToken(sanitizeSecretInput(e.target.value))}
-            onBlur={() => void setSetting('cesiumIonToken', ionToken)}
-            placeholder="Paste token…"
-          />
-          <span className="mt-1 block text-[10px] text-stone-400">
-            Free at cesium.com/ion — stored locally in this browser only.
-          </span>
-        </label>
       </div>
 
       {active ? (
-        <div className="rounded-2xl border border-stone-200 bg-white p-3 shadow-sm">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-400">
-            Trip meta
-          </div>
+        <div className="settings-card">
+          <div className="settings-card-title">This trip</div>
           <button
             type="button"
             className={`${btn} mb-2 w-full justify-between`}
             onClick={onEditTrip}
           >
-            <span className="truncate font-medium text-stone-800">{active.meta.name}</span>
-            <span className="shrink-0 text-stone-400">
+            <span className="truncate font-medium">{active.meta.name}</span>
+            <span className="shrink-0 text-[var(--ink-muted)]">
               {active.meta.startDate} → {active.meta.endDate}
             </span>
           </button>
           <button type="button" className={`${btn} mb-2 w-full`} onClick={onAddDay}>
-            + Add a day (extends end date)
+            + Add a day
           </button>
-          <label className="mb-2 block text-xs text-stone-500">
-            Home currency (totals)
+          <label className="mb-2 block text-xs text-[var(--ink-muted)]">
+            Home currency
             <select
-              className="mt-1 w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm"
+              className="mt-1 w-full rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] px-2 py-1.5 text-sm text-[var(--ink)]"
               value={active.meta.homeCurrency || 'EUR'}
               onChange={(e) =>
                 void updateActive((t) => ({
@@ -2980,7 +2801,7 @@ function DataPanel({
             </select>
           </label>
           <textarea
-            className="w-full rounded-xl border border-stone-200 bg-stone-50 px-2 py-1.5"
+            className="w-full rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] px-2 py-1.5 text-[var(--ink)]"
             rows={3}
             value={active.meta.notes}
             onChange={(e) =>
@@ -2991,13 +2812,117 @@ function DataPanel({
             }
             placeholder="Notes…"
           />
-          <p className="mt-2 text-xs text-stone-500">
-            Types: {ITEM_TYPES.join(', ')}. Excel uses Trip + Steps + Hotels + Cash — color-coded
-            tables, cost heat, and Cash spend charts (Cash is export-only). Older Schedule workbooks
-            still import.
-          </p>
         </div>
       ) : null}
+
+      <div className="settings-card">
+        <div className="settings-card-title">Import & export</div>
+        <ActionRow>
+          <label className={btn}>
+            Import Excel
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) onImportFile(f)
+                e.target.value = ''
+              }}
+            />
+          </label>
+          <button type="button" className={btn} onClick={onExport} disabled={!active}>
+            Export Excel
+          </button>
+          <button type="button" className={btn} onClick={onExportExampleExcel}>
+            Example .xlsx
+          </button>
+        </ActionRow>
+        <div className="mt-2">
+          <DriveSyncPanel
+            active={active}
+            onExportToDrive={onExportToDrive}
+            onImportFromDrive={onImportFromDrive}
+            onStatus={onStatus}
+          />
+        </div>
+        <p className="mt-2 text-[11px] text-[var(--ink-muted)]">
+          Excel uses Trip + Steps + Hotels + Cash. Types: {ITEM_TYPES.join(', ')}.
+        </p>
+      </div>
+
+      <div className="settings-card">
+        <div className="settings-card-title">Map & links</div>
+        <div className="text-xs text-[var(--ink-muted)]">Walk figure opens</div>
+        <div className="mt-1 flex flex-wrap gap-2">
+          {(
+            [
+              ['maps', 'Street View'],
+              ['earth', 'Google Earth'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={`rounded-full px-3 py-1 text-xs ${
+                walkApp === id
+                  ? 'bg-[var(--sky)] text-white'
+                  : 'border border-[var(--glass-border)] bg-[var(--paper)] text-[var(--ink)]'
+              }`}
+              onClick={() => setWalkApp(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1 text-[10px] text-[var(--ink-muted)]">
+          Basemap look is on the map layers button. Pins → Street View / Earth. Paths →
+          directions or Flights.
+        </p>
+        <label className="mt-3 block text-xs text-[var(--ink-muted)]">
+          Google Maps / Places key
+          <input
+            className="mt-1 w-full rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] px-2 py-1.5 text-sm text-[var(--ink)]"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={googleKey}
+            onChange={(e) => setGoogleKey(sanitizeSecretInput(e.target.value))}
+            onBlur={() => void setSetting('googleMapsKey', googleKey)}
+            placeholder={serverPlacesConfigured ? 'Override server key…' : 'Paste key…'}
+          />
+          <span className="mt-1 block text-[10px]">
+            {serverPlacesConfigured
+              ? 'Blank uses the server key. Photoreal 3D needs a key here.'
+              : 'Optional. Prefer GOOGLE_MAPS_API_KEY on the server. 3D tiles need a key here.'}
+          </span>
+        </label>
+        <label className="mt-3 block text-xs text-[var(--ink-muted)]">
+          Cesium ion token (optional)
+          <input
+            className="mt-1 w-full rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] px-2 py-1.5 text-sm text-[var(--ink)]"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={ionToken}
+            onChange={(e) => setIonToken(sanitizeSecretInput(e.target.value))}
+            onBlur={() => void setSetting('cesiumIonToken', ionToken)}
+            placeholder="Paste token…"
+          />
+        </label>
+      </div>
+
+      <div className="settings-card">
+        <div className="settings-card-title">Tools</div>
+        <ActionRow>
+          <button type="button" className={btnPrimary} onClick={onShowTips}>
+            Feature tips
+          </button>
+          <button type="button" className={btn} onClick={onOpenExample}>
+            Open example
+          </button>
+        </ActionRow>
+      </div>
 
       <ClientLogsBlob />
     </>
@@ -3009,7 +2934,7 @@ function ActionRow({ children }: { children: React.ReactNode }) {
 }
 
 const btn =
-  'cursor-pointer rounded-full border border-stone-200 bg-white px-3 py-2 text-xs font-medium leading-none text-stone-700 shadow-sm inline-flex items-center'
+  'cursor-pointer rounded-full border border-[var(--glass-border)] bg-[var(--paper)] px-3 py-2 text-xs font-medium leading-none text-[var(--ink)] shadow-sm inline-flex items-center'
 const btnPrimary =
   'cursor-pointer rounded-full bg-[var(--coral)] px-3 py-2 text-xs font-semibold leading-none text-white disabled:opacity-50 inline-flex items-center'
 
@@ -3022,9 +2947,9 @@ function ClientLogsBlob() {
   const text = formatClientLogsText(logs)
 
   return (
-    <div className="rounded-2xl border border-stone-200 bg-stone-50/80 p-3">
+    <div className="settings-card">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+        <div className="settings-card-title mb-0">
           Client logs
         </div>
         <div className="flex gap-1">
@@ -3055,10 +2980,10 @@ function ClientLogsBlob() {
           </button>
         </div>
       </div>
-      <p className="mt-1 text-[10px] text-stone-400">
+      <p className="mt-1 text-[10px] text-[var(--ink-muted)]">
         Explore / Places / maps-status errors land here (secrets redacted).
       </p>
-      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-stone-200 bg-white p-2 font-mono text-[10px] leading-snug text-stone-700">
+      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] p-2 font-mono text-[10px] leading-snug text-[var(--ink)]">
         {text || 'No log lines yet.'}
       </pre>
     </div>

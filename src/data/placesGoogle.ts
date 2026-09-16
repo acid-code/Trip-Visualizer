@@ -37,8 +37,8 @@ const FIELD_MASK = [
   'places.regularOpeningHours',
 ].join(',')
 
-/** Types we care about — one request covers food / drink / sights / nature. */
-const INCLUDED_TYPES = [
+/** Broad mix — Journey Explore (client filters by chip). */
+const INCLUDED_TYPES_ALL = [
   'restaurant',
   'cafe',
   'bakery',
@@ -60,6 +60,50 @@ const INCLUDED_TYPES = [
   'marina',
   'lodging',
 ]
+
+/** Per-category types so Nearby's 20-result cap isn't eaten by restaurants. */
+const INCLUDED_TYPES_BY_CATEGORY: Record<ExploreCategory, string[]> = {
+  food: ['restaurant', 'cafe', 'bakery'],
+  drink: ['bar', 'winery', 'night_club', 'pub'],
+  sights: [
+    'museum',
+    'art_gallery',
+    'tourist_attraction',
+    'historical_landmark',
+    'church',
+    'hindu_temple',
+    'mosque',
+    'synagogue',
+    'zoo',
+    'amusement_park',
+    'aquarium',
+    'performing_arts_theater',
+    'visitor_center',
+  ],
+  hotel: ['lodging'],
+  nature: ['park', 'beach', 'marina', 'campground', 'national_park'],
+  other: INCLUDED_TYPES_ALL,
+}
+
+/** Resolve Google `includedTypes` for an optional category filter.
+ *  Returns `null` when the caller wants no type restriction (all Table A places). */
+export function includedTypesForCategories(
+  categories?: ExploreCategory[],
+  unrestricted?: boolean,
+): string[] | null {
+  if (unrestricted) return null
+  if (!categories?.length) return INCLUDED_TYPES_ALL
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const cat of categories) {
+    for (const t of INCLUDED_TYPES_BY_CATEGORY[cat] ?? []) {
+      if (seen.has(t)) continue
+      seen.add(t)
+      out.push(t)
+    }
+  }
+  return out.length ? out : INCLUDED_TYPES_ALL
+}
 
 type GooglePlace = {
   id?: string
@@ -134,7 +178,9 @@ function categoryFromTypes(primary: string, types: string[]): ExploreCategory {
     has('synagogue') ||
     has('zoo') ||
     has('aquarium') ||
-    has('amusement_park')
+    has('amusement_park') ||
+    has('performing_arts_theater') ||
+    has('visitor_center')
   ) {
     return 'sights'
   }
@@ -254,6 +300,10 @@ export async function searchNearbyPlacesGoogle(opts: {
   apiKey: string
   maxResultCount?: number
   signal?: AbortSignal
+  categories?: ExploreCategory[]
+  /** Omit includedTypes — return any nearby place type. */
+  unrestricted?: boolean
+  rankPreference?: 'DISTANCE' | 'POPULARITY'
 }): Promise<ExplorePlace[]> {
   const apiKey = sanitizeSecretInput(opts.apiKey)
   if (!apiKey) throw new Error('Missing Google Maps API key')
@@ -264,6 +314,11 @@ export async function searchNearbyPlacesGoogle(opts: {
     Math.max(opts.maxResultCount ?? GOOGLE_NEARBY_MAX, 1),
     GOOGLE_NEARBY_MAX,
   )
+  const includedTypes = includedTypesForCategories(
+    opts.categories,
+    opts.unrestricted,
+  )
+  const rankPreference = opts.rankPreference === 'POPULARITY' ? 'POPULARITY' : 'DISTANCE'
 
   const res = await fetch(PLACES_NEARBY, {
     method: 'POST',
@@ -274,9 +329,9 @@ export async function searchNearbyPlacesGoogle(opts: {
     },
     body: JSON.stringify({
       languageCode: 'en',
-      includedTypes: INCLUDED_TYPES,
+      ...(includedTypes ? { includedTypes } : {}),
       maxResultCount,
-      rankPreference: 'DISTANCE',
+      rankPreference,
       locationRestriction: {
         circle: {
           center: { latitude: opts.lat, longitude: opts.lon },
@@ -314,6 +369,9 @@ export async function fetchGoogleNearbyViaProxy(
     radiusM?: number
     maxResultCount?: number
     signal?: AbortSignal
+    categories?: ExploreCategory[]
+    unrestricted?: boolean
+    rankPreference?: 'DISTANCE' | 'POPULARITY'
   },
 ): Promise<ExplorePlace[]> {
   const override = sanitizeSecretInput(opts.apiKey ?? '')
@@ -325,6 +383,12 @@ export async function fetchGoogleNearbyViaProxy(
       lon: anchor.lon,
       radiusM: opts.radiusM ?? 1500,
       maxResultCount: opts.maxResultCount ?? GOOGLE_NEARBY_MAX,
+      rankPreference: opts.rankPreference === 'POPULARITY' ? 'POPULARITY' : 'DISTANCE',
+      ...(opts.unrestricted
+        ? { unrestricted: true }
+        : opts.categories?.length
+          ? { categories: opts.categories }
+          : {}),
       ...(override ? { apiKey: override } : {}),
     }),
     signal: opts.signal,
@@ -345,6 +409,14 @@ export type GoogleTextHit = {
   name: string
   address: string
   placeId: string
+  category?: ExploreCategory
+  primaryType?: string
+  types?: string[]
+  rating?: number | null
+  userRatingCount?: number | null
+  photoName?: string
+  googleMapsUri?: string
+  website?: string
 }
 
 const TEXT_FIELD_MASK = [
@@ -352,11 +424,17 @@ const TEXT_FIELD_MASK = [
   'places.displayName',
   'places.location',
   'places.formattedAddress',
+  'places.types',
+  'places.primaryType',
+  'places.rating',
+  'places.userRatingCount',
+  'places.photos',
+  'places.websiteUri',
+  'places.googleMapsUri',
 ].join(',')
 
 /**
- * One Text Search (New) call — take the top hit for pin drop.
- * Essentials-only field mask (no rating/photos) keeps the SKU as lean as Text Search allows.
+ * One Text Search (New) call — take the top hit for pin drop / Plan recommendation.
  */
 export async function searchTextPlaceGoogle(opts: {
   query: string
@@ -408,13 +486,73 @@ export async function searchTextPlaceGoogle(opts: {
   if (!isValidCoord(lat, lon)) return null
   const name = clampText(gp.displayName?.text || '', 120)
   if (!name) return null
+  const types = gp.types || []
+  const primary = gp.primaryType || types[0] || ''
+  const photoName = gp.photos?.[0]?.name || ''
+  const rating =
+    typeof gp.rating === 'number' && Number.isFinite(gp.rating)
+      ? Math.round(gp.rating * 10) / 10
+      : null
   return {
     lat: lat!,
     lon: lon!,
     name,
     address: clampText(gp.formattedAddress || '', 200),
     placeId: clampText(gp.id || '', 128),
+    category: categoryFromTypes(primary, types),
+    primaryType: primary,
+    types,
+    rating,
+    userRatingCount:
+      typeof gp.userRatingCount === 'number' ? gp.userRatingCount : null,
+    photoName,
+    googleMapsUri: safeHttpsUrl(gp.googleMapsUri || ''),
+    website: safeHttpsUrl(gp.websiteUri || ''),
   }
+}
+
+/** Build an ExplorePlace from a Text Search hit (Plan recommendation → Nearby). */
+export function explorePlaceFromTextHit(
+  hit: GoogleTextHit,
+  anchor?: { lat: number; lon: number },
+  apiKey?: string,
+): ExplorePlace {
+  const cat = hit.category || 'other'
+  const photoName = hit.photoName || ''
+  let place: ExplorePlace = {
+    id: hit.placeId ? `google:${hit.placeId}` : `search:${hit.lat.toFixed(5)},${hit.lon.toFixed(5)}`,
+    name: hit.name,
+    lat: hit.lat,
+    lon: hit.lon,
+    category: cat,
+    osmType: hit.placeId ? 'google' : 'search',
+    osmId: hit.placeId || '',
+    wikidata: '',
+    images: [],
+    summary:
+      hit.userRatingCount && hit.userRatingCount > 0
+        ? clampText(`${hit.userRatingCount} Google reviews`, 80)
+        : '',
+    distKm: anchor
+      ? distKm(anchor, { lat: hit.lat, lon: hit.lon })
+      : 0,
+    rating: hit.rating ?? null,
+    cuisine: '',
+    website: hit.website || '',
+    menuUrl: '',
+    openingHours: '',
+    address: hit.address || '',
+    tags: {
+      source: hit.placeId ? 'google' : 'search',
+      primaryType: hit.primaryType || '',
+      ...(photoName ? { googlePhotoName: photoName } : {}),
+      ...(hit.googleMapsUri ? { googleMapsUri: hit.googleMapsUri } : {}),
+    },
+  }
+  if (photoName) {
+    place = attachGoogleListPhotos([place], apiKey, 1)[0]!
+  }
+  return place
 }
 
 export async function fetchGoogleTextViaProxy(opts: {
@@ -442,5 +580,11 @@ export async function fetchGoogleTextViaProxy(opts: {
     throw new Error(msg)
   }
   const json = (await res.json()) as { place?: GoogleTextHit | null }
-  return json.place ?? null
+  const place = json.place ?? null
+  if (!place) return null
+  // Normalize older proxy payloads that lack category.
+  if (!place.category && place.types?.length) {
+    place.category = categoryFromTypes(place.primaryType || '', place.types)
+  }
+  return place
 }

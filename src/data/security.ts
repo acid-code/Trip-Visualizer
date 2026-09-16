@@ -10,9 +10,12 @@ export const ALLOWED_SETTING_KEYS = [
   'googleMapsKey',
   'cesiumIonToken',
   'mapStack',
+  'mapLook',
   'walkApp',
   /** JSON string[] of feature-guide tip ids the user has already seen */
   'featureGuideSeen',
+  'appMode',
+  'colorMode',
 ] as const
 
 export type AllowedSettingKey = (typeof ALLOWED_SETTING_KEYS)[number]
