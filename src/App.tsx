@@ -309,6 +309,29 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     let all = await listTrips()
+    // Fresh install / cleared storage: seed a same-day empty trip so Plan/Journey
+    // can start without requiring a full itinerary first.
+    if (all.length === 0) {
+      const trip = await createBlankTrip()
+      const withBases = applyTripMetaRange(
+        trip.meta,
+        trip.items,
+        {
+          name: trip.meta.name,
+          startDate: trip.meta.startDate,
+          endDate: trip.meta.endDate,
+        },
+        'keep-outside',
+      )
+      await saveTrip(
+        ensurePlanScaffold({
+          ...trip,
+          meta: withBases.meta,
+          items: withBases.items,
+        }),
+      )
+      all = await listTrips()
+    }
     const hasPersonal = all.some((t) => !t.isExample && t.id !== EXAMPLE_TRIP_ID)
     if (hasPersonal && !keepExampleRef.current) {
       const hadExample = all.some((t) => t.isExample || t.id === EXAMPLE_TRIP_ID)
