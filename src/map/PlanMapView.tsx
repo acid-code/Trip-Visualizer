@@ -148,6 +148,8 @@ export function PlanMapView({
   const mapRef = useRef<maplibregl.Map | null>(null)
   const markersRef = useRef<maplibregl.Marker[]>([])
   const lastFitKeyRef = useRef('')
+  const lastFocusPlaceRef = useRef<string | null>(null)
+  const lastFocusSuggestionRef = useRef<string | null>(null)
   const onPlaceClickRef = useRef(onPlaceClick)
   const onSuggestionClickRef = useRef(onSuggestionClick)
   const onViewportIdleRef = useRef(onViewportIdle)
@@ -224,7 +226,8 @@ export function PlanMapView({
       if (isFocus) return true
       if (!visibleSectionIds.has(p.sectionId)) return false
       if (visibleDays) {
-        if (!p.scheduledDay || !visibleDays.has(p.scheduledDay)) return false
+        // Day filter applies to scheduled / Journey pins; keep unscheduled list ideas visible.
+        if (p.scheduledDay && !visibleDays.has(p.scheduledDay)) return false
       }
       return true
     })
@@ -232,8 +235,9 @@ export function PlanMapView({
     for (const p of visible) {
       const day = p.scheduledDay
       const section = sections.find((s) => s.id === p.sectionId)
-      const fill =
-        colorBy === 'day' && day ? dayColor(meta, day) : sectionColor(p.sectionId)
+      const fill = day
+        ? dayColor(meta, day)
+        : sectionColor(p.sectionId)
       const dayNum = day ? Math.max(1, dayIndex(meta, day)) : 0
       const linkedType = p.linkedItemId ? linkedItemTypes?.[p.linkedItemId] : undefined
       const emoji = linkedType
@@ -319,7 +323,14 @@ export function PlanMapView({
     if (map.isStyleLoaded()) ensure()
     else map.once('load', ensure)
 
-    if (focusSuggestionId) {
+    const focusSugChanged = focusSuggestionId !== lastFocusSuggestionRef.current
+    lastFocusSuggestionRef.current = focusSuggestionId ?? null
+    const focusPlaceChanged = focusPlaceId !== lastFocusPlaceRef.current
+    lastFocusPlaceRef.current = focusPlaceId ?? null
+
+    // Only fly when the focused pin actually changes — not when Nearby
+    // suggestions refresh after a type filter change.
+    if (focusSuggestionId && focusSugChanged) {
       const focus = suggestions.find((s) => s.id === focusSuggestionId)
       if (focus && isValidCoord(focus.lat, focus.lon)) {
         map.easeTo({
@@ -331,7 +342,7 @@ export function PlanMapView({
         return
       }
     }
-    if (focusPlaceId) {
+    if (focusPlaceId && focusPlaceChanged) {
       const focus = visible.find((p) => p.id === focusPlaceId)
       if (focus) {
         map.easeTo({
@@ -344,22 +355,27 @@ export function PlanMapView({
       }
     }
 
-    // Fit to trip pins only — not suggestions (avoids Discover re-fetch loops on pan).
+    // Fit once when pins first appear — never yank the camera for filter /
+    // Nearby refreshes while the user is looking around.
     const fitKey = `${visible.map((p) => p.id).join(',')}|${hideScheduled}|${[...visibleSectionIds].join(',')}|${
       visibleDays ? [...visibleDays].join(',') : ''
     }`
     if (fitKey === lastFitKeyRef.current) return
+    const alreadyFitted = lastFitKeyRef.current !== ''
     lastFitKeyRef.current = fitKey
+    if (alreadyFitted) return
 
     const bounds = new maplibregl.LngLatBounds()
     for (const p of visible) bounds.extend([p.lon!, p.lat!])
-    if (!bounds.isEmpty()) {
-      map.fitBounds(bounds, {
-        padding: 48,
-        maxZoom: 12,
-        duration: 600,
-      })
+    if (bounds.isEmpty()) {
+      lastFitKeyRef.current = ''
+      return
     }
+    map.fitBounds(bounds, {
+      padding: 48,
+      maxZoom: 12,
+      duration: 600,
+    })
   }, [
     meta,
     sections,

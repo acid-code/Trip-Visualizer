@@ -131,13 +131,13 @@ export function PlanBoard({
     lon: number
     radiusM: number
   } | null>(null)
-  const [daysAll, setDaysAll] = useState(false)
+  const [daysAll, setDaysAll] = useState(true)
   const [focusPlaceId, setFocusPlaceId] = useState<string | null>(null)
   const [focusSuggestionId, setFocusSuggestionId] = useState<string | null>(null)
   const [detailPlace, setDetailPlace] = useState<ExplorePlace | null>(null)
   /** When set, detail sheet is a saved Plan place (not a Nearby suggestion). */
   const [detailSavedId, setDetailSavedId] = useState<string | null>(null)
-  const [filterMenuOpen, setFilterMenuOpen] = useState(false)
+  const [filterMenu, setFilterMenu] = useState<'type' | 'day' | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchBusy, setSearchBusy] = useState(false)
   /** Recommendation search replaces Nearby with a single loaded place. */
@@ -145,6 +145,7 @@ export function PlanBoard({
   const [selectedUnscheduledId, setSelectedUnscheduledId] = useState<string | null>(null)
   const [aiPrompt, setAiPrompt] = useState('')
   const [packsOpen, setPacksOpen] = useState(false)
+  const [showJourneyPins, setShowJourneyPins] = useState(true)
   const suggestAbortRef = useRef<AbortController | null>(null)
   const filterMenuRef = useRef<HTMLDivElement>(null)
 
@@ -161,18 +162,29 @@ export function PlanBoard({
     [trip.planSections],
   )
 
+  const journeySection = useMemo(
+    () =>
+      trip.planSections.find(
+        (s) =>
+          s.title === JOURNEY_SECTION_TITLE ||
+          s.title.toLowerCase() === 'journey' ||
+          s.title.toLowerCase() === 'on the trip',
+      ) ?? null,
+    [trip.planSections],
+  )
+
   const visibleSectionIds = useMemo(() => {
     const ids = new Set(trip.planSections.map((s) => s.id))
     for (const id of hiddenSections) ids.delete(id)
+    if (journeySection && !showJourneyPins) ids.delete(journeySection.id)
     return ids
-  }, [trip.planSections, hiddenSections])
+  }, [trip.planSections, hiddenSections, journeySection, showJourneyPins])
 
   const mapVisibleDays = useMemo(() => {
-    if (mode !== 'days') return null
     if (daysAll) return null
     if (!daySafe) return null
     return new Set([daySafe])
-  }, [mode, daySafe, daysAll])
+  }, [daySafe, daysAll])
 
   const unscheduled = trip.planPlaces.filter((p) => !p.scheduledDay)
   const bySectionUnscheduled = (sectionId: string) =>
@@ -206,13 +218,13 @@ export function PlanBoard({
   )
 
   useEffect(() => {
-    if (!filterMenuOpen) return
+    if (!filterMenu) return
     const onDoc = (e: MouseEvent) => {
       if (filterMenuRef.current?.contains(e.target as Node)) return
-      setFilterMenuOpen(false)
+      setFilterMenu(null)
     }
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setFilterMenuOpen(false)
+      if (e.key === 'Escape') setFilterMenu(null)
     }
     document.addEventListener('mousedown', onDoc)
     window.addEventListener('keydown', onKey)
@@ -220,10 +232,10 @@ export function PlanBoard({
       document.removeEventListener('mousedown', onDoc)
       window.removeEventListener('keydown', onKey)
     }
-  }, [filterMenuOpen])
+  }, [filterMenu])
 
   useEffect(() => {
-    setFilterMenuOpen(false)
+    setFilterMenu(null)
     setSelectedUnscheduledId(null)
   }, [mode])
 
@@ -495,7 +507,6 @@ export function PlanBoard({
   function schedulePlace(placeId: string, day: string) {
     onChange(promotePlanPlaceToStep(trip, placeId, day))
     setSelectedUnscheduledId(null)
-    setMode('days')
     setDaysAll(false)
     setActiveDay(day)
     const idx = days.indexOf(day)
@@ -603,9 +614,12 @@ export function PlanBoard({
         <div className="pointer-events-auto absolute right-3 top-[max(4.35rem,calc(env(safe-area-inset-top)+3.45rem))] z-20">
           <PlanMapLayersControl
             sections={listSections}
+            journeySection={journeySection}
             showNearby={showNearbyPins}
+            showJourney={showJourneyPins}
             hiddenSectionIds={hiddenSections}
             onToggleNearby={toggleNearbyLayer}
+            onToggleJourney={() => setShowJourneyPins((v) => !v)}
             onToggleSection={toggleSectionLayer}
             panelPlacement="below"
           />
@@ -623,141 +637,169 @@ export function PlanBoard({
                 { id: 'days', label: 'Days' },
               ]}
             />
-            <div ref={filterMenuRef} className="relative w-fit">
-              <button
-                type="button"
-                className="plan-filter-trigger"
-                aria-expanded={filterMenuOpen}
-                aria-haspopup="listbox"
-                onClick={() => setFilterMenuOpen((v) => !v)}
-              >
+            <div ref={filterMenuRef} className="flex flex-wrap items-start gap-1.5">
               {mode === 'discover' ? (
-                <>
-                  <span className="text-base leading-none" aria-hidden>
-                    {activeCatMeta.emoji}
-                  </span>
-                  <span className="font-semibold">{activeCatMeta.short}</span>
-                </>
-              ) : daysAll ? (
-                <>
-                  <span className="text-base leading-none" aria-hidden>
-                    🗓️
-                  </span>
-                  <span className="font-semibold">All days</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-base leading-none" aria-hidden>
-                    📅
-                  </span>
-                  <span className="font-semibold">Day {activeDayIdx + 1}</span>
-                </>
-              )}
-              <svg
-                className={`h-3.5 w-3.5 text-[var(--ink-muted)] transition ${filterMenuOpen ? 'rotate-180' : ''}`}
-                viewBox="0 0 20 20"
-                fill="currentColor"
-                aria-hidden
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            </button>
-            {filterMenuOpen ? (
-              <div className="plan-filter-menu" role="listbox">
-                {mode === 'discover'
-                  ? SUGGEST_CATS.map((c) => {
-                      const on = c.id === suggestCat
-                      return (
-                        <button
-                          key={c.id}
-                          type="button"
-                          role="option"
-                          aria-selected={on}
-                          className={`plan-filter-option ${on ? 'plan-filter-option-on' : ''}`}
-                          onClick={() => {
-                            setPinnedSearch(null)
-                            setSuggestCat(c.id)
-                            setFilterMenuOpen(false)
-                          }}
-                        >
-                          <span className="plan-filter-option-emoji" aria-hidden>
-                            {c.emoji}
-                          </span>
-                          <span className="min-w-0 flex-1 text-left">
-                            <span className="block text-sm font-semibold text-[var(--ink)]">
-                              {c.short}
-                            </span>
-                            <span className="block text-[11px] text-[var(--ink-muted)]">
-                              {c.blurb}
-                            </span>
-                          </span>
-                        </button>
-                      )
-                    })
-                  : (
-                    <>
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={daysAll}
-                        className={`plan-filter-option ${daysAll ? 'plan-filter-option-on' : ''}`}
-                        onClick={() => {
-                          setDaysAll(true)
-                          setFilterMenuOpen(false)
-                        }}
-                      >
-                        <span className="plan-filter-option-emoji" aria-hidden>
-                          🗓️
-                        </span>
-                        <span className="min-w-0 flex-1 text-left">
-                          <span className="block text-sm font-semibold text-[var(--ink)]">
-                            All days
-                          </span>
-                          <span className="block text-[11px] text-[var(--ink-muted)]">
-                            Whole trip on the map
-                          </span>
-                        </span>
-                      </button>
-                      {days.map((day, idx) => {
-                        const on = !daysAll && day === daySafe
+                <div className="relative w-fit">
+                  <button
+                    type="button"
+                    className="plan-filter-trigger"
+                    aria-expanded={filterMenu === 'type'}
+                    aria-haspopup="listbox"
+                    onClick={() =>
+                      setFilterMenu((m) => (m === 'type' ? null : 'type'))
+                    }
+                  >
+                    <span className="text-base leading-none" aria-hidden>
+                      {activeCatMeta.emoji}
+                    </span>
+                    <span className="font-semibold">{activeCatMeta.short}</span>
+                    <svg
+                      className={`h-3.5 w-3.5 text-[var(--ink-muted)] transition ${filterMenu === 'type' ? 'rotate-180' : ''}`}
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                      aria-hidden
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  </button>
+                  {filterMenu === 'type' ? (
+                    <div className="plan-filter-menu" role="listbox">
+                      {SUGGEST_CATS.map((c) => {
+                        const on = c.id === suggestCat
                         return (
                           <button
-                            key={day}
+                            key={c.id}
                             type="button"
                             role="option"
                             aria-selected={on}
                             className={`plan-filter-option ${on ? 'plan-filter-option-on' : ''}`}
                             onClick={() => {
-                              setDaysAll(false)
-                              setActiveDay(day)
-                              setFilterMenuOpen(false)
+                              setPinnedSearch(null)
+                              setFocusSuggestionId(null)
+                              setSuggestCat(c.id)
+                              setFilterMenu(null)
                             }}
                           >
-                            <span className="plan-filter-option-emoji tabular-nums" aria-hidden>
-                              {idx + 1}
+                            <span className="plan-filter-option-emoji" aria-hidden>
+                              {c.emoji}
                             </span>
                             <span className="min-w-0 flex-1 text-left">
                               <span className="block text-sm font-semibold text-[var(--ink)]">
-                                Day {idx + 1}
+                                {c.short}
                               </span>
                               <span className="block text-[11px] text-[var(--ink-muted)]">
-                                {day}
+                                {c.blurb}
                               </span>
                             </span>
                           </button>
                         )
                       })}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="relative w-fit">
+                <button
+                  type="button"
+                  className="plan-filter-trigger"
+                  aria-expanded={filterMenu === 'day'}
+                  aria-haspopup="listbox"
+                  onClick={() =>
+                    setFilterMenu((m) => (m === 'day' ? null : 'day'))
+                  }
+                >
+                  {daysAll ? (
+                    <>
+                      <span className="text-base leading-none" aria-hidden>
+                        🗓️
+                      </span>
+                      <span className="font-semibold">All days</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-base leading-none" aria-hidden>
+                        📅
+                      </span>
+                      <span className="font-semibold">Day {activeDayIdx + 1}</span>
                     </>
                   )}
+                  <svg
+                    className={`h-3.5 w-3.5 text-[var(--ink-muted)] transition ${filterMenu === 'day' ? 'rotate-180' : ''}`}
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </button>
+                {filterMenu === 'day' ? (
+                  <div className="plan-filter-menu" role="listbox">
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={daysAll}
+                      className={`plan-filter-option ${daysAll ? 'plan-filter-option-on' : ''}`}
+                      onClick={() => {
+                        setDaysAll(true)
+                        setFilterMenu(null)
+                      }}
+                    >
+                      <span className="plan-filter-option-emoji" aria-hidden>
+                        🗓️
+                      </span>
+                      <span className="min-w-0 flex-1 text-left">
+                        <span className="block text-sm font-semibold text-[var(--ink)]">
+                          All days
+                        </span>
+                        <span className="block text-[11px] text-[var(--ink-muted)]">
+                          Whole trip on the map
+                        </span>
+                      </span>
+                    </button>
+                    {days.map((day, idx) => {
+                      const on = !daysAll && day === daySafe
+                      return (
+                        <button
+                          key={day}
+                          type="button"
+                          role="option"
+                          aria-selected={on}
+                          className={`plan-filter-option ${on ? 'plan-filter-option-on' : ''}`}
+                          onClick={() => {
+                            setDaysAll(false)
+                            setActiveDay(day)
+                            setFilterMenu(null)
+                          }}
+                        >
+                          <span className="plan-filter-option-emoji tabular-nums" aria-hidden>
+                            {idx + 1}
+                          </span>
+                          <span className="min-w-0 flex-1 text-left">
+                            <span className="block text-sm font-semibold text-[var(--ink)]">
+                              Day {idx + 1}
+                            </span>
+                            <span className="block text-[11px] text-[var(--ink-muted)]">
+                              {day}
+                            </span>
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
+            </div>
           </div>
         </div>
-      </div>
 
         <div className="absolute inset-0 z-0">
           <PlanMapView
@@ -961,7 +1003,15 @@ export function PlanBoard({
                   hidden={hiddenSections.has(section.id)}
                   days={days}
                   onSelect={() => setActiveSectionId(section.id)}
-                  onFocus={setFocusPlaceId}
+                  onFocus={(id) => {
+                    setFocusPlaceId(id)
+                    setFocusSuggestionId(null)
+                  }}
+                  onSchedule={schedulePlace}
+                  onUnschedule={(placeId) => {
+                    onChange(unschedulePlanPlace(trip, placeId))
+                    onStatus?.('Removed from day · still in list')
+                  }}
                   onRemove={(placeId) => onChange(removePlanPlace(trip, placeId))}
                 />
               ))}
@@ -1234,6 +1284,8 @@ function ListSection({
   days,
   onSelect,
   onFocus,
+  onSchedule,
+  onUnschedule,
   onRemove,
 }: {
   section: PlanSection
@@ -1243,8 +1295,12 @@ function ListSection({
   days: string[]
   onSelect: () => void
   onFocus: (id: string) => void
+  onSchedule: (placeId: string, day: string) => void
+  onUnschedule: (placeId: string) => void
   onRemove: (placeId: string) => void
 }) {
+  const [dayMenuFor, setDayMenuFor] = useState<string | null>(null)
+
   return (
     <section
       className={`plan-card ${active ? 'ring-1 ring-[var(--coral)]/45' : ''} ${
@@ -1270,6 +1326,7 @@ function ListSection({
       <div className="space-y-1.5">
         {places.map((p) => {
           const dayIdx = p.scheduledDay ? days.indexOf(p.scheduledDay) : -1
+          const menuOpen = dayMenuFor === p.id
           return (
             <div key={p.id} className="plan-list-row">
               <button
@@ -1280,16 +1337,64 @@ function ListSection({
                 {p.name}
               </button>
               {dayIdx >= 0 ? (
-                <span
+                <button
+                  type="button"
                   className="plan-day-badge shrink-0"
-                  title={`Scheduled on Day ${dayIdx + 1}`}
+                  title={`On Day ${dayIdx + 1} — tap to remove from day`}
+                  onClick={() => onUnschedule(p.id)}
                 >
-                  → D{dayIdx + 1}
-                </span>
+                  → D{dayIdx + 1} ✕
+                </button>
               ) : null}
+              <div className="relative shrink-0">
+                <button
+                  type="button"
+                  className="plan-day-mini"
+                  aria-expanded={menuOpen}
+                  aria-label={`Schedule ${p.name}`}
+                  title="Add to day"
+                  onClick={() =>
+                    setDayMenuFor((cur) => (cur === p.id ? null : p.id))
+                  }
+                >
+                  {dayIdx >= 0 ? `D${dayIdx + 1}` : 'Day'} ▾
+                </button>
+                {menuOpen ? (
+                  <div className="plan-day-pop" role="menu">
+                    {days.map((d, i) => (
+                      <button
+                        key={d}
+                        type="button"
+                        role="menuitem"
+                        className={`plan-day-pop-item ${p.scheduledDay === d ? 'plan-day-pop-item-on' : ''}`}
+                        onClick={() => {
+                          onSchedule(p.id, d)
+                          setDayMenuFor(null)
+                        }}
+                      >
+                        D{i + 1}
+                      </button>
+                    ))}
+                    {p.scheduledDay ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="plan-day-pop-item plan-day-pop-item-off"
+                        onClick={() => {
+                          onUnschedule(p.id)
+                          setDayMenuFor(null)
+                        }}
+                      >
+                        Off day
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
               <button
                 type="button"
                 className="shrink-0 px-1 text-[11px] text-rose-300/90"
+                title="Remove from list"
                 onClick={() => onRemove(p.id)}
               >
                 ✕

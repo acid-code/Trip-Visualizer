@@ -3,9 +3,13 @@ import type { PlanSection } from '../domain/types'
 
 type Props = {
   sections: PlanSection[]
+  /** Journey / “On the trip” pins — toggled separately from Discover lists. */
+  journeySection?: PlanSection | null
   showNearby: boolean
+  showJourney?: boolean
   hiddenSectionIds: Set<string>
   onToggleNearby: () => void
+  onToggleJourney?: () => void
   onToggleSection: (sectionId: string) => void
   className?: string
   /** Where the picker opens relative to the FAB */
@@ -42,9 +46,12 @@ function LayersGlyph() {
 /** Plan map layers — Nearby suggestions + saved lists. */
 export function PlanMapLayersControl({
   sections,
+  journeySection = null,
   showNearby,
+  showJourney = true,
   hiddenSectionIds,
   onToggleNearby,
+  onToggleJourney,
   onToggleSection,
   className = '',
   panelPlacement = 'below',
@@ -96,6 +103,30 @@ export function PlanMapLayersControl({
                 className={`h-2 w-2 rounded-full ${showNearby ? 'bg-[var(--coral)]' : 'bg-[var(--ink-muted)]/35'}`}
               />
             </button>
+            {journeySection && onToggleJourney ? (
+              <button
+                type="button"
+                className={`plan-layer-row ${showJourney ? 'plan-layer-row-on' : ''}`}
+                onClick={onToggleJourney}
+              >
+                <span
+                  className="flex h-6 w-6 items-center justify-center rounded-full text-xs"
+                  style={{ background: `${journeySection.color}33` }}
+                  aria-hidden
+                >
+                  {journeySection.icon || '🗺️'}
+                </span>
+                <span className="min-w-0 flex-1 text-left">
+                  <span className="block truncate text-[11px] font-semibold text-[var(--ink)]">
+                    Journey
+                  </span>
+                  <span className="block text-[9px] text-[var(--ink-muted)]">On the trip</span>
+                </span>
+                <span
+                  className={`h-2 w-2 rounded-full ${showJourney ? 'bg-[var(--coral)]' : 'bg-[var(--ink-muted)]/35'}`}
+                />
+              </button>
+            ) : null}
             {sections.map((section) => {
               const on = !hiddenSectionIds.has(section.id)
               return (

@@ -895,6 +895,44 @@ textarea {
   background: color-mix(in srgb, var(--coral) 12%, var(--paper));
 }
 
+.plan-day-pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.3rem);
+  z-index: 30;
+  display: flex;
+  max-width: min(16rem, 70vw);
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  border-radius: 0.85rem;
+  border: 1px solid var(--glass-border);
+  background: var(--paper);
+  padding: 0.4rem;
+  box-shadow: var(--shadow);
+}
+
+.plan-day-pop-item {
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--paper-2);
+  padding: 0.28rem 0.55rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+
+.plan-day-pop-item:hover,
+.plan-day-pop-item-on {
+  border-color: color-mix(in srgb, var(--coral) 45%, var(--glass-border));
+  background: color-mix(in srgb, var(--coral) 14%, var(--paper));
+  color: var(--ink);
+}
+
+.plan-day-pop-item-off {
+  border-color: color-mix(in srgb, #e11d48 35%, var(--glass-border));
+  color: color-mix(in srgb, #e11d48 80%, var(--ink));
+}
+
 .plan-day-badge {
   border-radius: 999px;
   background: color-mix(in srgb, var(--coral) 85%, #1c1917);
@@ -903,6 +941,10 @@ textarea {
   font-weight: 800;
   letter-spacing: 0.02em;
   color: #fff;
+}
+
+.plan-day-badge:hover {
+  background: color-mix(in srgb, #e11d48 75%, #1c1917);
 }
 
 .plan-days-rail {
