@@ -14,7 +14,6 @@ import {
   LabelStyle,
   NearFarScalar,
   OpenStreetMapImageryProvider,
-  PinBuilder,
   UrlTemplateImageryProvider,
   VerticalOrigin,
   Viewer,
@@ -33,7 +32,8 @@ import {
   type Entity,
   type EntityCluster,
 } from 'cesium'
-import type { TripItem, TripMeta } from '../domain/types'
+import type { ItemType, TripItem, TripMeta } from '../domain/types'
+import { TYPE_EMOJI } from '../domain/types'
 import { dayColor, dayColorByIndex } from '../data/dayTheme'
 import { stepOrderMap } from '../data/analytics'
 import { isValidCoord } from '../data/validate'
@@ -244,9 +244,156 @@ function configureTouchCameraControls(viewer: Viewer) {
 const STEP_PIN_SOURCE = 'trip-step-pins'
 
 /** Larger, heavier type so globe labels stay readable after Cesium rasterizes them. */
-const STEP_LABEL_FONT = '700 16px "DM Sans","Segoe UI",system-ui,sans-serif'
+const STEP_LABEL_FONT = '700 15px "DM Sans","Segoe UI",system-ui,sans-serif'
 const SEQ_LABEL_FONT = '700 15px "DM Sans","Segoe UI",system-ui,sans-serif'
-const CLUSTER_LABEL_FONT = '700 18px "DM Sans","Segoe UI",system-ui,sans-serif'
+
+/** Dark navy cluster bubble — not in DAY_COLORS (avoids clashing with day pins). */
+const JOURNEY_CLUSTER_BLUE = '#1e3a8a'
+
+const stepPinImageCache = new Map<string, string>()
+const clusterPinImageCache = new Map<number, string>()
+
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  const rr = Math.min(r, w / 2, h / 2)
+  ctx.beginPath()
+  ctx.moveTo(x + rr, y)
+  ctx.arcTo(x + w, y, x + w, y + h, rr)
+  ctx.arcTo(x + w, y + h, x, y + h, rr)
+  ctx.arcTo(x, y + h, x, y, rr)
+  ctx.arcTo(x, y, x + w, y, rr)
+  ctx.closePath()
+}
+
+/** Plan-style circular step pin: day color + type emoji + ordered badge. */
+function stepPinDataUrl(opts: {
+  fill: string
+  emoji: string
+  badge: string
+  selected: boolean
+}): string {
+  const key = `${opts.fill}|${opts.emoji}|${opts.badge}|${opts.selected ? 1 : 0}|sm`
+  const cached = stepPinImageCache.get(key)
+  if (cached) return cached
+
+  const size = 40
+  const dpr = 2
+  const canvas = document.createElement('canvas')
+  canvas.width = size * dpr
+  canvas.height = size * dpr
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return ''
+  ctx.scale(dpr, dpr)
+
+  const cx = size / 2
+  const cy = size / 2 - 0.5
+  const r = opts.selected ? 12.5 : 11
+
+  ctx.beginPath()
+  ctx.arc(cx, cy + 0.8, r, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(0,0,0,0.28)'
+  ctx.fill()
+
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fillStyle = opts.fill
+  ctx.fill()
+  ctx.lineWidth = opts.selected ? 2 : 1.5
+  ctx.strokeStyle = opts.selected ? '#fde68a' : 'rgba(255,255,255,0.95)'
+  ctx.stroke()
+  if (opts.selected) {
+    ctx.beginPath()
+    ctx.arc(cx, cy, r + 2.5, 0, Math.PI * 2)
+    ctx.lineWidth = 1.25
+    ctx.strokeStyle = 'rgba(15,23,42,0.88)'
+    ctx.stroke()
+  }
+
+  ctx.font =
+    '13px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(opts.emoji || '📍', cx, cy + 0.5)
+
+  const badge = opts.badge.trim()
+  if (badge) {
+    ctx.font = '700 8px "DM Sans","Segoe UI",system-ui,sans-serif'
+    const tw = ctx.measureText(badge).width
+    const bw = Math.max(12, tw + 6)
+    const bh = 10
+    const bx = cx - bw / 2
+    const by = cy + r - 4
+    roundRectPath(ctx, bx, by, bw, bh, 5)
+    ctx.fillStyle = 'rgba(15,23,42,0.92)'
+    ctx.fill()
+    ctx.fillStyle = '#fff'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(badge, cx, by + bh / 2 + 0.25)
+  }
+
+  const url = canvas.toDataURL('image/png')
+  stepPinImageCache.set(key, url)
+  return url
+}
+
+/** Cute dark-blue cluster circle with the step count in the middle. */
+function clusterPinDataUrl(count: number): string {
+  const n = Math.max(2, Math.min(999, Math.round(count)))
+  const cacheKey = n + 10000 // bump cache after size shrink
+  const cached = clusterPinImageCache.get(cacheKey)
+  if (cached) return cached
+
+  const size = n >= 100 ? 34 : n >= 10 ? 30 : 28
+  const dpr = 2
+  const canvas = document.createElement('canvas')
+  canvas.width = size * dpr
+  canvas.height = size * dpr
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return ''
+  ctx.scale(dpr, dpr)
+
+  const cx = size / 2
+  const cy = size / 2
+  const r = size / 2 - 2
+
+  ctx.beginPath()
+  ctx.arc(cx, cy + 0.8, r, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'
+  ctx.fill()
+
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fillStyle = JOURNEY_CLUSTER_BLUE
+  ctx.fill()
+  ctx.lineWidth = 1.75
+  ctx.strokeStyle = 'rgba(255,255,255,0.92)'
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.arc(cx, cy, r - 2.5, 0, Math.PI * 2)
+  ctx.lineWidth = 0.9
+  ctx.strokeStyle = 'rgba(147,197,253,0.5)'
+  ctx.stroke()
+
+  ctx.font = `700 ${n >= 100 ? 9 : n >= 10 ? 11 : 12}px "DM Sans","Segoe UI",system-ui,sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = '#fff'
+  ctx.fillText(String(n), cx, cy + 0.25)
+
+  const url = canvas.toDataURL('image/png')
+  clusterPinImageCache.set(cacheKey, url)
+  return url
+}
+
+function typeEmojiForItem(type: ItemType | string): string {
+  return TYPE_EMOJI[type as ItemType] ?? '📍'
+}
 
 function stepPinDataSource(viewer: Viewer): CustomDataSource | undefined {
   return viewer.dataSources.getByName(STEP_PIN_SOURCE)[0] as CustomDataSource | undefined
@@ -277,22 +424,17 @@ function eachTripEntity(viewer: Viewer, visit: (entity: Entity) => void) {
 /**
  * Merge overlapping step pins when zoomed out.
  * Only the trip-step data source is clustered, so explore / temp / path dots
- * cannot inflate the number. Labels are not clustered (point+label on one pin
- * used to double-count). Clustering turns off when the camera is close.
+ * cannot inflate the number. Uses a dark-blue circle with the count inside
+ * (distinct from day pin colors). Clustering turns off when the camera is close.
  */
 function configureStepPinClustering(viewer: Viewer, source: CustomDataSource) {
   const cluster: EntityCluster = source.clustering
   cluster.enabled = false
-  cluster.pixelRange = 40
+  cluster.pixelRange = 44
   cluster.minimumClusterSize = 2
-  cluster.clusterBillboards = false
+  cluster.clusterBillboards = true
   cluster.clusterLabels = false
-  cluster.clusterPoints = true
-
-  const pinBuilder = new PinBuilder()
-  const clusterIcon = pinBuilder
-    .fromColor(Color.fromCssColorString('#ff6b4a'), 56)
-    .toDataURL()
+  cluster.clusterPoints = false
 
   const onCluster: EntityCluster.newClusterCallback = (clusteredEntities, clusterObj) => {
     const pinIds = new Set<string>()
@@ -307,23 +449,12 @@ function configureStepPinClustering(viewer: Viewer, source: CustomDataSource) {
       return
     }
     clusterObj.billboard.show = true
-    clusterObj.billboard.image = clusterIcon
-    clusterObj.billboard.verticalOrigin = VerticalOrigin.BOTTOM
+    clusterObj.billboard.image = clusterPinDataUrl(n)
+    clusterObj.billboard.verticalOrigin = VerticalOrigin.CENTER
+    clusterObj.billboard.horizontalOrigin = HorizontalOrigin.CENTER
     clusterObj.billboard.disableDepthTestDistance = Number.POSITIVE_INFINITY
-    clusterObj.label.show = true
-    clusterObj.label.text = String(n)
-    clusterObj.label.font = CLUSTER_LABEL_FONT
-    clusterObj.label.fillColor = Color.WHITE
-    clusterObj.label.outlineColor = Color.fromCssColorString('#7c2d12')
-    clusterObj.label.outlineWidth = 2
-    clusterObj.label.style = LabelStyle.FILL_AND_OUTLINE
-    clusterObj.label.showBackground = true
-    clusterObj.label.backgroundColor = Color.fromCssColorString('#c2410c')
-    clusterObj.label.backgroundPadding = new Cartesian2(8, 4)
-    clusterObj.label.verticalOrigin = VerticalOrigin.CENTER
-    clusterObj.label.horizontalOrigin = HorizontalOrigin.CENTER
-    clusterObj.label.disableDepthTestDistance = Number.POSITIVE_INFINITY
-    clusterObj.label.pixelOffset = new Cartesian2(0, -24)
+    clusterObj.billboard.scale = 1
+    clusterObj.label.show = false
   }
   cluster.clusterEvent.addEventListener(onCluster)
   cluster.enabled = true
@@ -530,22 +661,29 @@ function addBillboard(
   },
 ) {
   const selected = opts.selected
+  const fillCss = opts.color.toCssColorString()
+  const emoji = typeEmojiForItem(item.type)
   const collection = stepPinDataSource(viewer)?.entities ?? viewer.entities
   collection.add({
     id: `trip:${sanitizeEntityId(item.id)}${opts.suffix ?? ''}`,
     name: item.title,
     position: Cartesian3.fromDegrees(lon, lat, 0),
-    point: {
-      pixelSize: selected ? 16 : item.type === 'hotel' ? 13 : 10,
-      color: opts.color,
-      outlineColor: Color.WHITE,
-      outlineWidth: selected ? 3 : 2,
+    billboard: {
+      image: stepPinDataUrl({
+        fill: fillCss,
+        emoji,
+        badge: opts.badge,
+        selected,
+      }),
+      verticalOrigin: VerticalOrigin.CENTER,
+      horizontalOrigin: HorizontalOrigin.CENTER,
       heightReference: HeightReference.NONE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      scaleByDistance: new NearFarScalar(5e3, 1.35, 2.5e6, 0.7),
+      scaleByDistance: new NearFarScalar(5e3, 1.05, 2.5e6, 0.65),
+      scale: selected ? 1.06 : 1,
     },
     label: {
-      text: selected ? item.title : opts.badge,
+      text: item.title,
       font: STEP_LABEL_FONT,
       fillColor: Color.fromCssColorString('#1c1917'),
       outlineColor: Color.WHITE,
@@ -553,18 +691,21 @@ function addBillboard(
       style: LabelStyle.FILL_AND_OUTLINE,
       verticalOrigin: VerticalOrigin.BOTTOM,
       horizontalOrigin: HorizontalOrigin.CENTER,
-      pixelOffset: new Cartesian2(0, -16),
+      pixelOffset: new Cartesian2(0, -18),
       heightReference: HeightReference.NONE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
       showBackground: true,
       backgroundColor: Color.fromCssColorString('#fffaf3'),
       backgroundPadding: new Cartesian2(9, 5),
-      show: true,
+      show: selected,
       distanceDisplayCondition: new DistanceDisplayCondition(0.0, 4.5e5),
     },
     description: sanitizeEntityId(item.id),
     properties: {
       badgeText: opts.badge,
+      fillCss,
+      emoji,
+      pinKind: 'step',
     },
   })
 }
@@ -840,29 +981,46 @@ export function applySelectionHighlight(
 
     const itemId = parseTripItemId(id)
     const isSelected = !!selectedId && itemId === selectedId
-    if (entity.point) {
+    const isPin = !id.endsWith(':arc') && !id.endsWith(':route')
+    if (!isPin) return
+
+    const isFocused =
+      focusedEntityId != null
+        ? id === focusedEntityId
+        : !id.endsWith(':b')
+
+    const prop = (name: string): string => {
+      const p = entity.properties?.[name]
+      if (p == null) return ''
+      const v = typeof p.getValue === 'function' ? p.getValue() : p
+      return v != null ? String(v) : ''
+    }
+
+    if (entity.billboard && prop('pinKind') === 'step') {
+      const fill = prop('fillCss') || '#3b82f6'
+      const emoji = prop('emoji') || '📍'
+      const badge = prop('badgeText') || ''
+      entity.billboard.image = new ConstantProperty(
+        stepPinDataUrl({
+          fill,
+          emoji,
+          badge,
+          selected: isSelected,
+        }),
+      )
+      entity.billboard.scale = new ConstantProperty(isSelected ? 1.06 : 1)
+    } else if (entity.point) {
       entity.point.pixelSize = new ConstantProperty(isSelected ? 16 : 11)
       entity.point.outlineWidth = new ConstantProperty(isSelected ? 3 : 2)
     }
+
     if (entity.label) {
-      const isPin = !id.endsWith(':arc') && !id.endsWith(':route')
-      if (!isPin) return
-      const isFocused =
-        focusedEntityId != null
-          ? id === focusedEntityId
-          : !id.endsWith(':b')
-      const badgeProp = entity.properties?.badgeText
-      const badge =
-        badgeProp && typeof badgeProp.getValue === 'function'
-          ? badgeProp.getValue()
-          : badgeProp
       if (isSelected && isFocused) {
         entity.label.text = new ConstantProperty(entity.name ?? '')
-      } else if (badge != null && badge !== '') {
-        entity.label.text = new ConstantProperty(String(badge))
+        entity.label.show = new ConstantProperty(true)
+      } else {
+        entity.label.show = new ConstantProperty(false)
       }
-      // Badges always remain visible on pins
-      entity.label.show = new ConstantProperty(true)
     }
   })
   kickRender(viewer)
