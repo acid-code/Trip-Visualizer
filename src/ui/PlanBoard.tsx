@@ -144,6 +144,8 @@ export function PlanBoard({
   const [packsOpen, setPacksOpen] = useState(false)
   const suggestAbortRef = useRef<AbortController | null>(null)
   const filterMenuRef = useRef<HTMLDivElement>(null)
+  const sheetRef = useRef<HTMLDivElement>(null)
+  const [sheetHeight, setSheetHeight] = useState(0)
 
   const daySafe = days.includes(activeDay) ? activeDay : (days[0] ?? '')
 
@@ -224,6 +226,16 @@ export function PlanBoard({
     setSelectedUnscheduledId(null)
   }, [mode])
 
+  useEffect(() => {
+    const el = sheetRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const measure = () => setSheetHeight(Math.round(el.getBoundingClientRect().height))
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [mode])
+
   function placesForDay(day: string) {
     return trip.planPlaces
       .filter((p) => p.scheduledDay === day)
@@ -232,6 +244,11 @@ export function PlanBoard({
 
   useEffect(() => {
     if (mode !== 'discover') return
+    if (!showNearbyPins) {
+      suggestAbortRef.current?.abort()
+      setSuggestBusy(false)
+      return
+    }
     if (pinnedSearch) return
     const fallback = tripMapAnchor(trip)
     const anchor = mapView
@@ -275,6 +292,7 @@ export function PlanBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     mode,
+    showNearbyPins,
     suggestCat,
     placesEnabled,
     googleApiKey,
@@ -286,6 +304,22 @@ export function PlanBoard({
     mapView?.radiusM,
     pinnedSearch,
   ])
+
+  function toggleNearbyLayer() {
+    setShowNearbyPins((on) => {
+      if (on) {
+        suggestAbortRef.current?.abort()
+        setSuggestions([])
+        setSuggestBusy(false)
+        setSuggestError(null)
+        setFocusSuggestionId(null)
+        setDetailPlace(null)
+        setPinnedSearch(null)
+        setSearchQuery('')
+      }
+      return !on
+    })
+  }
 
   function toggleSectionLayer(id: string) {
     setHiddenSections((prev) => {
@@ -542,7 +576,7 @@ export function PlanBoard({
           sections={listSections}
           showNearby={showNearbyPins}
           hiddenSectionIds={hiddenSections}
-          onToggleNearby={() => setShowNearbyPins((v) => !v)}
+          onToggleNearby={toggleNearbyLayer}
           onToggleSection={toggleSectionLayer}
           panelPlacement="below"
         />
@@ -710,6 +744,7 @@ export function PlanBoard({
           focusPlaceId={focusPlaceId}
           focusSuggestionId={focusSuggestionId}
           linkedItemTypes={linkedItemTypes}
+          focusPaddingBottom={sheetHeight > 0 ? sheetHeight + 12 : 280}
           onPlaceClick={(id) => {
             setFocusPlaceId(id)
             setFocusSuggestionId(null)
@@ -750,6 +785,7 @@ export function PlanBoard({
       {/* Bottom sheet */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex max-h-[min(64vh,32rem)] flex-col pt-[6.75rem]">
         <div
+          ref={sheetRef}
           className={`plan-itin-sheet pointer-events-auto mx-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[1.75rem] ${TOUCH_SCROLL_Y}`}
         >
           <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-[var(--ink-muted)]/35" />
@@ -780,6 +816,7 @@ export function PlanBoard({
                 </div>
               ) : null}
 
+              {showNearbyPins ? (
               <div>
                 <div className="mb-1.5 flex items-center justify-between gap-2">
                   <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
@@ -857,6 +894,7 @@ export function PlanBoard({
                   ) : null}
                 </div>
               </div>
+              ) : null}
 
               {listSections.map((section) => (
                 <ListSection

@@ -72,28 +72,28 @@ export function PlanMapLayersControl({
     <div ref={rootRef} className={`pointer-events-auto relative inline-flex ${className}`}>
       {open ? (
         <div
-          className={`map-layers-panel absolute right-0 z-50 min-w-[11.5rem] ${
-            panelPlacement === 'below' ? 'top-[calc(100%+0.5rem)]' : 'bottom-[calc(100%+0.5rem)]'
+          className={`map-layers-panel plan-map-layers-panel absolute right-0 z-50 ${
+            panelPlacement === 'below' ? 'top-[calc(100%+0.4rem)]' : 'bottom-[calc(100%+0.4rem)]'
           }`}
         >
-          <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
+          <div className="mb-1 px-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
             On the map
           </div>
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-0.5">
             <button
               type="button"
               className={`plan-layer-row ${showNearby ? 'plan-layer-row-on' : ''}`}
               onClick={onToggleNearby}
             >
-              <span className="text-base" aria-hidden>
+              <span className="text-sm" aria-hidden>
                 ✨
               </span>
               <span className="min-w-0 flex-1 text-left">
-                <span className="block text-[12px] font-semibold text-[var(--ink)]">Nearby</span>
-                <span className="block text-[10px] text-[var(--ink-muted)]">Suggestions</span>
+                <span className="block text-[11px] font-semibold text-[var(--ink)]">Nearby</span>
+                <span className="block text-[9px] text-[var(--ink-muted)]">Suggestions</span>
               </span>
               <span
-                className={`h-2.5 w-2.5 rounded-full ${showNearby ? 'bg-[var(--coral)]' : 'bg-[var(--ink-muted)]/35'}`}
+                className={`h-2 w-2 rounded-full ${showNearby ? 'bg-[var(--coral)]' : 'bg-[var(--ink-muted)]/35'}`}
               />
             </button>
             {sections.map((section) => {
@@ -106,17 +106,17 @@ export function PlanMapLayersControl({
                   onClick={() => onToggleSection(section.id)}
                 >
                   <span
-                    className="flex h-7 w-7 items-center justify-center rounded-full text-sm"
+                    className="flex h-6 w-6 items-center justify-center rounded-full text-xs"
                     style={{ background: `${section.color}33` }}
                     aria-hidden
                   >
                     {section.icon}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-left text-[12px] font-semibold text-[var(--ink)]">
+                  <span className="min-w-0 flex-1 truncate text-left text-[11px] font-semibold text-[var(--ink)]">
                     {section.title}
                   </span>
                   <span
-                    className={`h-2.5 w-2.5 rounded-full ${on ? 'bg-[var(--coral)]' : 'bg-[var(--ink-muted)]/35'}`}
+                    className={`h-2 w-2 rounded-full ${on ? 'bg-[var(--coral)]' : 'bg-[var(--ink-muted)]/35'}`}
                   />
                 </button>
               )

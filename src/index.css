@@ -652,10 +652,34 @@ textarea {
   height: 100%;
 }
 
-/* Zoom +/- sits under Journey|Plan switcher (top-right chrome). */
+/* Zoom +/- under Journey|Plan + layers FAB (top-right chrome). */
 .plan-phone .maplibre-plan-root .maplibregl-ctrl-top-right {
-  top: max(4.5rem, calc(env(safe-area-inset-top) + 3.6rem));
+  top: max(7.85rem, calc(env(safe-area-inset-top) + 6.85rem));
   right: 0.65rem;
+}
+
+/* Compact Plan layers menu — stays above the Discover/Days sheet */
+.plan-map-layers-panel.map-layers-panel {
+  width: min(13.25rem, calc(100vw - 2.5rem));
+  /* Leave a gap above the bottom sheet (sheet max ~64vh / 32rem). */
+  max-height: min(10.5rem, calc(100dvh - min(64vh, 32rem) - 9.25rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 0.45rem 0.4rem;
+  border-radius: 0.95rem;
+}
+
+.plan-map-layers-panel .plan-layer-row {
+  gap: 0.4rem;
+  padding: 0.28rem 0.35rem;
+  border-radius: 0.65rem;
+}
+
+.plan-map-layers-panel .plan-layer-row span.flex {
+  height: 1.55rem;
+  width: 1.55rem;
+  font-size: 0.75rem;
 }
 
 [data-theme="light"] .maplibre-plan-root {

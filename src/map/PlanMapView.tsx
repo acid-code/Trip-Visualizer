@@ -63,6 +63,11 @@ type Props = {
   onViewportIdle?: (view: { lat: number; lon: number; radiusM: number }) => void
   /** Journey step type by linked item id — pins use type emoji instead of section icon. */
   linkedItemTypes?: Record<string, ItemType>
+  /**
+   * Bottom padding (px) when focusing a pin — keeps it in the visible map
+   * above the Discover/Days sheet instead of under it.
+   */
+  focusPaddingBottom?: number
   className?: string
 }
 
@@ -142,6 +147,7 @@ export function PlanMapView({
   onSuggestionClick,
   onViewportIdle,
   linkedItemTypes,
+  focusPaddingBottom = 0,
   className = '',
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -308,14 +314,24 @@ export function PlanMapView({
     if (focusSuggestionId) {
       const focus = suggestions.find((s) => s.id === focusSuggestionId)
       if (focus && isValidCoord(focus.lat, focus.lon)) {
-        map.easeTo({ center: [focus.lon, focus.lat], zoom: Math.max(map.getZoom(), 12) })
+        map.easeTo({
+          center: [focus.lon, focus.lat],
+          zoom: Math.max(map.getZoom(), 12),
+          padding: { top: 48, bottom: Math.max(0, focusPaddingBottom), left: 40, right: 40 },
+          duration: 450,
+        })
         return
       }
     }
     if (focusPlaceId) {
       const focus = visible.find((p) => p.id === focusPlaceId)
       if (focus) {
-        map.easeTo({ center: [focus.lon!, focus.lat!], zoom: Math.max(map.getZoom(), 11) })
+        map.easeTo({
+          center: [focus.lon!, focus.lat!],
+          zoom: Math.max(map.getZoom(), 11),
+          padding: { top: 48, bottom: Math.max(0, focusPaddingBottom), left: 40, right: 40 },
+          duration: 450,
+        })
         return
       }
     }
@@ -330,7 +346,16 @@ export function PlanMapView({
     const bounds = new maplibregl.LngLatBounds()
     for (const p of visible) bounds.extend([p.lon!, p.lat!])
     if (!bounds.isEmpty()) {
-      map.fitBounds(bounds, { padding: 56, maxZoom: 12, duration: 600 })
+      map.fitBounds(bounds, {
+        padding: {
+          top: 56,
+          bottom: Math.max(56, focusPaddingBottom || 56),
+          left: 56,
+          right: 56,
+        },
+        maxZoom: 12,
+        duration: 600,
+      })
     }
   }, [
     meta,
@@ -344,6 +369,7 @@ export function PlanMapView({
     focusPlaceId,
     focusSuggestionId,
     linkedItemTypes,
+    focusPaddingBottom,
   ])
 
   return (
