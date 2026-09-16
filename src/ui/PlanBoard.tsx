@@ -663,9 +663,12 @@ export function PlanBoard({
   return (
     <div className="plan-phone relative flex h-full min-h-0 flex-col">
       {/* Map band — only the area above Discover/Days; Nearby uses this viewport center */}
-      <div className="relative z-0 min-h-[11rem] min-w-0 flex-1">
+      <div className="relative z-0 min-h-[11rem] min-w-0 flex-1" data-coach="plan-map">
         {/* Layers FAB — mirrors Journey map layers, under Journey|Plan */}
-        <div className="pointer-events-auto absolute right-3 top-[max(4.35rem,calc(env(safe-area-inset-top)+3.45rem))] z-20">
+        <div
+          className="pointer-events-auto absolute right-3 top-[max(4.35rem,calc(env(safe-area-inset-top)+3.45rem))] z-20"
+          data-coach="plan-layers"
+        >
           <PlanMapLayersControl
             sections={listSections}
             journeySection={journeySection}
@@ -684,15 +687,17 @@ export function PlanBoard({
         {/* Top chrome — left side only so Journey/Plan switcher stays clear */}
         <div className="plan-phone-top pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-[max(0.55rem,env(safe-area-inset-top))]">
           <div className="pointer-events-auto flex max-w-[calc(100%-9.5rem)] flex-col gap-2">
-            <SegmentedControl
-              ariaLabel="Plan mode"
-              value={mode}
-              onChange={setMode}
-              options={[
-                { id: 'discover', label: 'Discover' },
-                { id: 'days', label: 'Days' },
-              ]}
-            />
+            <div data-coach="plan-mode-tabs">
+              <SegmentedControl
+                ariaLabel="Plan mode"
+                value={mode}
+                onChange={setMode}
+                options={[
+                  { id: 'discover', label: 'Discover' },
+                  { id: 'days', label: 'Days' },
+                ]}
+              />
+            </div>
             <div ref={filterMenuRef} className="flex flex-wrap items-start gap-1.5">
               {mode === 'discover' ? (
                 <div className="relative w-fit">
@@ -940,7 +945,10 @@ export function PlanBoard({
       ) : null}
 
       {/* Discover / Days sheet — owns the bottom; map is only above this */}
-      <div className="relative z-10 flex h-[min(46vh,21rem)] shrink-0 flex-col">
+      <div
+        className="relative z-10 flex h-[min(46vh,21rem)] shrink-0 flex-col"
+        data-coach="plan-sheet"
+      >
         <div
           className={`plan-itin-sheet pointer-events-auto mx-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[1.75rem] ${TOUCH_SCROLL_Y}`}
         >

@@ -17,6 +17,12 @@ export type FeatureTipVisual =
   | 'edit-trip'
   | 'new-trip'
   | 'hotel-stay'
+  | 'plan-discover'
+  | 'plan-days'
+  | 'plan-layers'
+
+/** Seen-id for the Plan-mode arrow overlay (not a FeatureGuide card). */
+export const PLAN_START_COACH_ID = 'plan-start-coach'
 
 export type FeatureTip = {
   id: string
@@ -104,6 +110,24 @@ export const FEATURE_TIPS: FeatureTip[] = [
     title: 'Hotels span every night',
     body: 'Add a hotel once with check-in and check-out. The app treats it as your stay for every night in between — filter to a middle day and that hotel still shows up, even though check-in was earlier.',
     visual: 'hotel-stay',
+  },
+  {
+    id: 'plan-mode-discover',
+    title: 'Plan · Discover',
+    body: 'Switch to Plan to collect ideas before locking times. Discover shows nearby suggestions and your lists — save must-sees, food, and stays without scheduling yet.',
+    visual: 'plan-discover',
+  },
+  {
+    id: 'plan-mode-days',
+    title: 'Plan · Days',
+    body: 'On Days, drag unscheduled list places into day buckets, reorder with ↑↓, and optimize a day. Journey is for exact times and drives later.',
+    visual: 'plan-days',
+  },
+  {
+    id: 'plan-mode-layers',
+    title: 'Plan map layers',
+    body: 'The layers control toggles Nearby suggestions, Journey pins, and which lists appear on the map. In Days, Nearby stays off and Journey stays on so you can focus on the itinerary.',
+    visual: 'plan-layers',
   },
 ]
 

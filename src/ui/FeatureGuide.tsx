@@ -344,6 +344,81 @@ function TipFrame({ visual }: { visual: FeatureTipVisual }) {
             </div>
           </>
         ) : null}
+
+        {visual === 'plan-discover' ? (
+          <>
+            <div className="absolute left-3 top-3 flex rounded-full border border-white/25 bg-black/50 p-0.5 text-[9px] font-semibold">
+              <span className="rounded-full bg-orange-500 px-2.5 py-1 text-white">Discover</span>
+              <span className="px-2.5 py-1 text-white/60">Days</span>
+            </div>
+            <div className="absolute left-[28%] top-[36%] h-2.5 w-2.5 rounded-full bg-amber-400 shadow" />
+            <div className="absolute left-[52%] top-[42%] h-2.5 w-2.5 rounded-full bg-amber-400 shadow" />
+            <div className="absolute left-[64%] top-[30%] h-2.5 w-2.5 rounded-full bg-sky-400 shadow" />
+            <div className="absolute bottom-3 left-3 right-3 rounded-2xl border border-white/15 bg-[var(--paper)] p-2.5 text-[var(--ink)] shadow-xl">
+              <div className="text-[9px] font-semibold uppercase tracking-wide text-stone-400">
+                Must see
+              </div>
+              <div className="mt-1.5 space-y-1">
+                <div className="h-5 rounded-lg bg-orange-100" />
+                <div className="h-5 rounded-lg bg-stone-100" />
+              </div>
+            </div>
+            <Caption>Save ideas to lists</Caption>
+          </>
+        ) : null}
+
+        {visual === 'plan-days' ? (
+          <>
+            <div className="absolute left-3 top-3 flex rounded-full border border-white/25 bg-black/50 p-0.5 text-[9px] font-semibold">
+              <span className="px-2.5 py-1 text-white/60">Discover</span>
+              <span className="rounded-full bg-orange-500 px-2.5 py-1 text-white">Days</span>
+            </div>
+            <div className="absolute bottom-3 left-2 right-2 flex gap-2">
+              <div className="w-[38%] rounded-xl border border-white/15 bg-[var(--paper)] p-2 text-[var(--ink)]">
+                <div className="text-[8px] font-semibold uppercase text-stone-400">Lists</div>
+                <div className="mt-1 h-4 rounded bg-stone-100" />
+                <div className="mt-1 h-4 rounded bg-stone-100" />
+              </div>
+              <div className="flex-1 space-y-1.5">
+                <div className="rounded-xl border border-orange-300/50 bg-orange-500/20 p-2">
+                  <div className="text-[9px] font-bold text-orange-200">Day 1</div>
+                  <div className="mt-1 h-3 rounded bg-white/25" />
+                  <div className="mt-1 h-3 rounded bg-white/25" />
+                </div>
+                <div className="rounded-xl border border-white/15 bg-white/10 p-2">
+                  <div className="text-[9px] font-bold text-white/70">Day 2</div>
+                </div>
+              </div>
+            </div>
+            <Caption>Schedule into days</Caption>
+          </>
+        ) : null}
+
+        {visual === 'plan-layers' ? (
+          <>
+            <div className="absolute right-3 top-3 w-[7.5rem] rounded-2xl border border-white/20 bg-[#0f1a24]/95 p-2 shadow-xl">
+              <div className="text-[8px] font-semibold uppercase tracking-wide text-orange-300/90">
+                On the map
+              </div>
+              <div className="mt-1.5 space-y-1">
+                {['Nearby', 'Journey', 'Must see', 'Food'].map((label, i) => (
+                  <div
+                    key={label}
+                    className="flex items-center justify-between rounded-lg bg-white/10 px-1.5 py-1"
+                  >
+                    <span className="text-[9px] text-white/90">{label}</span>
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${i < 3 ? 'bg-orange-400' : 'bg-white/30'}`}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <Pin className="absolute left-[40%] top-[48%]" color="#38bdf8" />
+            <Pin className="absolute left-[58%] top-[40%]" color="#fb923c" />
+            <Caption>Toggle layers</Caption>
+          </>
+        ) : null}
       </div>
     </div>
   )

@@ -108,6 +108,7 @@ import {
 import { hydrateGooglePlacePhoto } from './data/placesGoogle'
 import {
   FEATURE_TIPS,
+  PLAN_START_COACH_ID,
   parseSeenTipIds,
   serializeSeenTipIds,
   unseenFeatureTips,
@@ -156,6 +157,7 @@ import {
 } from './ui/TripMetaDialog'
 import { TripSwitcher } from './ui/TripSwitcher'
 import { TripStartCoach } from './ui/TripStartCoach'
+import { PlanStartCoach } from './ui/PlanStartCoach'
 import type { RangeReconcileMode } from './data/dayBases'
 
 type NavTab = 'timeline' | 'charts' | 'settings'
@@ -278,7 +280,9 @@ export default function App() {
     null,
   )
   const [startCoachOpen, setStartCoachOpen] = useState(false)
+  const [planStartCoachOpen, setPlanStartCoachOpen] = useState(false)
   const guideAutoShownRef = useRef(false)
+  const planCoachShownRef = useRef(false)
   /** When true, keep the example trip alongside personal trips (user opened it explicitly). */
   const keepExampleRef = useRef(false)
   const routesForTripRef = useRef<string | null>(null)
@@ -375,13 +379,20 @@ export default function App() {
       setColorMode(mode)
       applyColorMode(mode)
       const savedMode = await getSetting('appMode')
-      setAppMode(savedMode === 'plan' ? 'plan' : 'journey')
+      const bootMode = savedMode === 'plan' ? 'plan' : 'journey'
+      setAppMode(bootMode)
       const walkPref = await getSetting('walkApp')
       setWalkApp(isWalkAppPref(walkPref) ? walkPref : 'maps')
       const seen = parseSeenTipIds(await getSetting('featureGuideSeen'))
       setSeenTipIds(seen)
       const unseen = unseenFeatureTips(seen)
-      if (unseen.length && !guideAutoShownRef.current) {
+      const needsPlanCoach = bootMode === 'plan' && !seen.has(PLAN_START_COACH_ID)
+      if (needsPlanCoach && !planCoachShownRef.current) {
+        // Prefer the Plan arrow coach when landing in Plan; skip modal tips this boot.
+        planCoachShownRef.current = true
+        guideAutoShownRef.current = true
+        window.setTimeout(() => setPlanStartCoachOpen(true), 420)
+      } else if (unseen.length && !guideAutoShownRef.current) {
         guideAutoShownRef.current = true
         setGuideTips(unseen)
         setGuideOpen(true)
@@ -2046,6 +2057,10 @@ export default function App() {
                   setAiOpen(false)
                   setLowerMode('none')
                   if (active) void persist(ensurePlanScaffold(active))
+                  if (!seenTipIds.has(PLAN_START_COACH_ID) && !planCoachShownRef.current) {
+                    planCoachShownRef.current = true
+                    window.setTimeout(() => setPlanStartCoachOpen(true), 320)
+                  }
                 }
               }}
               options={[
@@ -2465,6 +2480,13 @@ export default function App() {
         open={startCoachOpen}
         tripName={active?.meta.name}
         onDismiss={() => setStartCoachOpen(false)}
+      />
+      <PlanStartCoach
+        open={planStartCoachOpen}
+        onDismiss={() => {
+          setPlanStartCoachOpen(false)
+          void markTipsSeen([PLAN_START_COACH_ID])
+        }}
       />
     </div>
   )
