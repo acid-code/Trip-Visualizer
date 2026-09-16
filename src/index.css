@@ -359,8 +359,8 @@ textarea {
   max-height: 0;
 }
 .book-volume-open .book-pages-ai-review {
-  height: min(48vh, 22rem);
-  max-height: min(48vh, 22rem);
+  height: min(30vh, 13rem);
+  max-height: min(30vh, 13rem);
 }
 
 .book-pages-desktop {
@@ -609,6 +609,27 @@ textarea {
   border: 1px solid var(--glass-border);
 }
 
+.plan-layer-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  border-radius: 0.85rem;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.plan-layer-row:hover {
+  background: var(--paper-2);
+}
+
+.plan-layer-row-on {
+  border-color: color-mix(in srgb, var(--coral) 35%, var(--glass-border));
+  background: color-mix(in srgb, var(--coral) 10%, var(--paper));
+}
+
 .settings-card {
   border-radius: 1rem;
   border: 1px solid var(--glass-border);
@@ -849,6 +870,134 @@ textarea {
   border-color: color-mix(in srgb, var(--coral) 45%, var(--glass-border));
   color: var(--ink);
   background: color-mix(in srgb, var(--coral) 12%, var(--paper));
+}
+
+.plan-day-badge {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--coral) 85%, #1c1917);
+  padding: 0.15rem 0.45rem;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #fff;
+}
+
+.plan-days-rail {
+  border-radius: 1rem;
+  border: 1px solid var(--glass-border);
+  background: color-mix(in srgb, var(--paper-2) 88%, transparent);
+  padding: 0.45rem;
+}
+
+.plan-days-rail-label {
+  margin-bottom: 0.45rem;
+  padding: 0 0.2rem;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.plan-unscheduled-chip {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid var(--glass-border);
+  background: var(--paper);
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.plan-unscheduled-chip-on {
+  border-color: color-mix(in srgb, var(--coral) 55%, var(--glass-border));
+  background: color-mix(in srgb, var(--coral) 14%, var(--paper));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--coral) 25%, transparent);
+}
+
+.plan-day-bucket {
+  border-radius: 1rem;
+  border: 1px solid var(--glass-border);
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  padding: 0.55rem 0.55rem 0.45rem;
+}
+
+.plan-day-bucket-on {
+  border-color: color-mix(in srgb, var(--coral) 40%, var(--glass-border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--coral) 18%, transparent);
+}
+
+.plan-day-opt {
+  display: inline-flex;
+  height: 1.85rem;
+  width: 1.85rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #a78bfa 45%, var(--glass-border));
+  background: color-mix(in srgb, #a78bfa 16%, var(--paper-2));
+  color: #c4b5fd;
+}
+
+.plan-day-opt:disabled {
+  opacity: 0.35;
+}
+
+.plan-bucket-stop {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 0.65rem;
+  border: 1px solid transparent;
+  background: var(--paper-2);
+  padding: 0.28rem 0.35rem;
+}
+
+.plan-bucket-num {
+  display: inline-flex;
+  height: 1.15rem;
+  width: 1.15rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--coral) 22%, var(--paper));
+  font-size: 0.58rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.plan-bucket-move {
+  display: inline-flex;
+  height: 1.35rem;
+  width: 1.35rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.4rem;
+  border: 1px solid var(--glass-border);
+  background: var(--paper);
+  font-size: 0.65rem;
+  line-height: 1;
+  color: var(--ink-muted);
+}
+
+.plan-bucket-move:disabled {
+  opacity: 0.3;
+}
+
+.plan-drop-zone {
+  margin-top: 0.35rem;
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1.5px dashed color-mix(in srgb, var(--coral) 55%, var(--glass-border));
+  background: color-mix(in srgb, var(--coral) 10%, transparent);
+  padding: 0.45rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--coral);
 }
 
 .plan-add-stop-card {

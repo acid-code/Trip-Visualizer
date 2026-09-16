@@ -3,13 +3,13 @@ import type { PlanPlace, PlanSection, TripRecord } from '../domain/types'
 import { listTripDays } from '../data/dayBases'
 import {
   addPlanPlace,
-  dayTravelLegs,
   JOURNEY_SECTION_TITLE,
   optimizeDayRoute,
   planMaybeSection,
   planSectionForExploreCategory,
   promotePlanPlaceToStep,
   removePlanPlace,
+  reorderDayPlaces,
   unschedulePlanPlace,
   upsertPlanPlaceToSection,
 } from '../data/planBoard'
@@ -36,6 +36,8 @@ import { isValidCoord } from '../data/validate'
 import { PlanMapView } from '../map/PlanMapView'
 import { Chip, IconButton, SegmentedControl } from './primitives'
 import { ExplorePlaceDetailSheet } from './ExplorePlaceDetailSheet'
+import { PlanMapLayersControl } from './PlanMapLayersControl'
+import { AiSparkIcon } from './AiCoachSheet'
 import { TOUCH_SCROLL_X, TOUCH_SCROLL_Y } from './scrollGesture'
 
 type Props = {
@@ -137,6 +139,7 @@ export function PlanBoard({
   const [searchBusy, setSearchBusy] = useState(false)
   /** Recommendation search replaces Nearby with a single loaded place. */
   const [pinnedSearch, setPinnedSearch] = useState<ExplorePlace | null>(null)
+  const [selectedUnscheduledId, setSelectedUnscheduledId] = useState<string | null>(null)
   const [aiPrompt, setAiPrompt] = useState('')
   const [packsOpen, setPacksOpen] = useState(false)
   const suggestAbortRef = useRef<AbortController | null>(null)
@@ -169,8 +172,16 @@ export function PlanBoard({
   }, [mode, daySafe, daysAll])
 
   const unscheduled = trip.planPlaces.filter((p) => !p.scheduledDay)
-  const bySection = (sectionId: string) =>
+  const bySectionUnscheduled = (sectionId: string) =>
     unscheduled.filter((p) => p.sectionId === sectionId)
+  const bySectionAll = (sectionId: string) =>
+    trip.planPlaces.filter((p) => p.sectionId === sectionId)
+
+  const linkedItemTypes = useMemo(() => {
+    const map: Record<string, (typeof trip.items)[number]['type']> = {}
+    for (const item of trip.items) map[item.id] = item.type
+    return map
+  }, [trip.items])
 
   const filteredSuggestions = useMemo(() => {
     if (pinnedSearch) return [pinnedSearch]
@@ -179,7 +190,7 @@ export function PlanBoard({
 
   const suggestionPins = useMemo(
     () =>
-      mode === 'discover' && showNearbyPins
+      showNearbyPins
         ? filteredSuggestions.map((p) => ({
             id: p.id,
             lat: p.lat,
@@ -188,7 +199,7 @@ export function PlanBoard({
             emoji: exploreCategoryEmoji(p.category),
           }))
         : [],
-    [mode, filteredSuggestions, showNearbyPins],
+    [filteredSuggestions, showNearbyPins],
   )
 
   useEffect(() => {
@@ -210,28 +221,14 @@ export function PlanBoard({
 
   useEffect(() => {
     setFilterMenuOpen(false)
+    setSelectedUnscheduledId(null)
   }, [mode])
 
-  const dayPlaces =
-    mode === 'days' && daysAll
-      ? trip.planPlaces
-          .filter((p) => Boolean(p.scheduledDay))
-          .sort((a, b) => {
-            const da = a.scheduledDay || ''
-            const db = b.scheduledDay || ''
-            if (da !== db) return da.localeCompare(db)
-            return (a.dayOrder ?? 0) - (b.dayOrder ?? 0)
-          })
-      : !daySafe
-        ? []
-        : trip.planPlaces
-            .filter((p) => p.scheduledDay === daySafe)
-            .sort((a, b) => (a.dayOrder ?? 0) - (b.dayOrder ?? 0))
-
-  const legs = !daysAll && daySafe ? dayTravelLegs(trip, daySafe) : []
-  const dayIdx = daySafe ? days.indexOf(daySafe) : -1
-  const totalKm = legs.reduce((s, l) => s + (l?.km ?? 0), 0)
-  const totalMin = legs.reduce((s, l) => s + (l?.minutes ?? 0), 0)
+  function placesForDay(day: string) {
+    return trip.planPlaces
+      .filter((p) => p.scheduledDay === day)
+      .sort((a, b) => (a.dayOrder ?? 0) - (b.dayOrder ?? 0))
+  }
 
   useEffect(() => {
     if (mode !== 'discover') return
@@ -466,6 +463,7 @@ export function PlanBoard({
 
   function schedulePlace(placeId: string, day: string) {
     onChange(promotePlanPlaceToStep(trip, placeId, day))
+    setSelectedUnscheduledId(null)
     setMode('days')
     setDaysAll(false)
     setActiveDay(day)
@@ -473,6 +471,19 @@ export function PlanBoard({
     onStatus?.(
       `Added to Day ${idx >= 0 ? idx + 1 : day.slice(5)} · synced to Journey`,
     )
+  }
+
+  function moveWithinDay(day: string, placeId: string, dir: -1 | 1) {
+    const ordered = trip.planPlaces
+      .filter((p) => p.scheduledDay === day)
+      .sort((a, b) => (a.dayOrder ?? 0) - (b.dayOrder ?? 0))
+    const idx = ordered.findIndex((p) => p.id === placeId)
+    if (idx < 0) return
+    const j = idx + dir
+    if (j < 0 || j >= ordered.length) return
+    const ids = ordered.map((p) => p.id)
+    ;[ids[idx], ids[j]] = [ids[j]!, ids[idx]!]
+    onChange(reorderDayPlaces(trip, day, ids))
   }
 
   function applyPack(packId: string) {
@@ -525,6 +536,18 @@ export function PlanBoard({
 
   return (
     <div className="plan-phone relative flex h-full min-h-0 flex-col">
+      {/* Layers FAB — mirrors Journey map layers, under Journey|Plan */}
+      <div className="pointer-events-auto absolute right-3 top-[max(4.35rem,calc(env(safe-area-inset-top)+3.45rem))] z-20">
+        <PlanMapLayersControl
+          sections={listSections}
+          showNearby={showNearbyPins}
+          hiddenSectionIds={hiddenSections}
+          onToggleNearby={() => setShowNearbyPins((v) => !v)}
+          onToggleSection={toggleSectionLayer}
+          panelPlacement="below"
+        />
+      </div>
+
       {/* Top chrome — left side only so Journey/Plan switcher stays clear */}
       <div className="plan-phone-top pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-[max(0.55rem,env(safe-area-inset-top))]">
         <div className="pointer-events-auto flex max-w-[calc(100%-9.5rem)] flex-col gap-2">
@@ -686,6 +709,7 @@ export function PlanBoard({
           suggestions={suggestionPins}
           focusPlaceId={focusPlaceId}
           focusSuggestionId={focusSuggestionId}
+          linkedItemTypes={linkedItemTypes}
           onPlaceClick={(id) => {
             setFocusPlaceId(id)
             setFocusSuggestionId(null)
@@ -724,7 +748,7 @@ export function PlanBoard({
       ) : null}
 
       {/* Bottom sheet */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex max-h-[min(58vh,28rem)] flex-col pt-[6.75rem]">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex max-h-[min(64vh,32rem)] flex-col pt-[6.75rem]">
         <div
           className={`plan-itin-sheet pointer-events-auto mx-0 flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[1.75rem] ${TOUCH_SCROLL_Y}`}
         >
@@ -834,37 +858,16 @@ export function PlanBoard({
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-1.5">
-                <Chip
-                  on={showNearbyPins}
-                  onClick={() => setShowNearbyPins((v) => !v)}
-                  title="Show Nearby suggestions on the map"
-                >
-                  ✨ Nearby
-                </Chip>
-                {listSections.map((section) => (
-                  <Chip
-                    key={section.id}
-                    on={!hiddenSections.has(section.id)}
-                    onClick={() => toggleSectionLayer(section.id)}
-                    title={`Show ${section.title} on map`}
-                  >
-                    {section.icon} {section.title}
-                  </Chip>
-                ))}
-              </div>
-
               {listSections.map((section) => (
                 <ListSection
                   key={section.id}
                   section={section}
-                  places={bySection(section.id)}
+                  places={bySectionAll(section.id)}
                   active={activeSectionId === section.id}
                   hidden={hiddenSections.has(section.id)}
                   days={days}
                   onSelect={() => setActiveSectionId(section.id)}
                   onFocus={setFocusPlaceId}
-                  onSchedule={schedulePlace}
                   onRemove={(placeId) => onChange(removePlanPlace(trip, placeId))}
                 />
               ))}
@@ -923,136 +926,198 @@ export function PlanBoard({
               ) : null}
             </div>
           ) : (
-            <div className="flex min-h-0 flex-1 flex-col px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
-              <div className="mb-3 flex items-start justify-between gap-2">
+            <div className="flex min-h-0 flex-1 flex-col px-2 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
+              <div className="mb-2 flex items-end justify-between gap-2 px-1">
                 <div>
                   <h2 className="text-lg font-semibold tracking-tight text-[var(--ink)]">
-                    {daysAll ? 'All days' : `Day ${dayIdx + 1}`}
+                    Days
                   </h2>
-                  <p className="text-[12px] text-[var(--ink-muted)]">
-                    {daysAll ? `${days.length} days` : daySafe}
-                    {dayPlaces.length
-                      ? ` · ${dayPlaces.length} stop${dayPlaces.length === 1 ? '' : 's'}`
-                      : ''}
-                    {!daysAll && totalKm > 0
-                      ? ` · ${totalKm.toFixed(0)} km · ~${totalMin} min`
-                      : ''}
+                  <p className="text-[11px] text-[var(--ink-muted)]">
+                    {selectedUnscheduledId
+                      ? 'Tap a day on the right to drop it in'
+                      : 'Pick a saved place, then drop it into a day'}
                   </p>
                 </div>
-                <IconButton
-                  title="Optimize route"
-                  disabled={daysAll || dayPlaces.length < 2}
-                  onClick={() =>
-                    daySafe && onChange(optimizeDayRoute(trip, daySafe))
-                  }
-                >
-                  Optimize
-                </IconButton>
               </div>
 
-              <div className={`min-h-0 flex-1 space-y-0 ${TOUCH_SCROLL_Y}`}>
-                {dayPlaces.map((p, i) => (
-                  <div key={p.id}>
-                    <div className="plan-stop-row">
+              <div className="flex min-h-0 flex-1 gap-2">
+                {/* Left — unscheduled lists */}
+                <div
+                  className={`plan-days-rail w-[42%] min-w-0 shrink-0 ${TOUCH_SCROLL_Y}`}
+                >
+                  <p className="plan-days-rail-label">Lists</p>
+                  {listSections.map((section) => {
+                    const places = bySectionUnscheduled(section.id)
+                    if (!places.length) return null
+                    return (
+                      <div key={section.id} className="mb-2.5">
+                        <div className="mb-1 flex items-center gap-1.5 px-0.5">
+                          <span className="text-sm leading-none" aria-hidden>
+                            {section.icon}
+                          </span>
+                          <span className="truncate text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--ink-muted)]">
+                            {section.title}
+                          </span>
+                          <span className="text-[10px] tabular-nums text-[var(--ink-muted)]">
+                            {places.length}
+                          </span>
+                        </div>
+                        <div className="space-y-1">
+                          {places.map((p) => {
+                            const on = selectedUnscheduledId === p.id
+                            return (
+                              <button
+                                key={p.id}
+                                type="button"
+                                className={`plan-unscheduled-chip ${on ? 'plan-unscheduled-chip-on' : ''}`}
+                                onClick={() => {
+                                  setSelectedUnscheduledId(on ? null : p.id)
+                                  setFocusPlaceId(p.id)
+                                }}
+                              >
+                                <span className="line-clamp-2 text-left text-[12px] font-semibold leading-snug text-[var(--ink)]">
+                                  {p.name}
+                                </span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {!unscheduled.length ? (
+                    <div className="rounded-xl border border-dashed border-[var(--glass-border)] px-2 py-6 text-center">
+                      <p className="text-[12px] font-medium text-[var(--ink)]">
+                        All scheduled
+                      </p>
+                      <p className="mt-1 text-[10px] text-[var(--ink-muted)]">
+                        Save more ideas in Discover
+                      </p>
                       <button
                         type="button"
-                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                        onClick={() => setFocusPlaceId(p.id)}
+                        className="mt-3 rounded-full bg-[var(--coral)] px-3 py-1.5 text-[10px] font-semibold text-white"
+                        onClick={() => setMode('discover')}
                       >
-                        <span className="plan-stop-num">
-                          {daysAll
-                            ? Math.max(1, days.indexOf(p.scheduledDay || '') + 1)
-                            : i + 1}
-                        </span>
-                        <span className="min-w-0 flex-1 text-left">
-                          <span className="block truncate text-[15px] font-medium text-[var(--ink)]">
-                            {p.name}
-                          </span>
-                          <span className="block truncate text-[11px] text-[var(--ink-muted)]">
-                            {daysAll && p.scheduledDay
-                              ? `Day ${Math.max(1, days.indexOf(p.scheduledDay) + 1)}`
-                              : p.city || ''}
-                          </span>
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className="shrink-0 px-1 text-[11px] font-semibold text-rose-300/90"
-                        onClick={() => onChange(unschedulePlanPlace(trip, p.id))}
-                      >
-                        Remove
+                        Discover
                       </button>
                     </div>
-                    {!daysAll && legs[i] ? (
-                      <div className="plan-leg">
-                        <span className="plan-leg-line" />
-                        <span>
-                          {legs[i]!.km} km · ~{legs[i]!.minutes} min
-                        </span>
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
-
-                {!dayPlaces.length ? (
-                  <div className="rounded-2xl border border-dashed border-[var(--glass-border)] px-4 py-10 text-center">
-                    <p className="text-[15px] font-medium text-[var(--ink)]">No stops yet</p>
-                    <p className="mt-1 text-[12px] text-[var(--ink-muted)]">
-                      Save ideas in Discover, then add them to this day.
-                    </p>
-                    <button
-                      type="button"
-                      className="mt-4 rounded-full bg-[var(--coral)] px-4 py-2 text-xs font-semibold text-white"
-                      onClick={() => setMode('discover')}
-                    >
-                      Open Discover
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-
-              {!daysAll && daySafe && unscheduled.length > 0 ? (
-                <div className="mt-3 border-t border-[var(--glass-border)] pt-3">
-                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
-                    Add from saved
-                  </p>
-                  <div className={`max-h-48 space-y-1.5 overflow-y-auto ${TOUCH_SCROLL_Y}`}>
-                    {unscheduled.map((p) => {
-                      const section = trip.planSections.find((s) => s.id === p.sectionId)
-                      return (
-                        <button
-                          key={p.id}
-                          type="button"
-                          className="plan-add-stop-card"
-                          onClick={() => schedulePlace(p.id, daySafe)}
-                        >
-                          <span
-                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base"
-                            style={{
-                              background: `${section?.color || '#60a5fa'}33`,
-                            }}
-                            aria-hidden
-                          >
-                            {section?.icon || '📍'}
-                          </span>
-                          <span className="min-w-0 flex-1 text-left">
-                            <span className="block truncate text-[13px] font-semibold text-[var(--ink)]">
-                              {p.name}
-                            </span>
-                            <span className="block truncate text-[10px] text-[var(--ink-muted)]">
-                              {section?.title || 'List'}
-                              {p.city ? ` · ${p.city}` : ''}
-                            </span>
-                          </span>
-                          <span className="shrink-0 rounded-full bg-[var(--coral)] px-2.5 py-1 text-[10px] font-semibold text-white">
-                            Add
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
+                  ) : null}
                 </div>
-              ) : null}
+
+                {/* Right — day buckets */}
+                <div className={`min-w-0 flex-1 space-y-2 ${TOUCH_SCROLL_Y}`}>
+                  {days.map((day, idx) => {
+                    const places = placesForDay(day)
+                    const isActiveMap = !daysAll && daySafe === day
+                    return (
+                      <div
+                        key={day}
+                        className={`plan-day-bucket ${isActiveMap ? 'plan-day-bucket-on' : ''}`}
+                      >
+                        <div className="mb-1.5 flex items-center gap-1">
+                          <button
+                            type="button"
+                            className="min-w-0 flex-1 text-left"
+                            onClick={() => {
+                              setDaysAll(false)
+                              setActiveDay(day)
+                              if (selectedUnscheduledId) {
+                                schedulePlace(selectedUnscheduledId, day)
+                              }
+                            }}
+                          >
+                            <span className="block text-[13px] font-semibold text-[var(--ink)]">
+                              Day {idx + 1}
+                            </span>
+                            <span className="block text-[10px] text-[var(--ink-muted)]">
+                              {day.slice(5)}
+                              {places.length
+                                ? ` · ${places.length} stop${places.length === 1 ? '' : 's'}`
+                                : ' · empty'}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="plan-day-opt"
+                            title="Optimize this day’s order"
+                            aria-label={`Optimize Day ${idx + 1}`}
+                            disabled={places.length < 2}
+                            onClick={() => {
+                              onChange(optimizeDayRoute(trip, day))
+                              onStatus?.(`Optimized Day ${idx + 1}`)
+                            }}
+                          >
+                            <AiSparkIcon className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="space-y-1">
+                          {places.map((p, i) => (
+                            <div key={p.id} className="plan-bucket-stop">
+                              <button
+                                type="button"
+                                className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                                onClick={() => setFocusPlaceId(p.id)}
+                              >
+                                <span className="plan-bucket-num">{i + 1}</span>
+                                <span className="truncate text-[12px] font-medium text-[var(--ink)]">
+                                  {p.name}
+                                </span>
+                              </button>
+                              <div className="flex shrink-0 items-center gap-0.5">
+                                <button
+                                  type="button"
+                                  className="plan-bucket-move"
+                                  aria-label="Move up"
+                                  disabled={i === 0}
+                                  onClick={() => moveWithinDay(day, p.id, -1)}
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  type="button"
+                                  className="plan-bucket-move"
+                                  aria-label="Move down"
+                                  disabled={i === places.length - 1}
+                                  onClick={() => moveWithinDay(day, p.id, 1)}
+                                >
+                                  ↓
+                                </button>
+                                <button
+                                  type="button"
+                                  className="px-1 text-[10px] font-semibold text-rose-300/90"
+                                  aria-label="Unschedule"
+                                  onClick={() =>
+                                    onChange(unschedulePlanPlace(trip, p.id))
+                                  }
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {selectedUnscheduledId ? (
+                          <button
+                            type="button"
+                            className="plan-drop-zone"
+                            onClick={() =>
+                              schedulePlace(selectedUnscheduledId, day)
+                            }
+                          >
+                            Drop here
+                          </button>
+                        ) : !places.length ? (
+                          <p className="px-1 py-2 text-center text-[10px] text-[var(--ink-muted)]">
+                            Select a place on the left
+                          </p>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -1069,7 +1134,6 @@ function ListSection({
   days,
   onSelect,
   onFocus,
-  onSchedule,
   onRemove,
 }: {
   section: PlanSection
@@ -1079,7 +1143,6 @@ function ListSection({
   days: string[]
   onSelect: () => void
   onFocus: (id: string) => void
-  onSchedule: (placeId: string, day: string) => void
   onRemove: (placeId: string) => void
 }) {
   return (
@@ -1105,9 +1168,10 @@ function ListSection({
         <span className="text-[11px] text-[var(--ink-muted)]">{places.length}</span>
       </button>
       <div className="space-y-1.5">
-        {places.map((p) => (
-          <div key={p.id} className="plan-list-row plan-list-row-stack">
-            <div className="flex min-w-0 items-center gap-2">
+        {places.map((p) => {
+          const dayIdx = p.scheduledDay ? days.indexOf(p.scheduledDay) : -1
+          return (
+            <div key={p.id} className="plan-list-row">
               <button
                 type="button"
                 className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-[var(--ink)]"
@@ -1115,6 +1179,14 @@ function ListSection({
               >
                 {p.name}
               </button>
+              {dayIdx >= 0 ? (
+                <span
+                  className="plan-day-badge shrink-0"
+                  title={`Scheduled on Day ${dayIdx + 1}`}
+                >
+                  → D{dayIdx + 1}
+                </span>
+              ) : null}
               <button
                 type="button"
                 className="shrink-0 px-1 text-[11px] text-rose-300/90"
@@ -1123,20 +1195,8 @@ function ListSection({
                 ✕
               </button>
             </div>
-            <div className={`flex gap-1 ${TOUCH_SCROLL_X}`}>
-              {days.map((d, i) => (
-                <button
-                  key={d}
-                  type="button"
-                  className="plan-day-mini shrink-0"
-                  onClick={() => onSchedule(p.id, d)}
-                >
-                  Day {i + 1}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
+          )
+        })}
         {!places.length ? (
           <p className="px-1 py-2 text-[12px] text-[var(--ink-muted)]">
             Empty — save a suggestion or find a recommendation

@@ -3,7 +3,8 @@ import * as maplibregl from 'maplibre-gl'
 import { setWorkerUrl } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import type { PlanPlace, PlanSection, TripMeta } from '../domain/types'
+import type { ItemType, PlanPlace, PlanSection, TripMeta } from '../domain/types'
+import { TYPE_EMOJI } from '../domain/types'
 import { dayColor } from '../data/dayTheme'
 import { dayIndex } from '../data/analytics'
 import { isValidCoord } from '../data/validate'
@@ -60,6 +61,8 @@ type Props = {
   onSuggestionClick?: (suggestionId: string) => void
   /** Fired (debounced) when the map settles — Discover uses center + visible radius. */
   onViewportIdle?: (view: { lat: number; lon: number; radiusM: number }) => void
+  /** Journey step type by linked item id — pins use type emoji instead of section icon. */
+  linkedItemTypes?: Record<string, ItemType>
   className?: string
 }
 
@@ -138,6 +141,7 @@ export function PlanMapView({
   onPlaceClick,
   onSuggestionClick,
   onViewportIdle,
+  linkedItemTypes,
   className = '',
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -217,7 +221,10 @@ export function PlanMapView({
       const fill =
         colorBy === 'day' && day ? dayColor(meta, day) : sectionColor(p.sectionId)
       const dayNum = day ? Math.max(1, dayIndex(meta, day)) : 0
-      const emoji = sectionEmoji(section)
+      const linkedType = p.linkedItemId ? linkedItemTypes?.[p.linkedItemId] : undefined
+      const emoji = linkedType
+        ? TYPE_EMOJI[linkedType] ?? '📍'
+        : sectionEmoji(section)
       const el = makePinEl({
         fill,
         emoji,
@@ -336,6 +343,7 @@ export function PlanMapView({
     suggestions,
     focusPlaceId,
     focusSuggestionId,
+    linkedItemTypes,
   ])
 
   return (

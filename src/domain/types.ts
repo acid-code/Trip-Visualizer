@@ -263,6 +263,21 @@ export const TYPE_COLORS: Record<ItemType, string> = {
   other: '#cbd5e1',
 }
 
+export const TYPE_EMOJI: Record<ItemType, string> = {
+  flight: '✈️',
+  train: '🚆',
+  bus: '🚌',
+  ferry: '⛴️',
+  drive: '🚗',
+  hotel: '🛏️',
+  sight: '📍',
+  restaurant: '🍽️',
+  activity: '🎟️',
+  city: '🏙️',
+  note: '📝',
+  other: '✨',
+}
+
 export const SCHEDULE_HEADERS = [
   'id',
   'date',
