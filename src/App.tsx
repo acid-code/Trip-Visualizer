@@ -2160,7 +2160,7 @@ export default function App() {
         }`}
       >
         <div className="ml-auto flex w-fit max-w-[min(22rem,72vw)] flex-col items-end gap-1">
-          <div className="pointer-events-auto">
+          <div className="pointer-events-auto flex items-center gap-1.5">
             <SegmentedControl
               ariaLabel="App mode"
               value={appMode}
@@ -2185,12 +2185,15 @@ export default function App() {
                 { id: 'plan', label: 'Plan' },
               ]}
             />
+            {active && isTripShared(active) ? (
+              <span
+                className="pointer-events-none shrink-0 rounded-full border border-sky-300/35 bg-[#0f1a24]/7 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-sky-100/90"
+                title="Near-live shared trip"
+              >
+                Shared
+              </span>
+            ) : null}
           </div>
-          {active && isTripShared(active) ? (
-            <div className="pointer-events-none max-w-[min(16rem,70vw)] rounded-full border border-sky-300/40 bg-[#0f1a24]/75 px-2.5 py-1 text-center text-[10px] font-semibold text-sky-100 shadow backdrop-blur">
-              Shared with {active.shareOwnerEmail || 'partner'} · Near-live
-            </div>
-          ) : null}
           {appMode === 'journey' ? (
             <>
               <button
