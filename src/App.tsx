@@ -158,6 +158,18 @@ import {
 import { TripSwitcher } from './ui/TripSwitcher'
 import { TripStartCoach } from './ui/TripStartCoach'
 import { PlanStartCoach } from './ui/PlanStartCoach'
+import { TripSharePanel } from './ui/TripSharePanel'
+import {
+  isCloudAuthConfigured,
+  watchCloudAuth,
+  type CloudUser,
+} from './data/cloudAuth'
+import {
+  isTripShared,
+  listMyPendingInvites,
+  pushSharedTrip,
+  watchSharedTrip,
+} from './data/cloudSync'
 import type { RangeReconcileMode } from './data/dayBases'
 
 type NavTab = 'timeline' | 'charts' | 'settings'
@@ -281,8 +293,13 @@ export default function App() {
   )
   const [startCoachOpen, setStartCoachOpen] = useState(false)
   const [planStartCoachOpen, setPlanStartCoachOpen] = useState(false)
+  const [cloudUser, setCloudUser] = useState<CloudUser | null>(null)
+  const [pendingInviteCount, setPendingInviteCount] = useState(0)
   const guideAutoShownRef = useRef(false)
   const planCoachShownRef = useRef(false)
+  const cloudPushTimerRef = useRef<number | null>(null)
+  const cloudApplyingRemoteRef = useRef(false)
+  const lastPushedRevisionRef = useRef<number>(-1)
   /** When true, keep the example trip alongside personal trips (user opened it explicitly). */
   const keepExampleRef = useRef(false)
   const routesForTripRef = useRef<string | null>(null)
@@ -314,8 +331,18 @@ export default function App() {
   const refresh = useCallback(async () => {
     let all = await listTrips()
     // Fresh install / cleared storage: seed a same-day empty trip so Plan/Journey
-    // can start without requiring a full itinerary first.
-    if (all.length === 0) {
+    // can start without requiring a full itinerary first — unless Firebase invites
+    // are waiting (partner should join instead of creating a second blank trip).
+    let skipBlank = false
+    if (all.length === 0 && isCloudAuthConfigured()) {
+      try {
+        const pending = await listMyPendingInvites()
+        if (pending.length) skipBlank = true
+      } catch {
+        /* signed out or rules — fall through to blank */
+      }
+    }
+    if (all.length === 0 && !skipBlank) {
       const trip = await createBlankTrip()
       const withBases = applyTripMetaRange(
         trip.meta,
@@ -401,6 +428,60 @@ export default function App() {
   }, [refresh])
 
   useEffect(() => {
+    if (!isCloudAuthConfigured()) return
+    return watchCloudAuth((user) => {
+      setCloudUser(user)
+      if (!user) {
+        setPendingInviteCount(0)
+        return
+      }
+      void listMyPendingInvites()
+        .then((inv) => setPendingInviteCount(inv.length))
+        .catch(() => setPendingInviteCount(0))
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!active || !cloudUser || !isTripShared(active) || !active.cloudTripId) return
+    lastPushedRevisionRef.current = active.revision ?? 0
+    const unsub = watchSharedTrip(
+      active.cloudTripId,
+      (remote) => {
+        if ((remote.revision ?? 0) <= lastPushedRevisionRef.current) return
+        cloudApplyingRemoteRef.current = true
+        lastPushedRevisionRef.current = remote.revision ?? 0
+        void saveTrip(remote)
+          .then(async () => {
+            setTrips(await listTrips())
+            setStatus('Partner updated · synced')
+          })
+          .catch((err) => logClientError('cloud-pull', err))
+          .finally(() => {
+            cloudApplyingRemoteRef.current = false
+          })
+      },
+      (err) => {
+        logClientError('cloud-watch', err)
+        // Likely revoked — strip share flags locally so cloud access stops.
+        if (active.shareEnabled) {
+          const localOnly: TripRecord = {
+            ...active,
+            shareEnabled: false,
+            cloudTripId: '',
+            updatedAt: nowIso(),
+          }
+          void saveTrip(localOnly).then(async () => {
+            setTrips(await listTrips())
+            setStatus('Shared access ended — trip kept on this device only')
+          })
+        }
+      },
+    )
+    return () => unsub()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-bind when trip share identity changes
+  }, [active?.id, active?.cloudTripId, active?.shareEnabled, cloudUser?.uid])
+
+  useEffect(() => {
     void (async () => {
       try {
         const res = await fetch('/api/maps-status', { cache: 'no-store' })
@@ -463,8 +544,40 @@ export default function App() {
     const withPlan = ensurePlanScaffold(next)
     const meta = widenMetaToItems(withPlan.meta, withPlan.items)
     const items = ensureDayStartBases(meta, withPlan.items)
-    await saveTrip({ ...withPlan, meta, items })
+    const local: TripRecord = { ...withPlan, meta, items, updatedAt: nowIso() }
+    await saveTrip(local)
     setTrips(await listTrips())
+
+    if (!cloudApplyingRemoteRef.current && isTripShared(local) && cloudUser) {
+      if (cloudPushTimerRef.current) window.clearTimeout(cloudPushTimerRef.current)
+      cloudPushTimerRef.current = window.setTimeout(() => {
+        void (async () => {
+          try {
+            const pushed = await pushSharedTrip(local, {
+              expectedRevision: lastPushedRevisionRef.current,
+            })
+            lastPushedRevisionRef.current = pushed.revision ?? 0
+            cloudApplyingRemoteRef.current = true
+            await saveTrip(pushed)
+            setTrips(await listTrips())
+          } catch (err) {
+            const e = err as Error & { remote?: TripRecord }
+            if (e.message === 'PARTNER_UPDATED' && e.remote) {
+              cloudApplyingRemoteRef.current = true
+              await saveTrip(e.remote)
+              setTrips(await listTrips())
+              lastPushedRevisionRef.current = e.remote.revision ?? 0
+              setStatus('Partner updated — reloaded their version')
+            } else {
+              logClientError('cloud-push', err)
+              setStatus(publicErrorMessage(err, 'Could not sync shared trip'))
+            }
+          } finally {
+            cloudApplyingRemoteRef.current = false
+          }
+        })()
+      }, 500)
+    }
   }
 
   async function updateActive(mutator: (trip: TripRecord) => TripRecord) {
@@ -1567,6 +1680,10 @@ export default function App() {
 
   function openAiCoach() {
     if (aiReview) return
+    if (active && isTripShared(active) && !cloudUser) {
+      setStatus('Sign in with Google (Settings → Share) to use AI on a shared trip')
+      return
+    }
     if (exploreOpen) closeExplore()
     setStepDraft(null)
     setLowerMode('none')
@@ -2069,6 +2186,11 @@ export default function App() {
               ]}
             />
           </div>
+          {active && isTripShared(active) ? (
+            <div className="pointer-events-none max-w-[min(16rem,70vw)] rounded-full border border-sky-300/40 bg-[#0f1a24]/75 px-2.5 py-1 text-center text-[10px] font-semibold text-sky-100 shadow backdrop-blur">
+              Shared with {active.shareOwnerEmail || 'partner'} · Near-live
+            </div>
+          ) : null}
           {appMode === 'journey' ? (
             <>
               <button
@@ -2335,6 +2457,8 @@ export default function App() {
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch]">
               <DataPanel
                 active={active}
+                cloudUser={cloudUser}
+                pendingInviteCount={pendingInviteCount}
                 colorMode={colorMode}
                 googleKey={googleKey}
                 serverPlacesConfigured={serverPlacesConfigured}
@@ -2355,6 +2479,20 @@ export default function App() {
                 onEditTrip={() => openTripEdit()}
                 onShowTips={() => openFeatureGuide({ all: true })}
                 onStatus={setStatus}
+                onCloudUser={setCloudUser}
+                onSharedTripChange={async (trip) => {
+                  await persist(trip)
+                  lastPushedRevisionRef.current = trip.revision ?? 0
+                }}
+                onAcceptedTrip={async (trip) => {
+                  await saveTrip(trip)
+                  await retireExampleTrip()
+                  await refresh()
+                  setActiveId(trip.id)
+                  lastPushedRevisionRef.current = trip.revision ?? 0
+                  setPendingInviteCount((n) => Math.max(0, n - 1))
+                  setOverviewToken((n) => n + 1)
+                }}
                 setWalkApp={(pref) => {
                   setWalkApp(pref)
                   void setSetting('walkApp', pref)
@@ -2701,6 +2839,8 @@ function DriveSyncPanel({
 
 function DataPanel({
   active,
+  cloudUser,
+  pendingInviteCount,
   colorMode,
   googleKey,
   serverPlacesConfigured,
@@ -2717,12 +2857,17 @@ function DataPanel({
   onEditTrip,
   onShowTips,
   onStatus,
+  onCloudUser,
+  onSharedTripChange,
+  onAcceptedTrip,
   setWalkApp,
   setGoogleKey,
   setIonToken,
   updateActive,
 }: {
   active: TripRecord | null
+  cloudUser: CloudUser | null
+  pendingInviteCount: number
   colorMode: ColorMode
   googleKey: string
   serverPlacesConfigured: boolean
@@ -2739,6 +2884,9 @@ function DataPanel({
   onEditTrip: () => void
   onShowTips: () => void
   onStatus: (msg: string) => void
+  onCloudUser: (user: CloudUser | null) => void
+  onSharedTripChange: (trip: TripRecord) => void | Promise<void>
+  onAcceptedTrip: (trip: TripRecord) => void | Promise<void>
   setWalkApp: (pref: WalkAppPref) => void
   setGoogleKey: (v: string) => void
   setIonToken: (v: string) => void
@@ -2746,6 +2894,21 @@ function DataPanel({
 }) {
   return (
     <>
+      <TripSharePanel
+        trip={active}
+        cloudUser={cloudUser}
+        onCloudUser={onCloudUser}
+        onTripChange={onSharedTripChange}
+        onAcceptedTrip={onAcceptedTrip}
+        onStatus={onStatus}
+      />
+      {pendingInviteCount > 0 && !cloudUser ? null : null}
+      {pendingInviteCount > 0 ? (
+        <p className="-mt-1 px-1 text-[11px] text-[var(--coral-deep)]">
+          {pendingInviteCount} pending invite{pendingInviteCount === 1 ? '' : 's'} — join above.
+        </p>
+      ) : null}
+
       <div className="settings-card">
         <div className="settings-card-title">Appearance</div>
         <SegmentedControl
