@@ -276,7 +276,7 @@ export const TYPE_EMOJI: Record<ItemType, string> = {
   ferry: '⛴️',
   drive: '🚗',
   hotel: '🛏️',
-  sight: '📍',
+  sight: '🏛️',
   restaurant: '🍽️',
   activity: '🎟️',
   city: '🏙️',

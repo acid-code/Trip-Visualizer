@@ -18,6 +18,7 @@ import {
 
 export type ExploreCategory =
   | 'sights'
+  | 'activity'
   | 'food'
   | 'drink'
   | 'hotel'
@@ -64,9 +65,24 @@ const CATEGORY_QUERIES: Record<ExploreCategory, string[]> = {
     'nwr["tourism"="viewpoint"]',
     'nwr["tourism"="artwork"]',
     'nwr["tourism"="gallery"]',
-    'nwr["tourism"="zoo"]',
-    'nwr["tourism"="theme_park"]',
     'nwr["historic"]',
+  ],
+  activity: [
+    'nwr["tourism"="theme_park"]',
+    'nwr["tourism"="zoo"]',
+    'nwr["tourism"="aquarium"]',
+    'nwr["amenity"="cinema"]',
+    'nwr["amenity"="theatre"]',
+    'nwr["amenity"="casino"]',
+    'nwr["amenity"="spa"]',
+    'nwr["leisure"="sports_centre"]',
+    'nwr["leisure"="stadium"]',
+    'nwr["leisure"="bowling_alley"]',
+    'nwr["leisure"="fitness_centre"]',
+    'nwr["leisure"="water_park"]',
+    'nwr["leisure"="miniature_golf"]',
+    'nwr["leisure"="escape_game"]',
+    'nwr["leisure"="amusement_arcade"]',
   ],
   food: [
     'nwr["amenity"="restaurant"]',
@@ -94,7 +110,6 @@ const CATEGORY_QUERIES: Record<ExploreCategory, string[]> = {
     'nwr["leisure"="nature_reserve"]',
     'nwr["leisure"="marina"]',
     'nwr["leisure"="beach_resort"]',
-    'nwr["leisure"="water_park"]',
     'nwr["tourism"="picnic_site"]',
     'nwr["natural"="beach"]',
     'nwr["man_made"="pier"]',
@@ -139,12 +154,12 @@ function cacheKey(
   categories?: ExploreCategory[],
   rank: 'DISTANCE' | 'POPULARITY' = 'DISTANCE',
 ): string {
-  // v10: POPULARITY rank + viewport radius for Plan Discover
+  // v11: dedicated activity / entertainment category
   const cat =
     categories?.length
       ? [...categories].sort().join('+')
       : 'all'
-  return `v10:${source}:${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}:${cat}:${rank}`
+  return `v11:${source}:${lat.toFixed(2)},${lon.toFixed(2)}:${radiusM}:${cat}:${rank}`
 }
 
 async function getCached(key: string): Promise<ExplorePlace[] | null> {
@@ -185,23 +200,35 @@ function categoryForTags(tags: Record<string, string>): ExploreCategory {
   const leisure = tags.leisure || ''
   const natural = tags.natural || ''
   if (['hotel', 'guest_house', 'hostel', 'motel'].includes(tourism)) return 'hotel'
-  if (
-    ['attraction', 'museum', 'viewpoint', 'artwork', 'gallery', 'zoo', 'theme_park'].includes(
-      tourism,
-    ) ||
-    tags.historic
-  ) {
-    return 'sights'
-  }
   if (['restaurant', 'cafe', 'fast_food', 'ice_cream'].includes(amenity)) return 'food'
   if (['bar', 'pub', 'biergarten', 'wine_cellar'].includes(amenity)) return 'drink'
   if (tourism === 'winery' || tags.craft === 'winery' || tags.shop === 'wine') {
     return 'drink'
   }
   if (
-    ['park', 'nature_reserve', 'marina', 'beach_resort', 'water_park'].includes(
-      leisure,
-    ) ||
+    ['theme_park', 'zoo', 'aquarium'].includes(tourism) ||
+    ['cinema', 'theatre', 'casino', 'spa'].includes(amenity) ||
+    [
+      'sports_centre',
+      'stadium',
+      'bowling_alley',
+      'fitness_centre',
+      'water_park',
+      'miniature_golf',
+      'escape_game',
+      'amusement_arcade',
+    ].includes(leisure)
+  ) {
+    return 'activity'
+  }
+  if (
+    ['attraction', 'museum', 'viewpoint', 'artwork', 'gallery'].includes(tourism) ||
+    tags.historic
+  ) {
+    return 'sights'
+  }
+  if (
+    ['park', 'nature_reserve', 'marina', 'beach_resort'].includes(leisure) ||
     tourism === 'picnic_site' ||
     natural === 'beach' ||
     tags.man_made === 'pier' ||
@@ -741,6 +768,8 @@ export function exploreCategoryLabel(cat: ExploreCategory): string {
   switch (cat) {
     case 'sights':
       return 'Sights'
+    case 'activity':
+      return 'Activities'
     case 'food':
       return 'Food'
     case 'drink':
@@ -758,6 +787,8 @@ export function exploreCategoryEmoji(cat: ExploreCategory): string {
   switch (cat) {
     case 'sights':
       return '🏛️'
+    case 'activity':
+      return '🎟️'
     case 'food':
       return '🍽️'
     case 'drink':
@@ -809,6 +840,7 @@ export function explorePlaceToItemType(place: ExplorePlace): ItemType {
     case 'hotel':
       return 'hotel'
     case 'nature':
+    case 'activity':
       return 'activity'
     case 'sights':
       return 'sight'

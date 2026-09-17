@@ -121,7 +121,6 @@ import {
   type MapLook,
   type MapStack,
 } from './globe/viewer'
-import { firstOpenableStep } from './globe/viewer'
 import { EXAMPLE_TRIP_ID, exampleItems, exampleMeta } from './data/examples/france-south-loop'
 import { ensureDayStartBases, deleteStepAndPrune, isPlaceholderBase, itemTouchesDay, applyTripMetaRange, countTripDays, widenMetaToItems } from './data/dayBases'
 import { clearTypeSwitchMemory } from './data/typeSwitch'
@@ -308,6 +307,7 @@ export default function App() {
   const keepExampleRef = useRef(false)
   const routesForTripRef = useRef<string | null>(null)
   const routesBuildingRef = useRef(false)
+  const routesPendingRef = useRef<TripRecord | null>(null)
   const enrichBusyRef = useRef(false)
   const enrichAttemptedRef = useRef<Set<string>>(new Set())
   const tempPinGenRef = useRef(0)
@@ -466,6 +466,9 @@ export default function App() {
           .then(async () => {
             setTrips(await listTrips())
             setStatus('Partner updated · synced')
+            // Connectors are local-only — rebuild against the new trip.
+            routesForTripRef.current = null
+            await buildRoutes(merged)
           })
           .catch((err) => logClientError('cloud-pull', err))
           .finally(() => {
@@ -538,17 +541,11 @@ export default function App() {
     setGuideOpen(true)
   }
 
-  // When a trip becomes active, highlight its first step (camera uses opening framing)
+  // When switching trips: clear selection; GlobeView frames the first step without selecting it.
   useEffect(() => {
-    if (!activeId || !active) return
-    const first = firstOpenableStep(active.items)
-    setSelectedId(first?.id ?? null)
-    // Phone + first flight: focus departure pin (leg A), not the whole arc
-    setMapFocusEndpoint(
-      isPhone && first?.type === 'flight' && isValidCoord(first.lat, first.lon)
-        ? 'a'
-        : null,
-    )
+    if (!activeId) return
+    setSelectedId(null)
+    setMapFocusEndpoint(null)
     setRouteWalk(null)
     setLowerMode('none')
     setDetailExpanded(false)
@@ -589,6 +586,8 @@ export default function App() {
               setTrips(await listTrips())
               lastPushedRevisionRef.current = merged.revision ?? 0
               setStatus('Someone else updated — reloaded cloud version (your last edit was not pushed)')
+              routesForTripRef.current = null
+              await buildRoutes(merged)
             } else {
               logClientError('cloud-push', err)
               setStatus(publicErrorMessage(err, 'Could not sync shared trip'))
@@ -896,18 +895,23 @@ export default function App() {
   }
 
   function routesFingerprint(trip: TripRecord): string {
+    // Include start/status so Plan reorder and timeline edits rebuild connectors.
     return trip.items
       .map(
         (i) =>
-          `${i.id}|${i.date}|${i.type}|${i.lat ?? ''}|${i.lon ?? ''}|${i.latTo ?? ''}|${i.lonTo ?? ''}`,
+          `${i.id}|${i.date}|${i.start}|${i.status}|${i.type}|${i.lat ?? ''}|${i.lon ?? ''}|${i.latTo ?? ''}|${i.lonTo ?? ''}`,
       )
       .join(';')
   }
 
   async function buildRoutes(trip: TripRecord) {
     const fp = routesFingerprint(trip)
-    if (routesBuildingRef.current) return
     if (routesForTripRef.current === fp) return
+    if (routesBuildingRef.current) {
+      // Coalesce: always keep the latest trip for a follow-up rebuild.
+      routesPendingRef.current = trip
+      return
+    }
     routesBuildingRef.current = true
     setRoutesStatus('Drawing drive paths…')
     try {
@@ -921,7 +925,15 @@ export default function App() {
       setConnectors(walks)
       const driveChanged = withDrives.some((item) => {
         const prev = trip.items.find((p) => p.id === item.id)
-        return (item.routeCoords?.length ?? 0) !== (prev?.routeCoords?.length ?? 0)
+        const prevCoords = prev?.routeCoords ?? []
+        const nextCoords = item.routeCoords ?? []
+        if (prevCoords.length !== nextCoords.length) return true
+        if (prevCoords.length === 0) return false
+        const a = prevCoords[0]!
+        const b = nextCoords[0]!
+        const c = prevCoords[prevCoords.length - 1]!
+        const d = nextCoords[nextCoords.length - 1]!
+        return a[0] !== b[0] || a[1] !== b[1] || c[0] !== d[0] || c[1] !== d[1]
       })
       // Always write hydrated geometry back into trip state when it changed so
       // the globe’s item.routeCoords stay in sync with “Routes ready”.
@@ -936,6 +948,11 @@ export default function App() {
     } finally {
       routesBuildingRef.current = false
       setRoutesStatus(null)
+      const pending = routesPendingRef.current
+      routesPendingRef.current = null
+      if (pending && routesFingerprint(pending) !== routesForTripRef.current) {
+        void buildRoutes(pending)
+      }
     }
   }
 

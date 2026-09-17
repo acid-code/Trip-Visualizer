@@ -497,7 +497,7 @@ function optionHasSight(
     const c = byId.get(s.candidateId)
     return Boolean(
       c &&
-        (c.category === 'sights' || c.category === 'nature') &&
+        (c.category === 'sights' || c.category === 'activity' || c.category === 'nature') &&
         !isWinePlace(c),
     )
   })
@@ -1164,7 +1164,7 @@ export async function gatherCoachCandidates(
     if (intent.fun || intent.fill || fill === 'empty') {
       mergePlaces(
         byId,
-        await safeExplore(anchor, 3500, 20, ['sights', 'nature']),
+        await safeExplore(anchor, 3500, 20, ['sights', 'activity', 'nature']),
       )
     }
     if (intent.food || intent.latePub || intent.wine || fill === 'empty') {
@@ -1185,7 +1185,7 @@ export async function gatherCoachCandidates(
     if (intent.water) {
       mergePlaces(
         byId,
-        await safeExplore(anchor, 18_000, 28, ['sights', 'nature']),
+        await safeExplore(anchor, 18_000, 28, ['sights', 'activity', 'nature']),
       )
       mergePlaces(
         byId,
@@ -1239,6 +1239,7 @@ export async function gatherCoachCandidates(
         ).filter(
           (p) =>
             p.category === 'sights' ||
+            p.category === 'activity' ||
             p.category === 'nature' ||
             p.category === 'food',
         ),
@@ -1260,7 +1261,7 @@ export async function gatherCoachCandidates(
       {
         radiusM: 25_000,
         limit: 56,
-        categories: ['sights', 'nature', 'food', 'drink'],
+        categories: ['sights', 'activity', 'nature', 'food', 'drink'],
       },
     ]
     for (const step of widenSteps) {
@@ -1325,9 +1326,9 @@ export async function gatherCoachCandidates(
   if (intent.fun || intent.fill) {
     ranked.sort((a, b) => {
       const as =
-        a.category === 'sights' || a.category === 'nature' ? 0 : 1
+        a.category === 'sights' || a.category === 'activity' || a.category === 'nature' ? 0 : 1
       const bs =
-        b.category === 'sights' || b.category === 'nature' ? 0 : 1
+        b.category === 'sights' || b.category === 'activity' || b.category === 'nature' ? 0 : 1
       return as - bs || a.distKm - b.distKm
     })
   } else {
@@ -1408,7 +1409,7 @@ function coachPoolNeedsWiderSearch(
   )
   const sights = places.filter(
     (p) =>
-      (p.category === 'sights' || p.category === 'nature') && !isWinePlace(p),
+      (p.category === 'sights' || p.category === 'activity' || p.category === 'nature') && !isWinePlace(p),
   ).length
   const food = places.filter(
     (p) => p.category === 'food' && !isWinePlace(p),
@@ -1841,7 +1842,7 @@ export function localHeuristicOptions(
     candidates
       .filter(
         (c) =>
-          (c.category === 'sights' || c.category === 'nature') &&
+          (c.category === 'sights' || c.category === 'activity' || c.category === 'nature') &&
           !isWinePlace(c),
       )
       .sort((a, b) => {
@@ -2042,7 +2043,7 @@ export function localHeuristicOptions(
         const usedSlots = new Set<string>([dest.id])
         pushUnique(addSteps, usedSlots, meals.cafe, slots.cafe, 'Morning café')
         pushUnique(addSteps, usedSlots, pit, slots.sight, 'Viewpoint on the way')
-        if (dest.category === 'sights' || dest.category === 'nature') {
+        if (dest.category === 'sights' || dest.category === 'activity' || dest.category === 'nature') {
           pushUnique(
             addSteps,
             usedSlots,
@@ -2665,7 +2666,7 @@ export function localHeuristicOptions(
         (c) =>
           c.id !== a.id &&
           (intent.fun
-            ? c.category === 'sights' || c.category === 'nature'
+            ? c.category === 'sights' || c.category === 'activity' || c.category === 'nature'
             : true),
       ) || candidates.find((c) => c.id !== a.id)
     options.push({
@@ -2837,7 +2838,7 @@ export function critiqueAndRepairOptions(
   const sightPool = candidates
     .filter(
       (c) =>
-        (c.category === 'sights' || c.category === 'nature') && !isWinePlace(c),
+        (c.category === 'sights' || c.category === 'activity' || c.category === 'nature') && !isWinePlace(c),
     )
     .sort((a, b) => {
       if (intent.water) {
@@ -2992,7 +2993,7 @@ export function critiqueAndRepairOptions(
           const p = byId.get(s.candidateId)
           return Boolean(
             p &&
-              (p.category === 'sights' || p.category === 'nature') &&
+              (p.category === 'sights' || p.category === 'activity' || p.category === 'nature') &&
               !isWinePlace(p),
           )
         })

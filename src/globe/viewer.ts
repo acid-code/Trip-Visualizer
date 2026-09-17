@@ -278,7 +278,7 @@ function stepPinDataUrl(opts: {
   badge: string
   selected: boolean
 }): string {
-  const key = `${opts.fill}|${opts.emoji}|${opts.badge}|${opts.selected ? 1 : 0}|sm`
+  const key = `${opts.fill}|${opts.emoji}|${opts.badge}|${opts.selected ? 1 : 0}|v2`
   const cached = stepPinImageCache.get(key)
   if (cached) return cached
 

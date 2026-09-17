@@ -62,6 +62,7 @@ const SUGGEST_CATS: Array<{
 }> = [
   { id: 'all', short: 'All', emoji: '✨', blurb: 'Popular places nearby' },
   { id: 'sights', short: 'Sights', emoji: '🏛️', blurb: 'Museums & landmarks' },
+  { id: 'activity', short: 'Do', emoji: '🎟️', blurb: 'Fun & tickets' },
   { id: 'food', short: 'Food', emoji: '🍽️', blurb: 'Restaurants & cafés' },
   { id: 'drink', short: 'Drinks', emoji: '🍷', blurb: 'Bars & wine' },
   { id: 'hotel', short: 'Hotels', emoji: '🛏️', blurb: 'Places to stay' },
@@ -427,6 +428,7 @@ export function PlanBoard({
             place.category === 'drink' ||
             place.category === 'hotel' ||
             place.category === 'sights' ||
+            place.category === 'activity' ||
             place.category === 'nature'
           if (typed) setSuggestCat(place.category)
           else {

@@ -24,6 +24,19 @@ export function shareErrorMessage(err: unknown, fallback: string): string {
   if (code === 'permission-denied' || /permission/i.test(msg)) {
     return 'Permission denied — publish firestore.rules in Firebase Console (Firestore → Rules), then retry'
   }
+  if (
+    code === 'auth/internal-error' ||
+    code === 'auth/unauthorized-domain' ||
+    /auth\/internal-error|unauthorized.domain|auth\/unauthorized/i.test(msg)
+  ) {
+    return 'Google sign-in blocked — add this site’s hostname under Firebase Authentication → Settings → Authorized domains (and allow popups). Preview URLs need their own entry.'
+  }
+  if (code === 'auth/popup-blocked' || /popup.?blocked/i.test(msg)) {
+    return 'Sign-in popup was blocked — allow popups for this site and try again'
+  }
+  if (code === 'auth/popup-closed-by-user' || /popup.?closed/i.test(msg)) {
+    return 'Sign-in cancelled'
+  }
   if (code === 'unavailable' || /offline|network/i.test(msg)) {
     return 'Network unavailable — check connection and try again'
   }

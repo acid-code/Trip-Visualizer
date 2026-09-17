@@ -74,12 +74,13 @@ export async function fetchOsrmRoute(
   }
 }
 
-/** Fill missing drive polylines via OSRM. */
+/** Fill missing (or stale) drive polylines via OSRM. */
 export async function hydrateDriveRoutes(
   items: TripItem[],
   onProgress?: (done: number, total: number) => void,
 ): Promise<TripItem[]> {
-  const drives = items.filter(
+  const cleared = withInvalidatedDriveRoutes(items)
+  const drives = cleared.filter(
     (i) =>
       i.type === 'drive' &&
       i.status !== 'cancelled' &&
@@ -87,9 +88,9 @@ export async function hydrateDriveRoutes(
       isValidCoord(i.latTo, i.lonTo) &&
       (!i.routeCoords || i.routeCoords.length < 2),
   )
-  if (!drives.length) return items
+  if (!drives.length) return cleared
 
-  const map = new Map(items.map((i) => [i.id, i]))
+  const map = new Map(cleared.map((i) => [i.id, i]))
   let done = 0
   for (const drive of drives) {
     const coords = await fetchOsrmRoute(
@@ -102,7 +103,36 @@ export async function hydrateDriveRoutes(
     onProgress?.(done, drives.length)
     await new Promise((r) => setTimeout(r, 120))
   }
-  return items.map((i) => map.get(i.id) ?? i)
+  return cleared.map((i) => map.get(i.id) ?? i)
+}
+
+/**
+ * True when a drive's stored polyline still ends near current From/To.
+ * ~600m tolerance matches connector “same place” heuristics.
+ */
+export function driveRouteMatchesEndpoints(item: TripItem): boolean {
+  if (item.type !== 'drive') return true
+  const coords = item.routeCoords
+  if (!coords || coords.length < 2) return false
+  if (!isValidCoord(item.lat, item.lon) || !isValidCoord(item.latTo, item.lonTo)) {
+    return true
+  }
+  const start = coords[0]!
+  const end = coords[coords.length - 1]!
+  return (
+    distKm({ lat: start[0], lon: start[1] }, { lat: item.lat!, lon: item.lon! }) < 0.6 &&
+    distKm({ lat: end[0], lon: end[1] }, { lat: item.latTo!, lon: item.lonTo! }) < 0.6
+  )
+}
+
+/** Clear drive polylines that no longer match current endpoints (keep UX silent). */
+export function withInvalidatedDriveRoutes(items: TripItem[]): TripItem[] {
+  return items.map((item) => {
+    if (item.type !== 'drive') return item
+    if (!item.routeCoords || item.routeCoords.length < 2) return item
+    if (driveRouteMatchesEndpoints(item)) return item
+    return { ...item, routeCoords: [] }
+  })
 }
 
 const POINTISH = new Set([

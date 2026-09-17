@@ -119,12 +119,14 @@ function sectionEmoji(section: PlanSection | undefined): string {
   // Prefer section icon when it looks like an emoji (not a letter/digit glyph).
   if (icon && !/^[a-z0-9#@]+$/i.test(icon) && icon.length <= 4) return icon
   const t = (section?.title || '').toLowerCase()
-  if (t.includes('food') || t.includes('eat') || t.includes('drink')) return '🍽️'
-  if (t.includes('stay') || t.includes('hotel')) return '🛏️'
+  if (t.includes('food') || t.includes('eat') || t.includes('drink')) {
+    return TYPE_EMOJI.restaurant
+  }
+  if (t.includes('stay') || t.includes('hotel')) return TYPE_EMOJI.hotel
   if (t.includes('nature') || t.includes('outdoor')) return '🌿'
-  if (t.includes('must') || t.includes('sight')) return '🏛️'
-  if (t.includes('maybe') || t.includes('optional')) return '✨'
-  return '📍'
+  if (t.includes('must') || t.includes('sight')) return TYPE_EMOJI.sight
+  if (t.includes('maybe') || t.includes('optional')) return TYPE_EMOJI.other
+  return TYPE_EMOJI.sight
 }
 
 export function PlanMapView({

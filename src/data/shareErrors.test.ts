@@ -35,6 +35,19 @@ describe('shareErrorMessage', () => {
     )
   })
 
+  it('maps auth domain / internal / popup errors', () => {
+    expect(shareErrorMessage({ code: 'auth/internal-error' }, 'x')).toMatch(
+      /Authorized domains/,
+    )
+    expect(shareErrorMessage({ code: 'auth/unauthorized-domain' }, 'x')).toMatch(
+      /Authorized domains/,
+    )
+    expect(shareErrorMessage({ code: 'auth/popup-blocked' }, 'x')).toMatch(/popup/)
+    expect(shareErrorMessage({ code: 'auth/popup-closed-by-user' }, 'x')).toMatch(
+      /cancelled/,
+    )
+  })
+
   it('passes through config and PARTNER_UPDATED messages', () => {
     expect(
       shareErrorMessage(new Error('Sharing is not configured — set VITE_FIREBASE_*'), 'x'),

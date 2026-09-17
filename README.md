@@ -78,7 +78,11 @@ Optional: set Cesium ion / Google keys in the app’s **Data** panel (stored in 
 Invite-only near-live sync for two Google accounts.
 
 1. Create a Firebase project (Spark free tier is enough).
-2. Enable **Authentication → Google** and add your Vercel/`localhost` domain under Authorized domains.
+2. Enable **Authentication → Google** and add hosts under **Authorized domains**:
+   - `localhost`
+   - your production Vercel host
+   - **each preview host** you test (e.g. `trip-visualizer-git-feature-sharing-….vercel.app`) — Firebase does not wildcard `*.vercel.app`
+   - Also set `VITE_FIREBASE_*` for **Preview** (not only Production) in Vercel env settings
 3. Create **Firestore** (production mode).
 4. **Publish security rules (required before Enable sharing works):**
    - Open [Firestore Rules](https://console.firebase.google.com/project/triptracker-11e7e/firestore/rules) (replace project id if different)
@@ -91,6 +95,8 @@ Invite-only near-live sync for two Google accounts.
 8. **Re-publish rules** whenever `firestore.rules` changes in the repo (revokes, leave, and delete rely on the latest rules).
 
 **Delete / leave:** Owner delete removes the cloud trip for everyone. Partner delete (or **Leave shared trip**) drops their membership and keeps a local copy. **Stop sharing** revokes all editors and pending invites.
+
+**Sign-in tip:** `auth/internal-error` on a preview URL usually means that exact hostname is missing from Authorized domains (or the deploy predates the CSP fix for Firebase auth iframes).
 
 Drive Excel remains a personal backup (full-fidelity notes/confirmations) — prefer shared sync for the couple workspace.
 

@@ -56,6 +56,12 @@ const INCLUDED_TYPES_ALL = [
   'zoo',
   'amusement_park',
   'aquarium',
+  'movie_theater',
+  'bowling_alley',
+  'spa',
+  'stadium',
+  'adventure_sports_center',
+  'water_park',
   'beach',
   'marina',
   'lodging',
@@ -74,11 +80,29 @@ const INCLUDED_TYPES_BY_CATEGORY: Record<ExploreCategory, string[]> = {
     'hindu_temple',
     'mosque',
     'synagogue',
-    'zoo',
+    'visitor_center',
+  ],
+  activity: [
     'amusement_park',
     'aquarium',
+    'zoo',
+    'movie_theater',
+    'bowling_alley',
+    'spa',
+    'stadium',
+    'adventure_sports_center',
+    'water_park',
+    'casino',
     'performing_arts_theater',
-    'visitor_center',
+    'ferris_wheel',
+    'go_karting_venue',
+    'miniature_golf_course',
+    'paintball_center',
+    'skateboard_park',
+    'video_arcade',
+    'comedy_club',
+    'karaoke',
+    'concert_hall',
   ],
   hotel: ['lodging'],
   nature: ['park', 'beach', 'marina', 'campground', 'national_park'],
@@ -158,6 +182,30 @@ function categoryFromTypes(primary: string, types: string[]): ExploreCategory {
   if (all.some(isDrinkType)) return 'drink'
   if (has('vineyard')) return 'drink'
   if (
+    has('amusement_park') ||
+    has('aquarium') ||
+    has('zoo') ||
+    has('movie_theater') ||
+    has('bowling_alley') ||
+    has('spa') ||
+    has('stadium') ||
+    has('adventure_sports_center') ||
+    has('water_park') ||
+    has('casino') ||
+    has('performing_arts_theater') ||
+    has('ferris_wheel') ||
+    has('go_karting_venue') ||
+    has('miniature_golf_course') ||
+    has('paintball_center') ||
+    has('skateboard_park') ||
+    has('video_arcade') ||
+    has('comedy_club') ||
+    has('karaoke') ||
+    has('concert_hall')
+  ) {
+    return 'activity'
+  }
+  if (
     has('park') ||
     has('campground') ||
     has('national_park') ||
@@ -176,10 +224,6 @@ function categoryFromTypes(primary: string, types: string[]): ExploreCategory {
     has('hindu_temple') ||
     has('mosque') ||
     has('synagogue') ||
-    has('zoo') ||
-    has('aquarium') ||
-    has('amusement_park') ||
-    has('performing_arts_theater') ||
     has('visitor_center')
   ) {
     return 'sights'

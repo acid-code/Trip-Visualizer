@@ -58,6 +58,21 @@ export function createId(prefix = 'T'): string {
   return `${prefix}${rand}`
 }
 
+/** Remap Plan place links after Journey item ids change (duplicate trip). */
+export function remapPlanPlaceLinks(
+  places: NonNullable<TripRecord['planPlaces']>,
+  sectionIdMap: Map<string, string>,
+  itemIdMap: Map<string, string>,
+  newPlaceId: () => string = () => createId('PP'),
+): NonNullable<TripRecord['planPlaces']> {
+  return places.map((p) => ({
+    ...p,
+    id: newPlaceId(),
+    sectionId: sectionIdMap.get(p.sectionId) || p.sectionId,
+    linkedItemId: p.linkedItemId ? itemIdMap.get(p.linkedItemId) || '' : '',
+  }))
+}
+
 export function nowIso(): string {
   return new Date().toISOString()
 }
@@ -131,17 +146,26 @@ export async function ensureExampleTrip(): Promise<TripRecord> {
 
 export async function duplicateTrip(source: TripRecord): Promise<TripRecord> {
   const sectionIdMap = new Map<string, string>()
+  const itemIdMap = new Map<string, string>()
   const planSections = (source.planSections ?? []).map((s) => {
     const id = createId('SEC')
     sectionIdMap.set(s.id, id)
     return { ...s, id }
   })
-  const planPlaces = (source.planPlaces ?? []).map((p) => ({
-    ...p,
-    id: createId('PP'),
-    sectionId: sectionIdMap.get(p.sectionId) || p.sectionId,
-    linkedItemId: '',
-  }))
+  const items = source.items.map((item) => {
+    const id = createId(item.type[0]?.toUpperCase() ?? 'X')
+    itemIdMap.set(item.id, id)
+    return {
+      ...item,
+      id,
+      source: 'app' as const,
+    }
+  })
+  const planPlaces = remapPlanPlaceLinks(
+    source.planPlaces ?? [],
+    sectionIdMap,
+    itemIdMap,
+  )
   const copy = makeTrip(
     {
       ...source.meta,
@@ -149,11 +173,7 @@ export async function duplicateTrip(source: TripRecord): Promise<TripRecord> {
         ? `${source.meta.name} (my copy)`
         : `${source.meta.name} (copy)`,
     },
-    source.items.map((item) => ({
-      ...item,
-      id: createId(item.type[0]?.toUpperCase() ?? 'X'),
-      source: 'app',
-    })),
+    items,
     { isExample: false, planSections, planPlaces },
   )
   await saveTrip(copy)

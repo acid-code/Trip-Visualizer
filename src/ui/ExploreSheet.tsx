@@ -51,6 +51,12 @@ const CATEGORY_CHIPS: Array<{
     toneActive: 'border-sky-400 bg-sky-500 text-white shadow-sm',
   },
   {
+    id: 'activity',
+    short: 'Do',
+    tone: 'border-emerald-500/35 bg-emerald-500/10 text-[var(--ink)]',
+    toneActive: 'border-emerald-400 bg-emerald-500 text-white shadow-sm',
+  },
+  {
     id: 'hotel',
     short: 'Hotels',
     tone: 'border-teal-500/35 bg-teal-500/10 text-[var(--ink)]',

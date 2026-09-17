@@ -1,19 +1,20 @@
 import { useMemo, useState } from 'react'
 import {
+  TYPE_COLORS,
+  TYPE_EMOJI,
   type ItemType,
   type TripItem,
   type TripMeta,
 } from '../domain/types'
-import { TYPE_COLORS } from '../domain/types'
 import { createId, sortItems } from '../data/db'
 import { COMMON_CURRENCIES, normalizeCurrency } from '../data/fx'
+import { suggestInsertSlot } from '../data/insertSlot'
 import {
   isIsoDate,
   parseNonNegativeNumber,
   requireIsoDate,
   sanitizeEndDate,
   sanitizeTime,
-  todayIso,
   validateAddStep,
 } from '../data/validate'
 import { DateField } from './DateField'
@@ -39,36 +40,19 @@ type Props = {
   onCancel: () => void
 }
 
-const TYPE_META: { type: ItemType; emoji: string; blurb: string }[] = [
-  { type: 'sight', emoji: '📍', blurb: 'Place to visit' },
-  { type: 'restaurant', emoji: '🍽️', blurb: 'Meal / café' },
-  { type: 'hotel', emoji: '🛏️', blurb: 'Stay overnight' },
-  { type: 'activity', emoji: '🎟️', blurb: 'Tour or ticket' },
-  { type: 'drive', emoji: '🚗', blurb: 'Car leg' },
-  { type: 'flight', emoji: '✈️', blurb: 'Flight' },
-  { type: 'train', emoji: '🚆', blurb: 'Train' },
-  { type: 'bus', emoji: '🚌', blurb: 'Bus' },
-  { type: 'ferry', emoji: '⛴️', blurb: 'Ferry' },
-  { type: 'city', emoji: '🏙️', blurb: 'City hub' },
-  { type: 'other', emoji: '✨', blurb: 'Anything else' },
+const TYPE_META: { type: ItemType; blurb: string }[] = [
+  { type: 'sight', blurb: 'Place to visit' },
+  { type: 'restaurant', blurb: 'Meal / café' },
+  { type: 'hotel', blurb: 'Stay overnight' },
+  { type: 'activity', blurb: 'Tour or ticket' },
+  { type: 'drive', blurb: 'Car leg' },
+  { type: 'flight', blurb: 'Flight' },
+  { type: 'train', blurb: 'Rail' },
+  { type: 'bus', blurb: 'Coach' },
+  { type: 'ferry', blurb: 'Boat' },
+  { type: 'city', blurb: 'City hub' },
+  { type: 'other', blurb: 'Anything else' },
 ]
-
-function midpointTime(a?: string, b?: string): string {
-  const toMin = (t?: string) => {
-    if (!t || !/^\d{1,2}:\d{2}$/.test(t)) return null
-    const [h, m] = t.split(':').map(Number)
-    return h * 60 + m
-  }
-  const am = toMin(a)
-  const bm = toMin(b)
-  if (am == null && bm == null) return ''
-  if (am == null) return b || ''
-  if (bm == null) return a || ''
-  const mid = Math.round((am + bm) / 2)
-  const hh = String(Math.floor(mid / 60) % 24).padStart(2, '0')
-  const mm = String(mid % 60).padStart(2, '0')
-  return `${hh}:${mm}`
-}
 
 export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props) {
   const sorted = useMemo(() => sortItems(items), [items])
@@ -80,14 +64,13 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
     : null
 
   const defaults = useMemo(() => {
-    const date = requireIsoDate(
-      context?.date || after?.date || before?.date || meta.startDate,
-      todayIso(),
-    )
-    const start = sanitizeTime(midpointTime(after?.end || after?.start, before?.start))
+    const slot = suggestInsertSlot(after, before, meta.startDate)
     const city = after?.city || before?.city || ''
     const type = context?.defaultType ?? 'sight'
-    return { date, start, city, type }
+    const date = context?.date
+      ? requireIsoDate(context.date, slot.date)
+      : slot.date
+    return { date, start: slot.start, city, type }
   }, [after, before, meta.startDate, context?.date, context?.defaultType])
 
   const [type, setType] = useState<ItemType>(defaults.type)
@@ -293,7 +276,7 @@ export function AddStepPanel({ meta, items, context, onCreate, onCancel }: Props
                   }`}
                   style={on ? { background: TYPE_COLORS[t.type] } : undefined}
                 >
-                  <div className="text-lg leading-none">{t.emoji}</div>
+                  <div className="text-lg leading-none">{TYPE_EMOJI[t.type]}</div>
                   <div className="mt-1 text-[11px] font-semibold capitalize">{t.type}</div>
                   <div className={`mt-0.5 text-[10px] ${on ? 'text-white/80' : 'text-stone-400'}`}>
                     {t.blurb}
