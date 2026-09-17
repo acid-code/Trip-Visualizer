@@ -96,7 +96,13 @@ Invite-only near-live sync for two Google accounts.
 
 **Delete / leave:** Owner delete removes the cloud trip for everyone. Partner delete (or **Leave shared trip**) drops their membership and keeps a local copy. **Stop sharing** revokes all editors and pending invites.
 
-**Sign-in tip:** `auth/internal-error` on a preview URL usually means that exact hostname is missing from Authorized domains (or the deploy predates the CSP fix for Firebase auth iframes).
+**Sign-in tip:** `auth/internal-error` on a preview URL is usually one of:
+1. Hostname missing from Firebase **Authorized domains** (exact host, no `https://` — Firebase does not wildcard `*.vercel.app`)
+2. **Google Cloud → Credentials**: Firebase browser API key has HTTP referrer restrictions that omit this preview URL, *or* the “Web client (auto created by Google Service)” OAuth client is missing this origin under **Authorized JavaScript origins**
+3. Preview deploy missing `VITE_FIREBASE_*` (must be enabled for Preview, not only Production)
+4. Deploy predates the CSP allowlist for `*.firebaseapp.com` / `*.web.app`
+
+After fixing, hard-refresh. Sign-in now falls back to full-page Google redirect if the popup path fails.
 
 Drive Excel remains a personal backup (full-fidelity notes/confirmations) — prefer shared sync for the couple workspace.
 

@@ -67,6 +67,7 @@ import {
 } from './data/mapsLinks'
 import { GlobeView, type MapSelectPayload } from './ui/GlobeView'
 import { TimelinePanel } from './ui/TimelinePanel'
+import type { MapFocus, MapFocusApi } from './data/mapFocus'
 import { ChartsPanel } from './ui/ChartsPanel'
 import { ItemDrawer } from './ui/ItemDrawer'
 import { AddStepPanel, type AddContext } from './ui/AddStepPanel'
@@ -159,10 +160,12 @@ import { TripStartCoach } from './ui/TripStartCoach'
 import { PlanStartCoach } from './ui/PlanStartCoach'
 import { TripSharePanel } from './ui/TripSharePanel'
 import {
+  completeGoogleRedirectSignIn,
   isCloudAuthConfigured,
   watchCloudAuth,
   type CloudUser,
 } from './data/cloudAuth'
+import { shareErrorMessage } from './data/shareErrors'
 import {
   clearLocalShare,
   deleteCloudShare,
@@ -185,6 +188,71 @@ function cloneTripItem(item: TripItem): TripItem {
     routeCoords: item.routeCoords
       ? item.routeCoords.map((c) => [c[0], c[1]] as [number, number])
       : [],
+  }
+}
+
+function isTransportLegType(type: TripItem['type']): boolean {
+  return (
+    type === 'flight' ||
+    type === 'train' ||
+    type === 'bus' ||
+    type === 'ferry' ||
+    type === 'drive'
+  )
+}
+
+/** Yellow path glow + redirect target for an existing drive/flight/train/… step. */
+function routeWalkForTransportItem(item: TripItem):
+  | {
+      kind: 'route'
+      origin: { lat: number; lon: number }
+      destination: { lat: number; lon: number }
+      travelMode: MapsTravelMode
+      coords: [number, number][]
+    }
+  | {
+      kind: 'flights'
+      from: string
+      to: string
+      date: string
+      origin: { lat: number; lon: number }
+      destination: { lat: number; lon: number }
+      coords: [number, number][]
+    }
+  | null {
+  if (!isTransportLegType(item.type)) return null
+  if (!isValidCoord(item.lat, item.lon) || !isValidCoord(item.latTo, item.lonTo)) {
+    return null
+  }
+  const coords: [number, number][] =
+    item.routeCoords && item.routeCoords.length > 1
+      ? item.routeCoords
+      : [
+          [item.lat!, item.lon!],
+          [item.latTo!, item.lonTo!],
+        ]
+  const origin = { lat: coords[0]![0], lon: coords[0]![1] }
+  const destination = {
+    lat: coords[coords.length - 1]![0],
+    lon: coords[coords.length - 1]![1],
+  }
+  if (item.type === 'flight') {
+    return {
+      kind: 'flights',
+      from: item.from || item.place || item.title,
+      to: item.to || item.title,
+      date: item.date,
+      origin,
+      destination,
+      coords,
+    }
+  }
+  return {
+    kind: 'route',
+    origin,
+    destination,
+    travelMode: travelModeForLeg(item.type),
+    coords,
   }
 }
 
@@ -216,6 +284,10 @@ export default function App() {
   const [mapLook, setMapLook] = useState<MapLook>(DEFAULT_MAP_LOOK)
   const [colorMode, setColorMode] = useState<ColorMode>(DEFAULT_COLOR_MODE)
   const [appMode, setAppMode] = useState<'journey' | 'plan'>('journey')
+  const journeyMapFocusApiRef = useRef<MapFocusApi | null>(null)
+  const planMapFocusApiRef = useRef<MapFocusApi | null>(null)
+  const sharedMapFocusRef = useRef<MapFocus | null>(null)
+  const [planBootFocus, setPlanBootFocus] = useState<MapFocus | null>(null)
   const [googleKey, setGoogleKey] = useState('')
   const [ionToken, setIonToken] = useState('')
   /** Data-panel override only — deploy key stays on the server. */
@@ -433,6 +505,10 @@ export default function App() {
 
   useEffect(() => {
     if (!isCloudAuthConfigured()) return
+    void completeGoogleRedirectSignIn().catch((err) => {
+      logClientError('share-signin-redirect', err)
+      setStatus(shareErrorMessage(err, 'Google sign-in failed'))
+    })
     return watchCloudAuth((user) => {
       setCloudUser(user)
       if (!user) {
@@ -1056,13 +1132,15 @@ export default function App() {
       return
     }
     clearTempPin()
-    setRouteWalk(null)
     setMapFocusEndpoint(null)
     const item = stepById(id)
     if (item && isPlaceholderBase(item)) {
+      setRouteWalk(null)
       openFillDayBase(item)
       return
     }
+    const pathWalk = item ? routeWalkForTransportItem(item) : null
+    setRouteWalk(pathWalk)
     setSelectedId(id)
     setStepDraft(null)
     setNavTab('timeline')
@@ -1194,9 +1272,11 @@ export default function App() {
     if (exploreOpen) closeExplore()
 
     if (payload.kind === 'flight' || payload.kind === 'route') {
-      // Keep Steps open during AI review so Save/Discard stay usable with the list
+      const item = stepById(payload.itemId)
+      const tripTransport = !!item && isTransportLegType(item.type)
+      // Existing drive/flight/train legs: keep Steps open so the step stays visible
       if (!aiReview) {
-        setPanelOpen(false)
+        setPanelOpen(tripTransport)
       } else {
         setPanelOpen(true)
       }
@@ -1222,7 +1302,6 @@ export default function App() {
         })
       }
       setMapFocusEndpoint(null)
-      const item = stepById(payload.itemId)
       if (item && isPlaceholderBase(item)) {
         if (!aiReview) openFillDayBase(item)
         return
@@ -1237,9 +1316,11 @@ export default function App() {
     // Selecting a step pin should show it in the Steps sheet (esp. on phone)
     setNavTab('timeline')
     setPanelOpen(true)
-    setRouteWalk(null)
-    setMapFocusEndpoint(payload.endpoint)
     const item = stepById(payload.itemId)
+    // Endpoint of a transport leg → also light up the path + mid emoji
+    const pathWalk = item ? routeWalkForTransportItem(item) : null
+    setRouteWalk(pathWalk)
+    setMapFocusEndpoint(pathWalk ? null : payload.endpoint)
     if (item && isPlaceholderBase(item)) {
       if (!aiReview) openFillDayBase(item)
       return
@@ -1254,13 +1335,14 @@ export default function App() {
   /** Second tap on an already-highlighted step — opens Detail (or fill form for placeholders). */
   function selectFromList(id: string) {
     clearTempPin()
-    setRouteWalk(null)
     setMapFocusEndpoint(null)
     const item = stepById(id)
     if (item && isPlaceholderBase(item)) {
+      setRouteWalk(null)
       openFillDayBase(item)
       return
     }
+    setRouteWalk(item ? routeWalkForTransportItem(item) : null)
     if (id === selectedId && lowerMode === 'detail' && detailExpanded) {
       discardStepDetail()
       return
@@ -2108,6 +2190,7 @@ export default function App() {
           openingOriginOnly={isPhone}
           phoneFraming={isPhone}
           renderActive={appMode === 'journey'}
+          mapFocusApiRef={journeyMapFocusApiRef}
           tempPin={tempPin}
           nearbyLinks={nearbyLinks}
           tempFlyToken={tempFlyToken}
@@ -2167,12 +2250,21 @@ export default function App() {
         <div className="flex h-full items-center justify-center text-[var(--ink-muted)]">Loading…</div>
       )}
 
-      {appMode === 'plan' && active ? (
-        <div className="absolute inset-0 z-[28] flex flex-col bg-[var(--bg)]">
+      {active ? (
+        <div
+          className={`absolute inset-0 z-[28] flex flex-col bg-[var(--bg)] ${
+            appMode === 'plan' ? '' : 'invisible pointer-events-none'
+          }`}
+          aria-hidden={appMode !== 'plan'}
+        >
           <PlanBoard
             trip={ensurePlanScaffold(active)}
             placesEnabled={placesEnabled}
             googleApiKey={effectiveGoogleKey || undefined}
+            dayFilter={dayFilter}
+            onDayFilter={setDayFilter}
+            initialMapFocus={planBootFocus}
+            mapFocusApiRef={planMapFocusApiRef}
             onChange={(next) => void persist(next)}
             onStatus={setStatus}
             onAskAi={(prompt) => {
@@ -2223,9 +2315,21 @@ export default function App() {
               ariaLabel="App mode"
               value={appMode}
               onChange={(mode) => {
-                setAppMode(mode)
-                void setSetting('appMode', mode)
+                if (mode === appMode) return
                 if (mode === 'plan') {
+                  const focus =
+                    journeyMapFocusApiRef.current?.capture() ??
+                    sharedMapFocusRef.current
+                  if (focus) {
+                    sharedMapFocusRef.current = focus
+                    setPlanBootFocus(focus)
+                    // Apply after Plan map is visible (may already be mounted)
+                    requestAnimationFrame(() => {
+                      planMapFocusApiRef.current?.apply(focus)
+                      // MapLibre needs a resize after becoming visible
+                      window.dispatchEvent(new Event('resize'))
+                    })
+                  }
                   clearTempPin()
                   setRouteWalk(null)
                   setExploreOpen(false)
@@ -2236,7 +2340,19 @@ export default function App() {
                     planCoachShownRef.current = true
                     window.setTimeout(() => setPlanStartCoachOpen(true), 320)
                   }
+                } else {
+                  const focus =
+                    planMapFocusApiRef.current?.capture() ??
+                    sharedMapFocusRef.current
+                  if (focus) {
+                    sharedMapFocusRef.current = focus
+                    requestAnimationFrame(() => {
+                      journeyMapFocusApiRef.current?.apply(focus)
+                    })
+                  }
                 }
+                setAppMode(mode)
+                void setSetting('appMode', mode)
               }}
               options={[
                 { id: 'journey', label: 'Journey' },

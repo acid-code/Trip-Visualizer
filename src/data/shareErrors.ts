@@ -29,7 +29,9 @@ export function shareErrorMessage(err: unknown, fallback: string): string {
     code === 'auth/unauthorized-domain' ||
     /auth\/internal-error|unauthorized.domain|auth\/unauthorized/i.test(msg)
   ) {
-    return 'Google sign-in blocked — add this site’s hostname under Firebase Authentication → Settings → Authorized domains (and allow popups). Preview URLs need their own entry.'
+    const host =
+      typeof window !== 'undefined' ? window.location.hostname : 'this host'
+    return `Google sign-in blocked on “${host}”. In Firebase → Authentication → Settings → Authorized domains, add that exact hostname (no https://). Also check Google Cloud → Credentials: the Firebase API key’s HTTP referrers and the Web OAuth client’s Authorized JavaScript origins must allow this preview URL. Then hard-refresh.`
   }
   if (code === 'auth/popup-blocked' || /popup.?blocked/i.test(msg)) {
     return 'Sign-in popup was blocked — allow popups for this site and try again'
