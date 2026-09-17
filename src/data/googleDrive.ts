@@ -1,14 +1,22 @@
 /**
- * Google Drive sync for trip Excel workbooks.
+ * Google Drive sync for trip Excel workbooks and My Maps layer Sheets.
  * Uses Google Identity Services (browser OAuth) + Drive REST API.
- * Files live under a folder named `trip-planer/` that this app creates.
+ *
+ * Layout under `trip-planer/`:
+ *   excel/       — trip .xlsx workbooks
+ *   map-layers/  — Plan + Journey Google Sheets for My Maps Import
  *
  * Scope note: `drive.file` only sees files *this app* created/opened, so a
  * workbook you drop into the folder in Drive UI stays invisible. Full `drive`
- * lets Refresh list show every .xlsx in trip-planer/ (including manual uploads).
+ * lets Refresh list show every .xlsx in excel/ (including manual uploads).
  */
 
+import type { TripRecord } from '../domain/types'
+import { buildMyMapsLayers } from './myMapsExport'
+
 const DRIVE_FOLDER_NAME = 'trip-planer'
+const DRIVE_EXCEL_SUBFOLDER = 'excel'
+const DRIVE_MAP_LAYERS_SUBFOLDER = 'map-layers'
 /** Full Drive — required to list/load workbooks the user added outside the app. */
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive'
 const GIS_SCRIPT = 'https://accounts.google.com/gsi/client'
@@ -17,7 +25,16 @@ const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3'
 /** Bump when OAuth scopes change so stale tokens are not reused. */
 const TOKEN_STORAGE_KEY = 'trip-drive-oauth-v2'
 const FOLDER_STORAGE_KEY = 'trip-drive-folder-id'
+const EXCEL_FOLDER_STORAGE_KEY = 'trip-drive-excel-folder-id'
+const MAP_LAYERS_FOLDER_STORAGE_KEY = 'trip-drive-map-layers-folder-id'
 const TRIP_FILE_MAP_KEY = 'trip-drive-file-map'
+const TRIP_LAYER_MAP_KEY = 'trip-drive-layer-map'
+
+const SHEET_MIME = 'application/vnd.google-apps.spreadsheet'
+const CSV_MIME = 'text/csv'
+const FOLDER_MIME = 'application/vnd.google-apps.folder'
+const XLSX_MIME =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 export type DriveFileInfo = {
   id: string
@@ -25,6 +42,20 @@ export type DriveFileInfo = {
   modifiedTime?: string
   webViewLink?: string
   mimeType?: string
+}
+
+export type DriveLayerFileInfo = {
+  fileId: string
+  fileName: string
+  webViewLink?: string
+}
+
+export type DriveMapLayersHandoff = {
+  plan: DriveLayerFileInfo
+  journey: DriveLayerFileInfo
+  mapLayersFolderId: string
+  planRowCount: number
+  journeyRowCount: number
 }
 
 type TokenResponse = {
@@ -269,6 +300,8 @@ export function disconnectGoogleDrive(): void {
   tokenClient = null
   try {
     localStorage.removeItem(FOLDER_STORAGE_KEY)
+    localStorage.removeItem(EXCEL_FOLDER_STORAGE_KEY)
+    localStorage.removeItem(MAP_LAYERS_FOLDER_STORAGE_KEY)
   } catch {
     /* ignore */
   }
@@ -373,6 +406,23 @@ function writeStoredFolderId(id: string | null) {
   }
 }
 
+function readStoredSubfolderId(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function writeStoredSubfolderId(key: string, id: string | null) {
+  try {
+    if (!id) localStorage.removeItem(key)
+    else localStorage.setItem(key, id)
+  } catch {
+    /* ignore */
+  }
+}
+
 async function verifyFolderId(
   folderId: string,
   interactive = false,
@@ -382,19 +432,13 @@ async function verifyFolderId(
     {},
     interactive,
   )
-  if (!res.ok) {
-    writeStoredFolderId(null)
-    return null
-  }
+  if (!res.ok) return null
   const data = (await res.json()) as {
     id?: string
     trashed?: boolean
     mimeType?: string
   }
-  if (!data.id || data.trashed || data.mimeType !== 'application/vnd.google-apps.folder') {
-    writeStoredFolderId(null)
-    return null
-  }
+  if (!data.id || data.trashed || data.mimeType !== FOLDER_MIME) return null
   return data.id
 }
 
@@ -403,10 +447,11 @@ async function findFolderId(tokenInteractive = false): Promise<string | null> {
   if (remembered) {
     const ok = await verifyFolderId(remembered, tokenInteractive)
     if (ok) return ok
+    writeStoredFolderId(null)
   }
 
   const q = encodeURIComponent(
-    `name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    `name='${DRIVE_FOLDER_NAME}' and mimeType='${FOLDER_MIME}' and trashed=false`,
   )
   const res = await driveFetch(
     `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name)&pageSize=5`,
@@ -432,7 +477,7 @@ async function createTripPlanerFolder(interactive = true): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: DRIVE_FOLDER_NAME,
-        mimeType: 'application/vnd.google-apps.folder',
+        mimeType: FOLDER_MIME,
       }),
     },
     interactive,
@@ -455,6 +500,137 @@ async function ensureTripPlanerFolder(interactive = true): Promise<string> {
     if (!/403|not enabled|denied/i.test(msg)) throw err
   }
   return createTripPlanerFolder(interactive)
+}
+
+async function findChildFolderId(
+  parentId: string,
+  name: string,
+  interactive = false,
+): Promise<string | null> {
+  const q = encodeURIComponent(
+    `name='${name}' and '${parentId}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`,
+  )
+  const res = await driveFetch(
+    `${DRIVE_API}/files?q=${q}&spaces=drive&fields=files(id,name)&pageSize=5`,
+    {},
+    interactive,
+  )
+  if (!res.ok) {
+    if (res.status === 404 || res.status === 400) return null
+    throw new Error(await driveErrorMessage(res, `Drive folder “${name}” lookup failed`))
+  }
+  const data = (await res.json()) as { files?: Array<{ id: string }> }
+  return data.files?.[0]?.id ?? null
+}
+
+async function createChildFolder(
+  parentId: string,
+  name: string,
+  interactive = true,
+): Promise<string> {
+  const res = await driveFetch(
+    `${DRIVE_API}/files?fields=id,name`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        mimeType: FOLDER_MIME,
+        parents: [parentId],
+      }),
+    },
+    interactive,
+  )
+  if (!res.ok) {
+    throw new Error(await driveErrorMessage(res, `Could not create Drive folder “${name}”`))
+  }
+  const data = (await res.json()) as { id: string }
+  return data.id
+}
+
+async function ensureChildFolder(
+  parentId: string,
+  name: string,
+  storageKey: string,
+  interactive = true,
+): Promise<string> {
+  const remembered = readStoredSubfolderId(storageKey)
+  if (remembered) {
+    const ok = await verifyFolderId(remembered, interactive)
+    if (ok) return ok
+    writeStoredSubfolderId(storageKey, null)
+  }
+  const existing = await findChildFolderId(parentId, name, interactive)
+  if (existing) {
+    writeStoredSubfolderId(storageKey, existing)
+    return existing
+  }
+  const created = await createChildFolder(parentId, name, interactive)
+  writeStoredSubfolderId(storageKey, created)
+  return created
+}
+
+async function moveFileToFolder(
+  fileId: string,
+  fromParentId: string,
+  toParentId: string,
+): Promise<void> {
+  const res = await driveFetch(
+    `${DRIVE_API}/files/${encodeURIComponent(fileId)}?addParents=${encodeURIComponent(toParentId)}&removeParents=${encodeURIComponent(fromParentId)}&fields=id,parents`,
+    { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+    true,
+  )
+  if (!res.ok) {
+    throw new Error(await driveErrorMessage(res, 'Could not move Drive workbook into excel/'))
+  }
+}
+
+/** Move legacy root-level .xlsx into excel/ once. */
+async function migrateRootWorkbooksToExcel(
+  rootId: string,
+  excelId: string,
+): Promise<void> {
+  const files = await listFilesInFolder(rootId)
+  const workbooks = files.filter(
+    (f) =>
+      f.mimeType !== FOLDER_MIME &&
+      (/\.xlsx?$/i.test(f.name) ||
+        f.mimeType === XLSX_MIME ||
+        f.mimeType === SHEET_MIME),
+  )
+  for (const f of workbooks) {
+    try {
+      await moveFileToFolder(f.id, rootId, excelId)
+    } catch {
+      /* best-effort — leave file in place if move fails */
+    }
+  }
+}
+
+async function ensureExcelFolder(interactive = true): Promise<string> {
+  const rootId = await ensureTripPlanerFolder(interactive)
+  const excelId = await ensureChildFolder(
+    rootId,
+    DRIVE_EXCEL_SUBFOLDER,
+    EXCEL_FOLDER_STORAGE_KEY,
+    interactive,
+  )
+  try {
+    await migrateRootWorkbooksToExcel(rootId, excelId)
+  } catch {
+    /* ignore migration errors */
+  }
+  return excelId
+}
+
+async function ensureMapLayersFolder(interactive = true): Promise<string> {
+  const rootId = await ensureTripPlanerFolder(interactive)
+  return ensureChildFolder(
+    rootId,
+    DRIVE_MAP_LAYERS_SUBFOLDER,
+    MAP_LAYERS_FOLDER_STORAGE_KEY,
+    interactive,
+  )
 }
 
 function readTripFileMap(): Record<string, { fileId: string; fileName: string }> {
@@ -558,9 +734,6 @@ async function listFilesInFolder(folderId: string): Promise<DriveFileInfo[]> {
   return data.files ?? []
 }
 
-const XLSX_MIME =
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-
 function asBinaryBody(bytes: ArrayBuffer): Blob {
   return new Blob([new Uint8Array(bytes)], { type: XLSX_MIME })
 }
@@ -650,14 +823,14 @@ async function updateExistingDriveFile(
   return { fileName: data.name || fileName, fileId: data.id || fileId }
 }
 
-/** Upload workbook bytes into trip-planer/. Updates the same Drive file for a tripId, renaming it when the trip name changes. */
+/** Upload workbook bytes into trip-planer/excel/. Updates the same Drive file for a tripId, renaming it when the trip name changes. */
 export async function uploadTripWorkbookToDrive(
   tripName: string,
   bytes: ArrayBuffer,
   tripId?: string,
 ): Promise<{ fileName: string; fileId: string }> {
   assertXlsxBytes(bytes)
-  const folderId = await ensureTripPlanerFolder(true)
+  const folderId = await ensureExcelFolder(true)
   const files = await listFilesInFolder(folderId)
   const base = slugTripFileBase(tripName)
 
@@ -712,15 +885,15 @@ export async function uploadTripWorkbookToDrive(
   return out
 }
 
-/** List trip workbooks in trip-planer/ (creates the folder if needed). */
+/** List trip workbooks in trip-planer/excel/ (creates folders if needed). */
 export async function listTripWorkbooksOnDrive(): Promise<DriveFileInfo[]> {
-  const folderId = await ensureTripPlanerFolder(true)
+  const folderId = await ensureExcelFolder(true)
   const files = await listFilesInFolder(folderId)
   return files.filter(
     (f) =>
       /\.xlsx?$/i.test(f.name) ||
       f.mimeType === XLSX_MIME ||
-      f.mimeType === 'application/vnd.google-apps.spreadsheet',
+      f.mimeType === SHEET_MIME,
   )
 }
 
@@ -767,4 +940,205 @@ export async function getDriveFileMeta(fileId: string): Promise<DriveFileInfo> {
   return (await res.json()) as DriveFileInfo
 }
 
-export { DRIVE_FOLDER_NAME }
+function readTripLayerMap(): Record<string, { plan: DriveLayerFileInfo; journey: DriveLayerFileInfo }> {
+  try {
+    const raw = localStorage.getItem(TRIP_LAYER_MAP_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object') return {}
+    return parsed as Record<string, { plan: DriveLayerFileInfo; journey: DriveLayerFileInfo }>
+  } catch {
+    return {}
+  }
+}
+
+function writeTripLayerMap(
+  map: Record<string, { plan: DriveLayerFileInfo; journey: DriveLayerFileInfo }>,
+) {
+  try {
+    localStorage.setItem(TRIP_LAYER_MAP_KEY, JSON.stringify(map))
+  } catch {
+    /* ignore */
+  }
+}
+
+export function rememberMapLayersForTrip(
+  tripId: string,
+  plan: DriveLayerFileInfo,
+  journey: DriveLayerFileInfo,
+): void {
+  const map = readTripLayerMap()
+  map[tripId] = { plan, journey }
+  writeTripLayerMap(map)
+}
+
+export function getRememberedMapLayersForTrip(
+  tripId: string,
+): { plan: DriveLayerFileInfo; journey: DriveLayerFileInfo } | null {
+  return readTripLayerMap()[tripId] ?? null
+}
+
+export function forgetMapLayersForTrip(tripId: string): void {
+  const map = readTripLayerMap()
+  if (!(tripId in map)) return
+  delete map[tripId]
+  writeTripLayerMap(map)
+}
+
+function uniqueSheetName(base: string, existingNames: string[]): string {
+  const lower = new Set(existingNames.map((n) => n.toLowerCase()))
+  if (!lower.has(base.toLowerCase())) return base
+  for (let i = 2; i < 200; i++) {
+    const candidate = `${base} ${i}`
+    if (!lower.has(candidate.toLowerCase())) return candidate
+  }
+  return `${base} ${Date.now()}`
+}
+
+function buildMultipartRelated(
+  metadata: object,
+  media: string,
+  mediaType: string,
+): { body: string; contentType: string } {
+  const boundary = `trip_worker_${Date.now().toString(36)}`
+  const body =
+    `--${boundary}\r\n` +
+    `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+    `${JSON.stringify(metadata)}\r\n` +
+    `--${boundary}\r\n` +
+    `Content-Type: ${mediaType}\r\n\r\n` +
+    `${media}\r\n` +
+    `--${boundary}--`
+  return { body, contentType: `multipart/related; boundary=${boundary}` }
+}
+
+async function trashDriveFile(fileId: string): Promise<void> {
+  const res = await driveFetch(
+    `${DRIVE_API}/files/${encodeURIComponent(fileId)}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trashed: true }),
+    },
+    true,
+  )
+  if (!res.ok) {
+    // Best-effort — create will still proceed with a new name if needed
+    return
+  }
+}
+
+async function createGoogleSheetFromCsv(
+  folderId: string,
+  fileName: string,
+  csvText: string,
+): Promise<DriveLayerFileInfo> {
+  const metadata = {
+    name: fileName,
+    mimeType: SHEET_MIME,
+    parents: [folderId],
+  }
+  const { body, contentType } = buildMultipartRelated(metadata, csvText, CSV_MIME)
+  const res = await driveFetch(
+    `${DRIVE_UPLOAD}/files?uploadType=multipart&fields=id,name,webViewLink,mimeType`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': contentType },
+      body,
+    },
+    true,
+  )
+  if (!res.ok) {
+    throw new Error(await driveErrorMessage(res, 'Could not create My Maps layer Sheet'))
+  }
+  const data = (await res.json()) as {
+    id: string
+    name?: string
+    webViewLink?: string
+    mimeType?: string
+  }
+  if (!data.id) throw new Error('Drive did not return a Sheet id')
+  return {
+    fileId: data.id,
+    fileName: data.name || fileName,
+    webViewLink: data.webViewLink || driveFileWebUrl(data.id),
+  }
+}
+
+async function upsertGoogleSheetFromCsv(
+  folderId: string,
+  desiredName: string,
+  csvText: string,
+  existing: DriveLayerFileInfo | null,
+  filesInFolder: DriveFileInfo[],
+): Promise<DriveLayerFileInfo> {
+  const others = filesInFolder
+    .filter((f) => !existing || f.id !== existing.fileId)
+    .map((f) => f.name)
+  const nextName = uniqueSheetName(desiredName, others)
+
+  if (existing?.fileId) {
+    await trashDriveFile(existing.fileId)
+  } else {
+    const byName = filesInFolder.find(
+      (f) =>
+        f.name.toLowerCase() === desiredName.toLowerCase() ||
+        f.name.toLowerCase() === nextName.toLowerCase(),
+    )
+    if (byName) await trashDriveFile(byName.id)
+  }
+
+  return createGoogleSheetFromCsv(folderId, nextName, csvText)
+}
+
+/**
+ * Upload Plan + Journey CSVs into trip-planer/map-layers/ as Google Sheets
+ * (convert on upload) for My Maps Import from Drive.
+ */
+export async function uploadTripMapLayersToDrive(
+  trip: TripRecord,
+): Promise<DriveMapLayersHandoff> {
+  const layers = buildMyMapsLayers(trip)
+  const folderId = await ensureMapLayersFolder(true)
+  const files = await listFilesInFolder(folderId)
+  const base = slugTripFileBase(trip.meta.name)
+  const remembered = getRememberedMapLayersForTrip(trip.id)
+
+  const plan = await upsertGoogleSheetFromCsv(
+    folderId,
+    `${base} Plan`,
+    layers.plan.csv,
+    remembered?.plan ?? null,
+    files,
+  )
+  // Refresh list after first write so journey naming sees the new plan file
+  const filesAfterPlan = await listFilesInFolder(folderId)
+  const journey = await upsertGoogleSheetFromCsv(
+    folderId,
+    `${base} Journey`,
+    layers.journey.csv,
+    remembered?.journey ?? null,
+    filesAfterPlan,
+  )
+
+  rememberMapLayersForTrip(trip.id, plan, journey)
+
+  return {
+    plan,
+    journey,
+    mapLayersFolderId: folderId,
+    planRowCount: layers.plan.rows.length,
+    journeyRowCount: layers.journey.rows.length,
+  }
+}
+
+export async function resolveMapLayersFolderOpenUrl(): Promise<string | null> {
+  const id = await ensureMapLayersFolder(true)
+  return id ? driveFolderWebUrl(id) : null
+}
+
+export {
+  DRIVE_FOLDER_NAME,
+  DRIVE_EXCEL_SUBFOLDER,
+  DRIVE_MAP_LAYERS_SUBFOLDER,
+}
