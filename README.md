@@ -107,6 +107,7 @@ Drive Excel remains a personal backup (full-fidelity notes/confirmations) — pr
 - CesiumJS, SheetJS (`xlsx`), IndexedDB (`idb`), Zod, ECharts, Firebase Auth + Firestore
 - Nominatim / Wikidata / OSRM for enrichment and routes
 - Frankfurter (ECB) for FX totals
+- Vitest unit tests; GitHub Actions (`.github/workflows/ci.yml`) runs `npm test`, `tsc`, and production build on push/PR
 
 ## License
 

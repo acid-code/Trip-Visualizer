@@ -35,8 +35,9 @@ function dbOrThrow() {
 
 /**
  * Firestore forbids nested arrays. Encode routeCoords [lat,lon][] as {lat,lon}[].
+ * Exported for unit tests.
  */
-function encodeRecordForFirestore(trip: TripRecord): unknown {
+export function encodeRecordForFirestore(trip: TripRecord): unknown {
   return forFirestore({
     ...trip,
     items: trip.items.map((item) => ({
@@ -46,7 +47,8 @@ function encodeRecordForFirestore(trip: TripRecord): unknown {
   })
 }
 
-function decodeRecordFromFirestore(raw: unknown): TripRecord {
+/** Decode a cloud payload back into a sanitized TripRecord. Exported for unit tests. */
+export function decodeRecordFromFirestore(raw: unknown): TripRecord {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const itemsIn = Array.isArray(obj.items) ? obj.items : []
   const items = itemsIn.map((item) => {
