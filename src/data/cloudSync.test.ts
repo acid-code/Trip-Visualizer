@@ -32,38 +32,55 @@ const batchSetMock = vi.fn<MockFn>()
 const batchDeleteMock = vi.fn<MockFn>()
 const batchCommitMock = vi.fn<MockFn>(async () => undefined)
 const runTransactionMock = vi.fn<MockFn>(async (_db, updateFn) => {
+  const { assertNoUndefinedFields } = await import('./shareErrors')
   const fn = updateFn as (tx: {
     get: (ref: unknown) => Promise<unknown>
     set: (...args: unknown[]) => unknown
   }) => Promise<unknown>
   return fn({
     get: (ref) => Promise.resolve(getDocMock(ref)),
-    set: (...args) => setDocMock(...args),
+    set: (...args: unknown[]) => {
+      assertNoUndefinedFields(args[1])
+      return setDocMock(...args)
+    },
   })
 })
 
-vi.mock('firebase/firestore', () => ({
-  doc: (_db: unknown, ...segments: string[]) => ({
-    id: segments[segments.length - 1],
-    path: segments.join('/'),
-    segments,
-  }),
-  collection: (_db: unknown, ...segments: string[]) => ({
-    path: segments.join('/'),
-    segments,
-  }),
-  setDoc: (...args: unknown[]) => setDocMock(...args),
-  getDoc: (...args: unknown[]) => getDocMock(...args),
-  getDocs: (...args: unknown[]) => getDocsMock(...args),
-  updateDoc: (...args: unknown[]) => updateDocMock(...args),
-  onSnapshot: (...args: unknown[]) => onSnapshotMock(...args),
-  runTransaction: (...args: unknown[]) => runTransactionMock(...args),
-  writeBatch: () => ({
-    set: (...args: unknown[]) => batchSetMock(...args),
-    delete: (...args: unknown[]) => batchDeleteMock(...args),
-    commit: (...args: unknown[]) => batchCommitMock(...args),
-  }),
-}))
+vi.mock('firebase/firestore', async () => {
+  const { assertNoUndefinedFields } = await import('./shareErrors')
+  const guard = (payload: unknown) => assertNoUndefinedFields(payload)
+  return {
+    doc: (_db: unknown, ...segments: string[]) => ({
+      id: segments[segments.length - 1],
+      path: segments.join('/'),
+      segments,
+    }),
+    collection: (_db: unknown, ...segments: string[]) => ({
+      path: segments.join('/'),
+      segments,
+    }),
+    setDoc: (...args: unknown[]) => {
+      guard(args[1])
+      return setDocMock(...args)
+    },
+    getDoc: (...args: unknown[]) => getDocMock(...args),
+    getDocs: (...args: unknown[]) => getDocsMock(...args),
+    updateDoc: (...args: unknown[]) => {
+      guard(args[1])
+      return updateDocMock(...args)
+    },
+    onSnapshot: (...args: unknown[]) => onSnapshotMock(...args),
+    runTransaction: (...args: unknown[]) => runTransactionMock(...args),
+    writeBatch: () => ({
+      set: (...args: unknown[]) => {
+        guard(args[1])
+        return batchSetMock(...args)
+      },
+      delete: (...args: unknown[]) => batchDeleteMock(...args),
+      commit: (...args: unknown[]) => batchCommitMock(...args),
+    }),
+  }
+})
 
 vi.mock('./cloudAuth', () => ({
   requireCloudUser: () => currentUser,
@@ -712,6 +729,36 @@ describe('invite / list / accept / revoke / stop', () => {
     expect(batchSetMock).toHaveBeenCalled()
     expect(batchCommitMock).toHaveBeenCalled()
     const payloads = batchSetMock.mock.calls.map((c) => c[1] as { status?: string })
+    expect(payloads.some((p) => p.status === 'revoked')).toBe(true)
+  })
+
+  it('revokeInvite works for pending invite never accepted (no acceptedUid)', async () => {
+    currentUser = owner
+    const shared = sampleTrip({
+      cloudTripId: 'T1',
+      shareEnabled: true,
+      shareOwnerUid: owner.uid,
+    })
+    getDocMock.mockResolvedValueOnce(
+      snapExists({
+        tripId: 'T1',
+        tripName: 'Our trip',
+        email: partner.email,
+        role: 'editor',
+        status: 'pending',
+        invitedByUid: owner.uid,
+        invitedByEmail: owner.email,
+        invitedAt: nowIso(),
+      } satisfies TripInvite),
+    )
+    // listTripMembers fallback — no matching member
+    getDocsMock.mockResolvedValueOnce(docsSnap([]))
+    await revokeInvite(shared, partner.email)
+    expect(batchCommitMock).toHaveBeenCalled()
+    const payloads = batchSetMock.mock.calls.map(
+      (c) => c[1] as { status?: string; acceptedUid?: string },
+    )
+    expect(payloads.every((p) => p.acceptedUid === undefined)).toBe(true)
     expect(payloads.some((p) => p.status === 'revoked')).toBe(true)
   })
 

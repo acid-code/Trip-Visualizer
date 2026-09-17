@@ -517,9 +517,31 @@ export default function App() {
       }
       void listMyPendingInvites()
         .then((inv) => setPendingInviteCount(inv.length))
-        .catch(() => setPendingInviteCount(0))
+        .catch((err) => {
+          logClientError('share-list-pending', err)
+          setPendingInviteCount(0)
+        })
     })
   }, [])
+
+  // Refresh pending-invite badge when returning to the app
+  useEffect(() => {
+    if (!cloudUser || !isCloudAuthConfigured()) return
+    const refreshPending = () => {
+      void listMyPendingInvites()
+        .then((inv) => setPendingInviteCount(inv.length))
+        .catch((err) => logClientError('share-list-pending', err))
+    }
+    const onVis = () => {
+      if (document.visibilityState === 'visible') refreshPending()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    const id = window.setInterval(refreshPending, 60_000)
+    return () => {
+      document.removeEventListener('visibilitychange', onVis)
+      window.clearInterval(id)
+    }
+  }, [cloudUser?.uid])
 
   useEffect(() => {
     if (!active || !cloudUser || !isTripShared(active) || !active.cloudTripId) return

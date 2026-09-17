@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { forFirestore, shareErrorMessage } from './shareErrors'
+import { assertNoUndefinedFields, forFirestore, shareErrorMessage } from './shareErrors'
 
 describe('forFirestore', () => {
   it('strips undefined fields', () => {
@@ -11,6 +11,18 @@ describe('forFirestore', () => {
       nested: { x: 'y' },
       list: [1, 2],
     })
+  })
+})
+
+describe('assertNoUndefinedFields', () => {
+  it('throws on undefined leaf like Firestore', () => {
+    expect(() =>
+      assertNoUndefinedFields({ status: 'revoked', acceptedUid: undefined }),
+    ).toThrow(/Unsupported field value: undefined.*acceptedUid/)
+  })
+
+  it('allows stripped payloads', () => {
+    expect(() => assertNoUndefinedFields(forFirestore({ a: 1, b: undefined }))).not.toThrow()
   })
 })
 

@@ -58,8 +58,10 @@ export function TripSharePanel({
     }
     try {
       setPendingMine(await listMyPendingInvites())
-    } catch {
+    } catch (err) {
+      logClientError('share-list-pending', err)
       setPendingMine([])
+      setLocalError(shareErrorMessage(err, 'Could not load invites for your account'))
     }
     if (!trip?.cloudTripId || !shared) {
       setInvites([])
@@ -73,7 +75,8 @@ export function TripSharePanel({
       ])
       setInvites(inv)
       setMembers(mem)
-    } catch {
+    } catch (err) {
+      logClientError('share-list-trip', err)
       setInvites([])
       setMembers([])
     }
@@ -83,6 +86,17 @@ export function TripSharePanel({
     void refreshLists()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloudUser?.uid, trip?.cloudTripId, trip?.shareEnabled])
+
+  // Re-check invites when returning to the tab (partner may have been invited while away)
+  useEffect(() => {
+    if (!cloudUser) return
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void refreshLists()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cloudUser?.uid])
 
   if (!configured) {
     return (
@@ -160,13 +174,13 @@ export function TripSharePanel({
 
       {cloudUser && pendingMine.length ? (
         <div className="mt-3 space-y-2">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
-            Invites for you
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--coral-deep)]">
+            Invites for you — tap Join to sync
           </div>
           {pendingMine.map((inv) => (
             <div
               key={`${inv.tripId}-${inv.email}`}
-              className="flex items-center justify-between gap-2 rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] px-2.5 py-2"
+              className="flex items-center justify-between gap-2 rounded-xl border border-[var(--coral)]/40 bg-[var(--coral)]/10 px-2.5 py-2"
             >
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium text-[var(--ink)]">{inv.tripName}</div>
@@ -176,7 +190,7 @@ export function TripSharePanel({
               </div>
               <button
                 type="button"
-                className="shrink-0 rounded-full bg-[var(--sky)] px-2.5 py-1 text-xs font-semibold text-white"
+                className="shrink-0 rounded-full bg-[var(--coral)] px-2.5 py-1 text-xs font-semibold text-white"
                 disabled={busy}
                 onClick={() => {
                   setBusy(true)
@@ -200,6 +214,11 @@ export function TripSharePanel({
             </div>
           ))}
         </div>
+      ) : cloudUser ? (
+        <p className="mt-3 text-[11px] text-[var(--ink-muted)]">
+          No pending invites for <span className="font-medium text-[var(--ink)]">{cloudUser.email}</span>.
+          Ask your partner to Enable sharing → Invite this exact email.
+        </p>
       ) : null}
 
       {cloudUser && trip ? (

@@ -8,6 +8,30 @@ export function forFirestore<T>(value: T): T {
   ) as T
 }
 
+/**
+ * Throw like the Firestore SDK when a write payload still contains `undefined`.
+ * Used by unit-test mocks so missing `forFirestore()` fails in CI the same way.
+ */
+export function assertNoUndefinedFields(value: unknown, path = ''): void {
+  if (value === undefined) {
+    throw new Error(
+      `Unsupported field value: undefined${
+        path ? ` (found in field ${path})` : ''
+      }`,
+    )
+  }
+  if (value === null || typeof value !== 'object') return
+  if (Array.isArray(value)) {
+    value.forEach((v, i) =>
+      assertNoUndefinedFields(v, path ? `${path}.${i}` : String(i)),
+    )
+    return
+  }
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    assertNoUndefinedFields(v, path ? `${path}.${k}` : k)
+  }
+}
+
 /** User-facing share/sync errors — keep codes actionable, no stacks. */
 export function shareErrorMessage(err: unknown, fallback: string): string {
   const code =

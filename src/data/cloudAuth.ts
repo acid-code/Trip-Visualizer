@@ -17,6 +17,7 @@ import { getFirebaseAuth, getFirestoreDb, isFirebaseConfigured } from './firebas
 import { normalizeEmail } from './emailNormalize'
 import { nowIso } from './db'
 import { logClientError } from './security'
+import { forFirestore } from './shareErrors'
 
 export type CloudUser = {
   uid: string
@@ -149,12 +150,12 @@ async function upsertUserProfile(user: CloudUser): Promise<void> {
   if (!db) return
   await setDoc(
     doc(db, 'users', user.uid),
-    {
+    forFirestore({
       email: user.email,
       displayName: user.displayName,
       photoURL: user.photoURL,
       updatedAt: nowIso(),
-    },
+    }),
     { merge: true },
   )
 }

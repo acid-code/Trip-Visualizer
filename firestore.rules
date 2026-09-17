@@ -128,9 +128,9 @@ service cloud.firestore {
     }
 
     match /emailInvites/{emailKey}/trips/{tripId} {
-      allow read: if signedIn()
-        && emailKey == callerEmail()
-        && resource.data.email.lower() == callerEmail();
+      // Path key is the allowlist — don't also filter on resource.data here or
+      // collection list queries fail with permission-denied (rules aren't filters).
+      allow read: if signedIn() && emailKey == callerEmail();
       allow create: if (isTripOwner(tripId) || isTripOwnerAfter(tripId))
         && request.resource.data.email.lower() == emailKey;
       allow update: if isTripOwner(tripId)

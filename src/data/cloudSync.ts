@@ -94,10 +94,10 @@ export function tripRecordForCloud(trip: TripRecord): TripRecord {
 }
 
 function cloudTripPayload(trip: TripRecord, meta: Omit<CloudTripDoc, 'record'>): CloudTripDoc {
-  return {
+  return forFirestore({
     ...meta,
     record: encodeRecordForFirestore(trip),
-  }
+  }) as CloudTripDoc
 }
 
 export function isTripShared(trip: TripRecord | null | undefined): boolean {
@@ -411,25 +411,26 @@ async function writeRevokedInvite(
     invitedByUid: prev?.invitedByUid || user.uid,
     invitedByEmail: prev?.invitedByEmail || user.email,
     invitedAt: prev?.invitedAt || nowIso(),
-    acceptedUid: prev?.acceptedUid || memberUid,
   }
+  const acceptedUid = prev?.acceptedUid || memberUid
+  if (acceptedUid) revoked.acceptedUid = acceptedUid
 
-  const uidToRevoke = prev?.acceptedUid || memberUid
+  const uidToRevoke = acceptedUid
   const batch = writeBatch(db)
-  batch.set(doc(db, 'trips', tripId, 'invites', key), revoked)
-  batch.set(doc(db, 'emailInvites', key, 'trips', tripId), revoked)
+  batch.set(doc(db, 'trips', tripId, 'invites', key), forFirestore(revoked))
+  batch.set(doc(db, 'emailInvites', key, 'trips', tripId), forFirestore(revoked))
   if (uidToRevoke) {
     const memberSnap = await getDoc(doc(db, 'trips', tripId, 'members', uidToRevoke))
     const existing = memberSnap.exists() ? (memberSnap.data() as TripMember) : null
     batch.set(
       doc(db, 'trips', tripId, 'members', uidToRevoke),
-      {
+      forFirestore({
         uid: uidToRevoke,
         email: existing?.email || email,
         role: existing?.role || prev?.role || 'editor',
         status: 'revoked',
         joinedAt: existing?.joinedAt || nowIso(),
-      } satisfies TripMember,
+      } satisfies TripMember),
       { merge: true },
     )
   }
@@ -485,7 +486,7 @@ export async function revokeMember(trip: TripRecord, memberUid: string): Promise
   } else {
     await setDoc(
       memberRef,
-      { ...member, status: 'revoked' } satisfies TripMember,
+      forFirestore({ ...member, status: 'revoked' } satisfies TripMember),
       { merge: true },
     )
   }
@@ -507,11 +508,11 @@ export async function leaveSharedTrip(trip: TripRecord): Promise<TripRecord> {
     const member = memberSnap.data() as TripMember
     await setDoc(
       memberRef,
-      {
+      forFirestore({
         ...member,
         uid: user.uid,
         status: 'revoked',
-      } satisfies TripMember,
+      } satisfies TripMember),
       { merge: true },
     )
   }
@@ -558,15 +559,18 @@ export async function stopSharing(trip: TripRecord): Promise<TripRecord> {
     if (remote.exists()) {
       const remoteData = remote.data() as CloudTripDoc
       const recorded = decodeRecordFromFirestore(remoteData.record)
-      await updateDoc(doc(db, 'trips', tripId), {
-        updatedAt: nowIso(),
-        lastWriterUid: user.uid,
-        record: encodeRecordForFirestore({
-          ...recorded,
-          shareEnabled: false,
-          cloudTripId: tripId,
+      await updateDoc(
+        doc(db, 'trips', tripId),
+        forFirestore({
+          updatedAt: nowIso(),
+          lastWriterUid: user.uid,
+          record: encodeRecordForFirestore({
+            ...recorded,
+            shareEnabled: false,
+            cloudTripId: tripId,
+          }),
         }),
-      })
+      )
     }
   } catch {
     /* best-effort cloud flag */
