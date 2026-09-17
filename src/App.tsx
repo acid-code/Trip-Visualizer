@@ -24,18 +24,25 @@ import {
   disconnectGoogleDrive,
   downloadDriveFile,
   driveFileWebUrl,
+  driveFolderWebUrl,
   DRIVE_FOLDER_NAME,
+  DRIVE_EXCEL_SUBFOLDER,
+  DRIVE_MAP_LAYERS_SUBFOLDER,
   isGoogleDriveConfigured,
   isGoogleDriveConnected,
   listTripWorkbooksOnDrive,
   rememberDriveFileForTrip,
   forgetDriveFileForTrip,
   resolveDriveFolderOpenUrl,
+  resolveMapLayersFolderOpenUrl,
   slugTripFileBase,
   tripNameSlugFromDriveFileName,
   uploadTripWorkbookToDrive,
+  uploadTripMapLayersToDrive,
   type DriveFileInfo,
+  type DriveMapLayersHandoff,
 } from './data/googleDrive'
+import { MY_MAPS_HOME_URL } from './data/myMapsExport'
 import {
   enrichNeedyTripItems,
   extractCoordsFromText,
@@ -873,7 +880,7 @@ export default function App() {
         bytes,
         active.id,
       )
-      setStatus(`Saved to Drive Â· ${DRIVE_FOLDER_NAME}/${fileName}`)
+      setStatus(`Saved to Drive · ${DRIVE_FOLDER_NAME}/${DRIVE_EXCEL_SUBFOLDER}/${fileName}`)
     } catch (err) {
       logClientError('drive-export', err)
       setStatus(publicErrorMessage(err, 'Could not save to Google Drive'))
@@ -2954,6 +2961,7 @@ function DriveSyncPanel({
   const [busy, setBusy] = useState(false)
   const [files, setFiles] = useState<DriveFileInfo[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [layersHandoff, setLayersHandoff] = useState<DriveMapLayersHandoff | null>(null)
 
   async function onConnect() {
     setBusy(true)
@@ -2967,8 +2975,8 @@ function DriveSyncPanel({
         setFiles(list)
         onStatus(
           list.length
-            ? `Drive ready Â· ${list.length} workbook${list.length === 1 ? '' : 's'} in ${DRIVE_FOLDER_NAME}/`
-            : `Drive ready Â· ${DRIVE_FOLDER_NAME}/ (empty)`,
+            ? `Drive ready · ${list.length} workbook${list.length === 1 ? '' : 's'} in ${DRIVE_FOLDER_NAME}/${DRIVE_EXCEL_SUBFOLDER}/`
+            : `Drive ready · ${DRIVE_FOLDER_NAME}/${DRIVE_EXCEL_SUBFOLDER}/ (empty)`,
         )
       } catch (listErr) {
         logClientError('drive-list', listErr)
@@ -2993,6 +3001,7 @@ function DriveSyncPanel({
     disconnectGoogleDrive()
     setConnected(false)
     setFiles(null)
+    setLayersHandoff(null)
     setError(null)
     onStatus('Google Drive disconnected')
   }
@@ -3006,8 +3015,8 @@ function DriveSyncPanel({
       setConnected(true)
       onStatus(
         list.length
-          ? `Drive Â· ${list.length} workbook${list.length === 1 ? '' : 's'}`
-          : `Drive Â· ${DRIVE_FOLDER_NAME}/ is empty`,
+          ? `Drive · ${list.length} workbook${list.length === 1 ? '' : 's'}`
+          : `Drive · ${DRIVE_FOLDER_NAME}/${DRIVE_EXCEL_SUBFOLDER}/ is empty`,
       )
     } catch (err) {
       logClientError('drive-list', err)
@@ -3036,109 +3045,256 @@ function DriveSyncPanel({
     }
   }
 
+  async function onPrepareMapLayers() {
+    if (!active) return
+    setBusy(true)
+    setError(null)
+    try {
+      const handoff = await uploadTripMapLayersToDrive(active)
+      setLayersHandoff(handoff)
+      setConnected(true)
+      onStatus(
+        `My Maps layers ready · Plan ${handoff.planRowCount} · Journey ${handoff.journeyRowCount} in ${DRIVE_FOLDER_NAME}/${DRIVE_MAP_LAYERS_SUBFOLDER}/`,
+      )
+    } catch (err) {
+      logClientError('drive-map-layers', err)
+      const msg =
+        err instanceof Error ? err.message : 'Could not prepare My Maps layers'
+      setError(msg)
+      onStatus(msg)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   function onOpenFile(file: DriveFileInfo) {
     openExternalUrl(file.webViewLink || driveFileWebUrl(file.id))
   }
 
+  const excelPath = `${DRIVE_FOLDER_NAME}/${DRIVE_EXCEL_SUBFOLDER}/`
+  const layersPath = `${DRIVE_FOLDER_NAME}/${DRIVE_MAP_LAYERS_SUBFOLDER}/`
+
   return (
-    <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
-        Google Drive
-      </div>
-      <p className="mt-1 text-xs text-stone-600">
-        Saves Excel into <code className="rounded bg-white px-1">{DRIVE_FOLDER_NAME}/</code>. Each
-        trip keeps one Drive file — renaming the trip renames that file on the next save. Load
-        updates the current trip when the workbook name matches; otherwise it creates a new trip
-        and switches to it. Open opens the folder or file in Google Drive. Manual uploads in that
-        folder show up after Connect (allow full Drive access when Google asks). If an older save
-        wonâ€™t open in Sheets, delete it and Save trip to Drive again.
-      </p>
-      {!configured ? (
-        <p className="mt-2 text-xs text-amber-800">
-          Set <code className="rounded bg-white px-1">VITE_GOOGLE_OAUTH_CLIENT_ID</code> in{' '}
-          <code className="rounded bg-white px-1">.env.local</code> (OAuth web client) and restart
-          Vite. Add <code className="rounded bg-white px-1">{window.location.origin}</code> to
-          Authorized JavaScript origins.
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3">
+        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
+          Google Drive
+        </div>
+        <p className="mt-1 text-xs text-stone-600">
+          Excel saves go to <code className="rounded bg-white px-1">{excelPath}</code>.
+          My Maps layers go to <code className="rounded bg-white px-1">{layersPath}</code>.
+          Each trip keeps one workbook — renaming the trip renames that file on the next
+          save. Load updates the current trip when the workbook name matches; otherwise it
+          creates a new trip. Open folder opens <code className="rounded bg-white px-1">{DRIVE_FOLDER_NAME}/</code>.
         </p>
-      ) : (
-        <div className="mt-2 flex flex-wrap gap-2">
-          {!connected ? (
-            <button
-              type="button"
-              className={btnPrimary}
-              disabled={busy}
-              onClick={() => void onConnect()}
-            >
-              {busy ? 'Connectingâ€¦' : 'Connect Google'}
-            </button>
-          ) : (
-            <>
+        {!configured ? (
+          <p className="mt-2 text-xs text-amber-800">
+            Set <code className="rounded bg-white px-1">VITE_GOOGLE_OAUTH_CLIENT_ID</code> in{' '}
+            <code className="rounded bg-white px-1">.env.local</code> (OAuth web client) and restart
+            Vite. Add <code className="rounded bg-white px-1">{window.location.origin}</code> to
+            Authorized JavaScript origins.
+          </p>
+        ) : (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {!connected ? (
               <button
                 type="button"
                 className={btnPrimary}
-                disabled={busy || !active}
-                onClick={onExportToDrive}
-              >
-                Save trip to Drive
-              </button>
-              <button
-                type="button"
-                className={btn}
                 disabled={busy}
-                onClick={() => void onOpenFolder()}
+                onClick={() => void onConnect()}
               >
-                Open folder
+                {busy ? 'Connecting…' : 'Connect Google'}
               </button>
-              <button
-                type="button"
-                className={btn}
-                disabled={busy}
-                onClick={() => void onRefreshList()}
-              >
-                Refresh list
-              </button>
-              <button type="button" className={btn} disabled={busy} onClick={onDisconnect}>
-                Disconnect
-              </button>
-            </>
-          )}
-        </div>
-      )}
-      {error ? <p className="mt-2 text-xs text-rose-700">{error}</p> : null}
-      {connected && files ? (
-        <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-xl border border-emerald-100 bg-white/80 p-2">
-          {!files.length ? (
-            <p className="text-xs text-stone-400">No workbooks in {DRIVE_FOLDER_NAME}/ yet.</p>
-          ) : (
-            files.map((f) => (
-              <div
-                key={f.id}
-                className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-stone-700 hover:bg-emerald-50"
-              >
-                <span className="min-w-0 flex-1 truncate font-medium" title={f.name}>
-                  {f.name}
-                </span>
+            ) : (
+              <>
                 <button
                   type="button"
-                  className="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 hover:bg-sky-50"
-                  disabled={busy}
-                  title="Open in Google Drive"
-                  onClick={() => onOpenFile(f)}
+                  className={btnPrimary}
+                  disabled={busy || !active}
+                  onClick={onExportToDrive}
                 >
-                  Open
+                  Save trip to Drive
                 </button>
                 <button
                   type="button"
-                  className="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                  className={btn}
                   disabled={busy}
-                  title="Load into the app"
-                  onClick={() => onImportFromDrive(f)}
+                  onClick={() => void onOpenFolder()}
                 >
-                  Load
+                  Open folder
                 </button>
-              </div>
-            ))
-          )}
+                <button
+                  type="button"
+                  className={btn}
+                  disabled={busy}
+                  onClick={() => void onRefreshList()}
+                >
+                  Refresh list
+                </button>
+                <button type="button" className={btn} disabled={busy} onClick={onDisconnect}>
+                  Disconnect
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {error ? <p className="mt-2 text-xs text-rose-700">{error}</p> : null}
+        {connected && files ? (
+          <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-xl border border-emerald-100 bg-white/80 p-2">
+            {!files.length ? (
+              <p className="text-xs text-stone-400">No workbooks in {excelPath} yet.</p>
+            ) : (
+              files.map((f) => (
+                <div
+                  key={f.id}
+                  className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-stone-700 hover:bg-emerald-50"
+                >
+                  <span className="min-w-0 flex-1 truncate font-medium" title={f.name}>
+                    {f.name}
+                  </span>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 hover:bg-sky-50"
+                    disabled={busy}
+                    title="Open in Google Drive"
+                    onClick={() => onOpenFile(f)}
+                  >
+                    Open
+                  </button>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                    disabled={busy}
+                    title="Load into the app"
+                    onClick={() => onImportFromDrive(f)}
+                  >
+                    Load
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        ) : null}
+      </div>
+
+      {configured && connected ? (
+        <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-sky-800">
+            Google My Maps
+          </div>
+          <p className="mt-1 text-xs text-stone-600">
+            Prepare uploads Plan + Journey as Sheets into{' '}
+            <code className="rounded bg-white px-1">{layersPath}</code>. Google cannot
+            auto-import — use the links below, then Import twice in My Maps (desktop). The
+            map then appears under Google Maps → Saved → Maps.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={btnPrimary}
+              disabled={busy || !active}
+              onClick={() => void onPrepareMapLayers()}
+            >
+              {busy ? 'Preparing…' : 'Prepare for Google Maps'}
+            </button>
+            <button
+              type="button"
+              className={btn}
+              disabled={busy}
+              onClick={() => openExternalUrl(MY_MAPS_HOME_URL)}
+            >
+              Open My Maps
+            </button>
+            <button
+              type="button"
+              className={btn}
+              disabled={busy}
+              onClick={() =>
+                void resolveMapLayersFolderOpenUrl()
+                  .then((url) => {
+                    if (url) openExternalUrl(url)
+                    else throw new Error('map-layers folder unavailable')
+                  })
+                  .catch((err) => {
+                    const msg =
+                      err instanceof Error ? err.message : 'Could not open map-layers'
+                    setError(msg)
+                    onStatus(msg)
+                  })
+              }
+            >
+              Open map-layers
+            </button>
+          </div>
+          {layersHandoff ? (
+            <div className="mt-3 space-y-2 rounded-xl border border-sky-100 bg-white/80 p-2.5 text-xs text-stone-700">
+              <p className="font-semibold text-sky-900">Continue in My Maps</p>
+              <ol className="list-decimal space-y-1.5 pl-4 text-stone-600">
+                <li>
+                  <button
+                    type="button"
+                    className="font-semibold text-sky-700 underline-offset-2 hover:underline"
+                    onClick={() => openExternalUrl(MY_MAPS_HOME_URL)}
+                  >
+                    Create a new map
+                  </button>{' '}
+                  and rename it to your trip.
+                </li>
+                <li>
+                  First layer → Import → Drive → pick{' '}
+                  <button
+                    type="button"
+                    className="font-semibold text-sky-700 underline-offset-2 hover:underline"
+                    onClick={() =>
+                      openExternalUrl(
+                        layersHandoff.plan.webViewLink ||
+                          driveFileWebUrl(layersHandoff.plan.fileId),
+                      )
+                    }
+                  >
+                    {layersHandoff.plan.fileName}
+                  </button>{' '}
+                  ({layersHandoff.planRowCount} places) → Latitude + Longitude → title Name.
+                </li>
+                <li>
+                  Add layer → Import → pick{' '}
+                  <button
+                    type="button"
+                    className="font-semibold text-sky-700 underline-offset-2 hover:underline"
+                    onClick={() =>
+                      openExternalUrl(
+                        layersHandoff.journey.webViewLink ||
+                          driveFileWebUrl(layersHandoff.journey.fileId),
+                      )
+                    }
+                  >
+                    {layersHandoff.journey.fileName}
+                  </button>{' '}
+                  ({layersHandoff.journeyRowCount} stops) → same columns.
+                </li>
+                <li>
+                  Best view: Plan layer → Style by data column →{' '}
+                  <span className="font-medium text-stone-700">Section</span>; Journey
+                  layer → Style by <span className="font-medium text-stone-700">Day</span>.
+                  Keep labels on <span className="font-medium text-stone-700">Name</span>{' '}
+                  (emoji + title).
+                </li>
+                <li>On your phone: Google Maps → Saved → Maps.</li>
+              </ol>
+              <p className="text-[11px] text-stone-500">
+                Later: Prepare again, then in My Maps use layer ⋮ → Reimport and merge.{' '}
+                <button
+                  type="button"
+                  className="font-medium text-sky-700 underline-offset-2 hover:underline"
+                  onClick={() =>
+                    openExternalUrl(driveFolderWebUrl(layersHandoff.mapLayersFolderId))
+                  }
+                >
+                  Open folder
+                </button>
+              </p>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
