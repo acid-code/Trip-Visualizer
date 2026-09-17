@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { TripItem, TripRecord } from './domain/types'
-import { ITEM_TYPES } from './domain/types'
 import {
   createBlankTrip,
   createId,
@@ -136,7 +135,6 @@ import {
   logClientError,
   MAX_IMPORT_BYTES,
   publicErrorMessage,
-  sanitizeSecretInput,
 } from './data/security'
 import { resolveGoogleMapsApiKey } from './data/googleKey'
 import {
@@ -158,7 +156,7 @@ import {
 import { TripSwitcher } from './ui/TripSwitcher'
 import { TripStartCoach } from './ui/TripStartCoach'
 import { PlanStartCoach } from './ui/PlanStartCoach'
-import { TripSharePanel } from './ui/TripSharePanel'
+import { SettingsShell } from './ui/SettingsShell'
 import {
   completeGoogleRedirectSignIn,
   isCloudAuthConfigured,
@@ -201,7 +199,7 @@ function isTransportLegType(type: TripItem['type']): boolean {
   )
 }
 
-/** Yellow path glow + redirect target for an existing drive/flight/train/… step. */
+/** Yellow path glow + redirect target for an existing drive/flight/train/â€¦ step. */
 function routeWalkForTransportItem(item: TripItem):
   | {
       kind: 'route'
@@ -274,7 +272,7 @@ export default function App() {
   const [navTab, setNavTab] = useState<NavTab>('timeline')
   const [panelOpen, setPanelOpen] = useState(true)
   const [lowerMode, setLowerMode] = useState<LowerMode>('none')
-  /** Detail sheet: peek (compact) → half (50% edit) → closed */
+  /** Detail sheet: peek (compact) â†’ half (50% edit) â†’ closed */
   const [detailExpanded, setDetailExpanded] = useState(false)
   /** Working copy while Detail is open — committed only via top handle save. */
   const [stepDraft, setStepDraft] = useState<TripItem | null>(null)
@@ -563,7 +561,7 @@ export default function App() {
         void saveTrip(merged)
           .then(async () => {
             setTrips(await listTrips())
-            setStatus('Partner updated · synced')
+            setStatus('Partner updated Â· synced')
             // Connectors are local-only — rebuild against the new trip.
             routesForTripRef.current = null
             await buildRoutes(merged)
@@ -591,6 +589,7 @@ export default function App() {
           return
         }
         logClientError('cloud-watch', err)
+        setStatus(shareErrorMessage(err, 'Could not sync shared trip'))
       },
     )
     return () => unsub()
@@ -688,7 +687,7 @@ export default function App() {
               await buildRoutes(merged)
             } else {
               logClientError('cloud-push', err)
-              setStatus(publicErrorMessage(err, 'Could not sync shared trip'))
+              setStatus(shareErrorMessage(err, 'Could not sync shared trip'))
             }
           } finally {
             cloudApplyingRemoteRef.current = false
@@ -727,13 +726,13 @@ export default function App() {
     const withBases = ensureDayStartBases(safeMeta, items)
     setStatus(
       opts?.replaceTrip
-        ? `Updating “${safeMeta.name}” from Drive…`
-        : `Imported “${safeMeta.name}” · looking up places on the map…`,
+        ? `Updating â€œ${safeMeta.name}â€ from Driveâ€¦`
+        : `Imported â€œ${safeMeta.name}â€ Â· looking up places on the mapâ€¦`,
     )
     const pinned = await pinTripItemsOnMap(
       withBases,
       (done, total) => {
-        setStatus(`Pinning places ${done}/${total}…`)
+        setStatus(`Pinning places ${done}/${total}â€¦`)
       },
       {
         useGooglePlaces: placesEnabled,
@@ -762,8 +761,8 @@ export default function App() {
     setActiveId(trip.id)
     setStatus(
       pinnedCount > 0
-        ? `${existing ? 'Updated' : 'Imported'} “${safeMeta.name}” · ${pinnedCount} place${pinnedCount === 1 ? '' : 's'} pinned on the map`
-        : `${existing ? 'Updated' : 'Imported'} “${safeMeta.name}”`,
+        ? `${existing ? 'Updated' : 'Imported'} â€œ${safeMeta.name}â€ Â· ${pinnedCount} place${pinnedCount === 1 ? '' : 's'} pinned on the map`
+        : `${existing ? 'Updated' : 'Imported'} â€œ${safeMeta.name}â€`,
     )
     return trip
   }
@@ -817,14 +816,14 @@ export default function App() {
   async function onExportToDrive() {
     if (!active) return
     try {
-      setStatus('Signing in to Google Drive…')
+      setStatus('Signing in to Google Driveâ€¦')
       const bytes = await workbookToArrayBuffer(buildTripWorkbook(active))
       const { fileName } = await uploadTripWorkbookToDrive(
         active.meta.name,
         bytes,
         active.id,
       )
-      setStatus(`Saved to Drive · ${DRIVE_FOLDER_NAME}/${fileName}`)
+      setStatus(`Saved to Drive Â· ${DRIVE_FOLDER_NAME}/${fileName}`)
     } catch (err) {
       logClientError('drive-export', err)
       setStatus(publicErrorMessage(err, 'Could not save to Google Drive'))
@@ -833,7 +832,7 @@ export default function App() {
 
   async function onImportFromDrive(file: DriveFileInfo) {
     try {
-      setStatus(`Downloading ${file.name} from Drive…`)
+      setStatus(`Downloading ${file.name} from Driveâ€¦`)
       const buf = await downloadDriveFile(file.id)
       const { meta } = parseTripWorkbook(buf)
       const tripName = meta.name.trim() || file.name.replace(/\.xlsx?$/i, '')
@@ -933,7 +932,7 @@ export default function App() {
         : doomed && isTripShared(doomed)
           ? ' (left shared trip)'
           : ' from this device'
-    setStatus(doomed ? `Deleted “${doomed.meta.name}”${sharedNote}` : 'Trip deleted')
+    setStatus(doomed ? `Deleted â€œ${doomed.meta.name}â€${sharedNote}` : 'Trip deleted')
   }
 
   function openTripEdit() {
@@ -959,7 +958,7 @@ export default function App() {
       await refresh()
       setActiveId(trip.id)
       setOverviewToken((n) => n + 1)
-      setStatus(`Created “${withBases.meta.name}” · ${countDaysLabel(draft)}`)
+      setStatus(`Created â€œ${withBases.meta.name}â€ Â· ${countDaysLabel(draft)}`)
       setTripDialog(null)
       setNavTab('timeline')
       setPanelOpen(true)
@@ -977,11 +976,11 @@ export default function App() {
     await persist({ ...active, meta: result.meta, items: result.items })
     setTripDialog(null)
 
-    let msg = `Updated “${result.meta.name}”`
+    let msg = `Updated â€œ${result.meta.name}â€`
     if (result.removedCount > 0) {
-      msg += ` · removed ${result.removedCount} step${result.removedCount === 1 ? '' : 's'} outside the dates`
+      msg += ` Â· removed ${result.removedCount} step${result.removedCount === 1 ? '' : 's'} outside the dates`
     } else if (result.widened) {
-      msg += ' · dates widened to keep your existing steps'
+      msg += ' Â· dates widened to keep your existing steps'
     }
     setStatus(msg)
   }
@@ -1011,12 +1010,12 @@ export default function App() {
       return
     }
     routesBuildingRef.current = true
-    setRoutesStatus('Drawing drive paths…')
+    setRoutesStatus('Drawing drive pathsâ€¦')
     try {
       const withDrives = await hydrateDriveRoutes(trip.items, (done, total) => {
         setRoutesStatus(`Drive paths ${done}/${total}`)
       })
-      setRoutesStatus('Linking same-day walks & returns to hotel…')
+      setRoutesStatus('Linking same-day walks & returns to hotelâ€¦')
       const walks = await buildWalkingConnectors(withDrives, (done, total) => {
         setRoutesStatus(`Walk paths ${done}/${total}`)
       })
@@ -1034,7 +1033,7 @@ export default function App() {
         return a[0] !== b[0] || a[1] !== b[1] || c[0] !== d[0] || c[1] !== d[1]
       })
       // Always write hydrated geometry back into trip state when it changed so
-      // the globe’s item.routeCoords stay in sync with “Routes ready”.
+      // the globeâ€™s item.routeCoords stay in sync with â€œRoutes readyâ€.
       if (driveChanged) {
         await persist({ ...trip, items: withDrives })
       }
@@ -1042,7 +1041,7 @@ export default function App() {
         ...trip,
         items: driveChanged ? withDrives : trip.items,
       })
-      setStatus(`Routes ready · ${walks.length} walk links`)
+      setStatus(`Routes ready Â· ${walks.length} walk links`)
     } finally {
       routesBuildingRef.current = false
       setRoutesStatus(null)
@@ -1088,7 +1087,7 @@ export default function App() {
         })
         const next = { ...active, items }
         await persist(next)
-        setStatus('Map pins updated — building routes…')
+        setStatus('Map pins updated — building routesâ€¦')
         routesForTripRef.current = null
         await buildRoutes(next)
       } finally {
@@ -1115,7 +1114,7 @@ export default function App() {
       beforeId,
       hint:
         after || before
-          ? `Inserting between “${after?.title ?? 'start'}” and “${before?.title ?? 'end'}”.`
+          ? `Inserting between â€œ${after?.title ?? 'start'}â€ and â€œ${before?.title ?? 'end'}â€.`
           : undefined,
     })
     setNavTab('timeline')
@@ -1239,8 +1238,8 @@ export default function App() {
       const n = links.length
       setStatus(
         n
-          ? `Pin ready · ${n} nearby within 3 km — press + to add`
-          : 'Pin ready · no steps within 3 km — press + to add',
+          ? `Pin ready Â· ${n} nearby within 3 km — press + to add`
+          : 'Pin ready Â· no steps within 3 km — press + to add',
       )
     })()
   }
@@ -1249,7 +1248,7 @@ export default function App() {
     const q = raw.trim()
     if (!q) return
     setSearchBusy(true)
-    setStatus('Searching…')
+    setStatus('Searchingâ€¦')
     try {
       const pasted = extractCoordsFromText(q)
       if (pasted) {
@@ -1259,7 +1258,7 @@ export default function App() {
       const query =
         locationQueryFromInput(q) || (/^https?:\/\//i.test(q) ? '' : q)
       if (!query) {
-        setStatus('Couldn’t read that link — paste an address or Maps place URL')
+        setStatus('Couldnâ€™t read that link — paste an address or Maps place URL')
         return
       }
       const bias =
@@ -1339,7 +1338,7 @@ export default function App() {
     setNavTab('timeline')
     setPanelOpen(true)
     const item = stepById(payload.itemId)
-    // Endpoint of a transport leg → also light up the path + mid emoji
+    // Endpoint of a transport leg â†’ also light up the path + mid emoji
     const pathWalk = item ? routeWalkForTransportItem(item) : null
     setRouteWalk(pathWalk)
     setMapFocusEndpoint(pathWalk ? null : payload.endpoint)
@@ -1420,7 +1419,7 @@ export default function App() {
       ) {
         const days = countTripDays(meta.startDate, meta.endDate)
         setStatus(
-          `Step saved · trip ${meta.startDate} → ${meta.endDate} (${days} days)`,
+          `Step saved Â· trip ${meta.startDate} â†’ ${meta.endDate} (${days} days)`,
         )
       } else {
         setStatus('Step saved')
@@ -1473,7 +1472,7 @@ export default function App() {
       items.find((i) => i.date === nextEnd) ??
       null
     await persist({ ...active, meta, items })
-    // Show full strip and land on the new day's base (don't leave an old selection → scroll to start)
+    // Show full strip and land on the new day's base (don't leave an old selection â†’ scroll to start)
     setTypeFilter(null)
     setDayFilter(null)
     setSelectedId(newBase?.id ?? null)
@@ -1481,7 +1480,7 @@ export default function App() {
     setDetailExpanded(false)
     setNavTab('timeline')
     setPanelOpen(true)
-    setStatus(`Added Day · ${nextEnd}`)
+    setStatus(`Added Day Â· ${nextEnd}`)
   }
 
   async function deleteStep(id: string) {
@@ -1504,7 +1503,7 @@ export default function App() {
     void (async () => {
       if (!active) return
       const replaceId = addContext?.replaceId
-      setStatus(`Pinning “${item.title}” on the map…`)
+      setStatus(`Pinning â€œ${item.title}â€ on the mapâ€¦`)
       const pinned = await pinItemOnMap(item, {
         useGooglePlaces: placesEnabled,
         googleApiKey: effectiveGoogleKey || undefined,
@@ -1531,7 +1530,7 @@ export default function App() {
       const hasTo = isValidCoord(pinned.latTo, pinned.lonTo)
 
       if (isLeg && hasFrom && hasTo) {
-        // Light up the full A→B path so flights/drives aren’t mistaken for a single pin
+        // Light up the full Aâ†’B path so flights/drives arenâ€™t mistaken for a single pin
         const coords: [number, number][] =
           pinned.routeCoords && pinned.routeCoords.length > 1
             ? pinned.routeCoords
@@ -1559,20 +1558,20 @@ export default function App() {
           })
         }
         setMapFocusEndpoint(null)
-        setStatus(`Added “${pinned.title}” · path on the map`)
+        setStatus(`Added â€œ${pinned.title}â€ Â· path on the map`)
       } else if (isLeg && hasFrom && !hasTo) {
         setStatus(
-          `Added “${pinned.title}” · departure pinned — add a destination (To) for the path`,
+          `Added â€œ${pinned.title}â€ Â· departure pinned — add a destination (To) for the path`,
         )
       } else if (isLeg && !hasFrom && hasTo) {
         setStatus(
-          `Added “${pinned.title}” · arrival pinned — add an origin (From) for the path`,
+          `Added â€œ${pinned.title}â€ Â· arrival pinned — add an origin (From) for the path`,
         )
       } else {
         const onMap = hasFrom
-          ? ' · on the map'
-          : ' · no pin yet (check the address)'
-        setStatus(`Added “${pinned.title}”${onMap}`)
+          ? ' Â· on the map'
+          : ' Â· no pin yet (check the address)'
+        setStatus(`Added â€œ${pinned.title}â€${onMap}`)
       }
       await buildRoutes(next)
     })()
@@ -1646,9 +1645,9 @@ export default function App() {
       setLowerMode('detail')
       setDetailExpanded(true)
       setPanelOpen(true)
-      setStatus(`Added “${item.title}” · ${date} · rebuilding paths…`)
+      setStatus(`Added â€œ${item.title}â€ Â· ${date} Â· rebuilding pathsâ€¦`)
       await buildRoutes(next)
-      setStatus(`Added “${item.title}” · on the map`)
+      setStatus(`Added â€œ${item.title}â€ Â· on the map`)
     })()
   }
 
@@ -1834,16 +1833,16 @@ export default function App() {
       setSelectedId(item.id)
       setExploreDetail(null)
       setExploreFocusId(null)
-      setStatus(`Added “${item.title}” · rebuilding paths…`)
+      setStatus(`Added â€œ${item.title}â€ Â· rebuilding pathsâ€¦`)
       await buildRoutes(next)
-      setStatus(`Added “${item.title}” from Explore`)
+      setStatus(`Added â€œ${item.title}â€ from Explore`)
     })()
   }
 
   function openAiCoach() {
     if (aiReview) return
     if (active && isTripShared(active) && !cloudUser) {
-      setStatus('Sign in with Google (Settings → Share) to use AI on a shared trip')
+      setStatus('Sign in with Google (Settings â†’ Share) to use AI on a shared trip')
       return
     }
     if (exploreOpen) closeExplore()
@@ -1917,7 +1916,7 @@ export default function App() {
       )
     } else if (removedN) {
       setStatus(
-        `Updated day (+${addedN} / −${removedN}). Review, then Save or Discard.`,
+        `Updated day (+${addedN} / âˆ’${removedN}). Review, then Save or Discard.`,
       )
     }
 
@@ -1949,7 +1948,7 @@ export default function App() {
     void (async () => {
       const draftTrip = { ...active, items: result.items }
       const reviewDay = args.day
-      setRoutesStatus('Drawing AI day paths…')
+      setRoutesStatus('Drawing AI day pathsâ€¦')
       try {
         const withDrives = await hydrateDriveRoutes(draftTrip.items)
         // Only rebuild walks for the coached day (merge) so nearby sight walks
@@ -2011,7 +2010,7 @@ export default function App() {
     setDayFilter(day)
     setNavTab('timeline')
     setPanelOpen(true)
-    setStatus(`Saved AI changes · ${formatDayChipLabel(active.meta, day)}`)
+    setStatus(`Saved AI changes Â· ${formatDayChipLabel(active.meta, day)}`)
     routesForTripRef.current = null
     await buildRoutes(next)
   }
@@ -2096,13 +2095,13 @@ export default function App() {
       setAddContext(null)
     }
 
-    // Same binder again (and nothing covering) → close
+    // Same binder again (and nothing covering) â†’ close
     if (panelOpen && navTab === id && !wasCovering) {
       setPanelOpen(false)
       return
     }
 
-    // Different binder, or revealing Steps under AI → open that panel
+    // Different binder, or revealing Steps under AI â†’ open that panel
     setNavTab(id)
     setPanelOpen(true)
   }
@@ -2240,7 +2239,7 @@ export default function App() {
           onSelect={selectFromMap}
           onMapPress={() => {
             if (aiReview) return
-            // Tap map → tuck binders / AI / Explore
+            // Tap map â†’ tuck binders / AI / Explore
             if (exploreOpen) closeExplore()
             if (aiOpen) {
               setAiOpen(false)
@@ -2269,7 +2268,7 @@ export default function App() {
         />
         </div>
       ) : (
-        <div className="flex h-full items-center justify-center text-[var(--ink-muted)]">Loading…</div>
+        <div className="flex h-full items-center justify-center text-[var(--ink-muted)]">Loadingâ€¦</div>
       )}
 
       {active ? (
@@ -2313,8 +2312,8 @@ export default function App() {
           hint={
             tempPin ? (
               <>
-                Pin set · ★ explore · <span className="font-bold">+</span> save
-                {nearbyLinks.length ? ` · ${nearbyLinks.length} near` : ''}
+                Pin set Â· â˜… explore Â· <span className="font-bold">+</span> save
+                {nearbyLinks.length ? ` Â· ${nearbyLinks.length} near` : ''}
               </>
             ) : (
               <>Long-press map to pin</>
@@ -2405,11 +2404,11 @@ export default function App() {
                 }
               >
                 <h1 className="brand-mark truncate text-sm font-semibold leading-tight text-white drop-shadow decoration-white/40 underline-offset-2 group-hover:underline group-disabled:no-underline sm:text-base">
-                  {active?.meta.name ?? '…'}
+                  {active?.meta.name ?? 'â€¦'}
                 </h1>
                 <p className="truncate text-[10px] leading-tight text-white/70 drop-shadow">
-                  {active?.meta.startDate?.slice(5)} → {active?.meta.endDate?.slice(5)}
-                  {active?.isExample ? ' · ex' : ''}
+                  {active?.meta.startDate?.slice(5)} â†’ {active?.meta.endDate?.slice(5)}
+                  {active?.isExample ? ' Â· ex' : ''}
                 </p>
               </button>
               <div className="pointer-events-auto flex max-w-full flex-nowrap items-center justify-end gap-1">
@@ -2457,7 +2456,7 @@ export default function App() {
               ) : null}
               {enrichProgress ? (
                 <p className="pointer-events-none text-right text-[10px] text-amber-200">
-                  Enriching… {enrichProgress}
+                  Enrichingâ€¦ {enrichProgress}
                 </p>
               ) : null}
               {routesStatus ? (
@@ -2544,7 +2543,18 @@ export default function App() {
                 : JOURNEY_TONGUES.find((t) => t.id === id)?.label
           }
           renderTongueLabel={(id, label) =>
-            id === 'ai' ? <AiSparkIcon className="mx-auto h-4 w-4" /> : label
+            id === 'ai' ? (
+              <AiSparkIcon className="mx-auto h-4 w-4" />
+            ) : id === 'settings' && pendingInviteCount > 0 ? (
+              <span className="inline-flex items-center gap-1">
+                {label}
+                <span className="rounded-full bg-[var(--coral)] px-1 text-[9px] font-bold text-white">
+                  {pendingInviteCount}
+                </span>
+              </span>
+            ) : (
+              label
+            )
           }
           insertHighlight={Boolean(tempPin)}
         >
@@ -2654,8 +2664,8 @@ export default function App() {
               onTouchStart={(e) => e.stopPropagation()}
               onTouchMove={(e) => e.stopPropagation()}
             >
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain touch-pan-y [-webkit-overflow-scrolling:touch]">
-              <DataPanel
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden touch-pan-y">
+              <SettingsShell
                 active={active}
                 cloudUser={cloudUser}
                 pendingInviteCount={pendingInviteCount}
@@ -2710,6 +2720,15 @@ export default function App() {
                 setGoogleKey={setGoogleKey}
                 setIonToken={setIonToken}
                 updateActive={updateActive}
+                drivePanel={
+                  <DriveSyncPanel
+                    active={active}
+                    onExportToDrive={() => void onExportToDrive()}
+                    onImportFromDrive={(f) => void onImportFromDrive(f)}
+                    onStatus={setStatus}
+                  />
+                }
+                clientLogs={<ClientLogsBlob />}
               />
               </div>
             </div>
@@ -2869,8 +2888,8 @@ function DriveSyncPanel({
         setFiles(list)
         onStatus(
           list.length
-            ? `Drive ready · ${list.length} workbook${list.length === 1 ? '' : 's'} in ${DRIVE_FOLDER_NAME}/`
-            : `Drive ready · ${DRIVE_FOLDER_NAME}/ (empty)`,
+            ? `Drive ready Â· ${list.length} workbook${list.length === 1 ? '' : 's'} in ${DRIVE_FOLDER_NAME}/`
+            : `Drive ready Â· ${DRIVE_FOLDER_NAME}/ (empty)`,
         )
       } catch (listErr) {
         logClientError('drive-list', listErr)
@@ -2908,8 +2927,8 @@ function DriveSyncPanel({
       setConnected(true)
       onStatus(
         list.length
-          ? `Drive · ${list.length} workbook${list.length === 1 ? '' : 's'}`
-          : `Drive · ${DRIVE_FOLDER_NAME}/ is empty`,
+          ? `Drive Â· ${list.length} workbook${list.length === 1 ? '' : 's'}`
+          : `Drive Â· ${DRIVE_FOLDER_NAME}/ is empty`,
       )
     } catch (err) {
       logClientError('drive-list', err)
@@ -2953,7 +2972,7 @@ function DriveSyncPanel({
         updates the current trip when the workbook name matches; otherwise it creates a new trip
         and switches to it. Open opens the folder or file in Google Drive. Manual uploads in that
         folder show up after Connect (allow full Drive access when Google asks). If an older save
-        won’t open in Sheets, delete it and Save trip to Drive again.
+        wonâ€™t open in Sheets, delete it and Save trip to Drive again.
       </p>
       {!configured ? (
         <p className="mt-2 text-xs text-amber-800">
@@ -2971,7 +2990,7 @@ function DriveSyncPanel({
               disabled={busy}
               onClick={() => void onConnect()}
             >
-              {busy ? 'Connecting…' : 'Connect Google'}
+              {busy ? 'Connectingâ€¦' : 'Connect Google'}
             </button>
           ) : (
             <>
@@ -3045,265 +3064,6 @@ function DriveSyncPanel({
       ) : null}
     </div>
   )
-}
-
-function DataPanel({
-  active,
-  cloudUser,
-  pendingInviteCount,
-  colorMode,
-  googleKey,
-  serverPlacesConfigured,
-  ionToken,
-  walkApp,
-  onColorModeChange,
-  onOpenExample,
-  onImportFile,
-  onExport,
-  onExportToDrive,
-  onImportFromDrive,
-  onExportExampleExcel,
-  onAddDay,
-  onEditTrip,
-  onShowTips,
-  onStatus,
-  onCloudUser,
-  onSharedTripChange,
-  onAcceptedTrip,
-  setWalkApp,
-  setGoogleKey,
-  setIonToken,
-  updateActive,
-}: {
-  active: TripRecord | null
-  cloudUser: CloudUser | null
-  pendingInviteCount: number
-  colorMode: ColorMode
-  googleKey: string
-  serverPlacesConfigured: boolean
-  ionToken: string
-  walkApp: WalkAppPref
-  onColorModeChange: (mode: ColorMode) => void
-  onOpenExample: () => void
-  onImportFile: (f: File) => void
-  onExport: () => void
-  onExportToDrive: () => void
-  onImportFromDrive: (file: DriveFileInfo) => void
-  onExportExampleExcel: () => void
-  onAddDay: () => void
-  onEditTrip: () => void
-  onShowTips: () => void
-  onStatus: (msg: string) => void
-  onCloudUser: (user: CloudUser | null) => void
-  onSharedTripChange: (trip: TripRecord) => void | Promise<void>
-  onAcceptedTrip: (trip: TripRecord) => void | Promise<void>
-  setWalkApp: (pref: WalkAppPref) => void
-  setGoogleKey: (v: string) => void
-  setIonToken: (v: string) => void
-  updateActive: (mutator: (trip: TripRecord) => TripRecord) => Promise<void>
-}) {
-  return (
-    <>
-      <TripSharePanel
-        trip={active}
-        cloudUser={cloudUser}
-        onCloudUser={onCloudUser}
-        onTripChange={onSharedTripChange}
-        onAcceptedTrip={onAcceptedTrip}
-        onStatus={onStatus}
-      />
-      {pendingInviteCount > 0 && !cloudUser ? null : null}
-      {pendingInviteCount > 0 ? (
-        <p className="-mt-1 px-1 text-[11px] text-[var(--coral-deep)]">
-          {pendingInviteCount} pending invite{pendingInviteCount === 1 ? '' : 's'} — join above.
-        </p>
-      ) : null}
-
-      <div className="settings-card">
-        <div className="settings-card-title">Appearance</div>
-        <SegmentedControl
-          ariaLabel="Color mode"
-          value={colorMode}
-          onChange={onColorModeChange}
-          options={[
-            { id: 'light', label: 'Cream' },
-            { id: 'dark', label: 'Dark' },
-          ]}
-        />
-        <p className="mt-2 text-[11px] leading-snug text-[var(--ink-muted)]">
-          Cream is the warm paper look; Dark is the glass night shell.
-        </p>
-      </div>
-
-      {active ? (
-        <div className="settings-card">
-          <div className="settings-card-title">This trip</div>
-          <button
-            type="button"
-            className={`${btn} mb-2 w-full justify-between`}
-            onClick={onEditTrip}
-          >
-            <span className="truncate font-medium">{active.meta.name}</span>
-            <span className="shrink-0 text-[var(--ink-muted)]">
-              {active.meta.startDate} → {active.meta.endDate}
-            </span>
-          </button>
-          <button type="button" className={`${btn} mb-2 w-full`} onClick={onAddDay}>
-            + Add a day
-          </button>
-          <label className="mb-2 block text-xs text-[var(--ink-muted)]">
-            Home currency
-            <select
-              className="mt-1 w-full rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] px-2 py-1.5 text-sm text-[var(--ink)]"
-              value={active.meta.homeCurrency || 'EUR'}
-              onChange={(e) =>
-                void updateActive((t) => ({
-                  ...t,
-                  meta: {
-                    ...t.meta,
-                    homeCurrency: normalizeCurrency(e.target.value),
-                  },
-                }))
-              }
-            >
-              {['ILS', 'EUR', 'USD', 'GBP', 'CHF', 'JPY', 'CAD', 'AUD'].map((c) => (
-                <option key={c} value={c}>
-                  {c === 'ILS' ? 'ILS (NIS)' : c}
-                </option>
-              ))}
-            </select>
-          </label>
-          <textarea
-            className="w-full rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] px-2 py-1.5 text-[var(--ink)]"
-            rows={3}
-            value={active.meta.notes}
-            onChange={(e) =>
-              void updateActive((t) => ({
-                ...t,
-                meta: { ...t.meta, notes: e.target.value },
-              }))
-            }
-            placeholder="Notes…"
-          />
-        </div>
-      ) : null}
-
-      <div className="settings-card">
-        <div className="settings-card-title">Import & export</div>
-        <ActionRow>
-          <label className={btn}>
-            Import Excel
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                if (f) onImportFile(f)
-                e.target.value = ''
-              }}
-            />
-          </label>
-          <button type="button" className={btn} onClick={onExport} disabled={!active}>
-            Export Excel
-          </button>
-          <button type="button" className={btn} onClick={onExportExampleExcel}>
-            Example .xlsx
-          </button>
-        </ActionRow>
-        <div className="mt-2">
-          <DriveSyncPanel
-            active={active}
-            onExportToDrive={onExportToDrive}
-            onImportFromDrive={onImportFromDrive}
-            onStatus={onStatus}
-          />
-        </div>
-        <p className="mt-2 text-[11px] text-[var(--ink-muted)]">
-          Excel uses Trip + Steps + Hotels + Cash. Types: {ITEM_TYPES.join(', ')}.
-        </p>
-      </div>
-
-      <div className="settings-card">
-        <div className="settings-card-title">Map & links</div>
-        <div className="text-xs text-[var(--ink-muted)]">Walk figure opens</div>
-        <div className="mt-1 flex flex-wrap gap-2">
-          {(
-            [
-              ['maps', 'Street View'],
-              ['earth', 'Google Earth'],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className={`rounded-full px-3 py-1 text-xs ${
-                walkApp === id
-                  ? 'bg-[var(--sky)] text-white'
-                  : 'border border-[var(--glass-border)] bg-[var(--paper)] text-[var(--ink)]'
-              }`}
-              onClick={() => setWalkApp(id)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="mt-1 text-[10px] text-[var(--ink-muted)]">
-          Basemap look is on the map layers button. Pins → Street View / Earth. Paths →
-          directions or Flights.
-        </p>
-        <label className="mt-3 block text-xs text-[var(--ink-muted)]">
-          Google Maps / Places key
-          <input
-            className="mt-1 w-full rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] px-2 py-1.5 text-sm text-[var(--ink)]"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={googleKey}
-            onChange={(e) => setGoogleKey(sanitizeSecretInput(e.target.value))}
-            onBlur={() => void setSetting('googleMapsKey', googleKey)}
-            placeholder={serverPlacesConfigured ? 'Override server key…' : 'Paste key…'}
-          />
-          <span className="mt-1 block text-[10px]">
-            {serverPlacesConfigured
-              ? 'Blank uses the server key. Photoreal 3D needs a key here.'
-              : 'Optional. Prefer GOOGLE_MAPS_API_KEY on the server. 3D tiles need a key here.'}
-          </span>
-        </label>
-        <label className="mt-3 block text-xs text-[var(--ink-muted)]">
-          Cesium ion token (optional)
-          <input
-            className="mt-1 w-full rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] px-2 py-1.5 text-sm text-[var(--ink)]"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={ionToken}
-            onChange={(e) => setIonToken(sanitizeSecretInput(e.target.value))}
-            onBlur={() => void setSetting('cesiumIonToken', ionToken)}
-            placeholder="Paste token…"
-          />
-        </label>
-      </div>
-
-      <div className="settings-card">
-        <div className="settings-card-title">Tools</div>
-        <ActionRow>
-          <button type="button" className={btnPrimary} onClick={onShowTips}>
-            Feature tips
-          </button>
-          <button type="button" className={btn} onClick={onOpenExample}>
-            Open example
-          </button>
-        </ActionRow>
-      </div>
-
-      <ClientLogsBlob />
-    </>
-  )
-}
-
-function ActionRow({ children }: { children: React.ReactNode }) {
-  return <div className="flex flex-wrap gap-2">{children}</div>
 }
 
 const btn =

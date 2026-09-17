@@ -69,6 +69,15 @@ service cloud.firestore {
         && request.resource.data.invitedByUid == resource.data.invitedByUid;
     }
 
+    // Invitee leaving / declining: pending|accepted -> revoked on their own invite.
+    function inviteeRevokeOwn() {
+      return resource.data.email.lower() == callerEmail()
+        && request.resource.data.email.lower() == callerEmail()
+        && request.resource.data.status == 'revoked'
+        && (resource.data.status == 'pending' || resource.data.status == 'accepted')
+        && request.resource.data.tripId == resource.data.tripId;
+    }
+
     // Self leave: active -> revoked, identity fields frozen.
     function selfLeaveMember() {
       return request.auth.uid == request.resource.data.uid
@@ -122,7 +131,8 @@ service cloud.firestore {
           || (signedIn() && resource.data.email.lower() == callerEmail());
         allow create: if isTripOwner(tripId) || isTripOwnerAfter(tripId);
         allow update: if isTripOwner(tripId)
-          || (signedIn() && inviteeAcceptOnly());
+          || (signedIn() && inviteeAcceptOnly())
+          || (signedIn() && inviteeRevokeOwn());
         allow delete: if isTripOwner(tripId);
       }
     }
@@ -136,7 +146,7 @@ service cloud.firestore {
       allow update: if isTripOwner(tripId)
         || (signedIn()
           && emailKey == callerEmail()
-          && inviteeAcceptOnly());
+          && (inviteeAcceptOnly() || inviteeRevokeOwn()));
       allow delete: if isTripOwner(tripId);
     }
   }

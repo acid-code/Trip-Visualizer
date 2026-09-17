@@ -94,9 +94,11 @@ Invite-only near-live sync for two Google accounts.
 7. Partner signs in with **that** Google account and taps **Join**. Sync includes Journey steps and Plan lists/days/POIs. No public links.
 8. **Re-publish rules** whenever `firestore.rules` changes in the repo (revokes, leave, and delete rely on the latest rules).
 
-**Join flow:** Sharing is invite → Join, not automatic. Partner signs in with the invited Google account → Settings → Share trip → **Join**. Until they Join, the deployment stays empty even if the owner sees them on the invite list.
+**Join flow:** Sharing is invite → Join, not automatic. Partner signs in with the invited Google account → Settings → Sharing → **Join**. Until they Join, the deployment stays empty even if the owner sees them on the invite list.
 
-**If Join never appears:** Republish `firestore.rules` (pending-invite list reads need the latest rules). Confirm local and Vercel use the **same** Firebase project (`VITE_FIREBASE_PROJECT_ID`). Invite the exact Google email shown after partner sign-in.
+**Re-join:** After revoke, leave, or stop sharing, the member doc is deleted so a fresh invite + Join works again. Republish `firestore.rules` after pulling rules that allow invitees to revoke their own invite on leave.
+
+**If Join never appears:** Republish `firestore.rules`. Confirm local and Vercel use the **same** Firebase project (`VITE_FIREBASE_PROJECT_ID`). Invite the exact Google email shown after partner sign-in.
 
 **Sign-in tip:** `auth/internal-error` on a preview URL is usually one of:
 1. Hostname missing from Firebase **Authorized domains** (exact host, no `https://` — Firebase does not wildcard `*.vercel.app`)

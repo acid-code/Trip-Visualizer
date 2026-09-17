@@ -70,10 +70,10 @@ describe('scroll surface source contracts', () => {
   })
 
   it('Settings includes cream/dark color mode', () => {
-    const src = readSrc('src/App.tsx')
+    const src = readSrc('src/ui/SettingsShell.tsx')
     expect(src).toContain("label: 'Cream'")
     expect(src).toContain("label: 'Dark'")
-    expect(src).toContain('colorMode')
+    expect(readSrc('src/App.tsx')).toContain('colorMode')
     expect(readSrc('src/index.css')).toContain('[data-theme="light"]')
   })
 

@@ -26,8 +26,9 @@ type Props = {
   onCloudUser: (user: CloudUser | null) => void
   onTripChange: (trip: TripRecord) => void | Promise<void>
   onStatus: (msg: string) => void
-  /** Called after accepting an invite so App can select/save the trip. */
   onAcceptedTrip?: (trip: TripRecord) => void | Promise<void>
+  /** Full management-center layout (Settings → Sharing). */
+  management?: boolean
 }
 
 export function TripSharePanel({
@@ -37,6 +38,7 @@ export function TripSharePanel({
   onTripChange,
   onStatus,
   onAcceptedTrip,
+  management = false,
 }: Props) {
   const configured = isCloudAuthConfigured()
   const [email, setEmail] = useState('')
@@ -45,9 +47,16 @@ export function TripSharePanel({
   const [invites, setInvites] = useState<TripInvite[]>([])
   const [members, setMembers] = useState<TripMember[]>([])
   const [pendingMine, setPendingMine] = useState<TripInvite[]>([])
+  const [confirm, setConfirm] = useState<null | {
+    title: string
+    body: string
+    action: () => Promise<void>
+  }>(null)
 
   const shared = isTripShared(trip)
   const owner = canManageShare(trip ?? ({ shareEnabled: false } as TripRecord), cloudUser)
+  const isEditor =
+    shared && cloudUser && trip?.shareOwnerUid && trip.shareOwnerUid !== cloudUser.uid
 
   async function refreshLists() {
     if (!cloudUser) {
@@ -87,7 +96,6 @@ export function TripSharePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloudUser?.uid, trip?.cloudTripId, trip?.shareEnabled])
 
-  // Re-check invites when returning to the tab (partner may have been invited while away)
   useEffect(() => {
     if (!cloudUser) return
     const onVis = () => {
@@ -98,355 +106,367 @@ export function TripSharePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloudUser?.uid])
 
+  function runBusy(fn: () => Promise<void>) {
+    setBusy(true)
+    setLocalError(null)
+    void fn()
+      .catch((err) => {
+        const msg = shareErrorMessage(err, 'Sharing action failed')
+        setLocalError(msg)
+        onStatus(msg)
+      })
+      .finally(() => setBusy(false))
+  }
+
   if (!configured) {
     return (
       <div className="settings-card">
-        <div className="settings-card-title">Share trip</div>
+        <div className="settings-card-title">Sharing</div>
         <p className="text-[12px] text-[var(--ink-muted)]">
-          Couple sharing needs Firebase. Set <code className="rounded bg-white/10 px-1">VITE_FIREBASE_*</code>{' '}
-          (see README), enable Google Auth + Firestore, then redeploy.
+          Couple sharing needs Firebase. Set{' '}
+          <code className="rounded bg-white/10 px-1">VITE_FIREBASE_*</code> (see README), enable
+          Google Auth + Firestore, then redeploy.
         </p>
       </div>
     )
   }
 
+  const pendingOwned = invites.filter((i) => i.status === 'pending')
+
   return (
-    <div className="settings-card">
-      <div className="settings-card-title">Share trip</div>
-      <p className="mb-2 text-[11px] text-[var(--ink-muted)]">
-        Invite by email. Partner must sign in with that Google account. Syncs Journey + Plan
-        (lists, days, POIs). No public links.
-      </p>
+    <div className="space-y-3">
       {localError ? (
-        <p className="mb-2 rounded-xl border border-rose-300/50 bg-rose-500/10 px-2.5 py-2 text-[12px] text-rose-700 dark:text-rose-200">
+        <p className="rounded-xl border border-rose-300/50 bg-rose-500/10 px-2.5 py-2 text-[12px] text-rose-700 dark:text-rose-200">
           {localError}
         </p>
       ) : null}
 
-      {!cloudUser ? (
-        <button
-          type="button"
-          className="rounded-full bg-[var(--coral)] px-3 py-2 text-sm font-semibold text-white"
-          disabled={busy}
-          onClick={() => {
-            setBusy(true)
-            setLocalError(null)
-            void signInWithGoogle()
-              .then((u) => {
+      {confirm ? (
+        <div className="rounded-xl border border-[var(--coral)]/40 bg-[var(--coral)]/10 px-3 py-2.5">
+          <div className="text-[13px] font-semibold text-[var(--ink)]">{confirm.title}</div>
+          <p className="mt-1 text-[11px] text-[var(--ink-muted)]">{confirm.body}</p>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              className="rounded-full bg-[var(--coral)] px-3 py-1.5 text-xs font-semibold text-white"
+              disabled={busy}
+              onClick={() => {
+                const action = confirm.action
+                setConfirm(null)
+                runBusy(action)
+              }}
+            >
+              Confirm
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-[var(--glass-border)] px-3 py-1.5 text-xs"
+              disabled={busy}
+              onClick={() => setConfirm(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Identity */}
+      <section className="settings-card">
+        <div className="settings-card-title">Account</div>
+        {!cloudUser ? (
+          <button
+            type="button"
+            className="rounded-full bg-[var(--coral)] px-3 py-2 text-sm font-semibold text-white"
+            disabled={busy}
+            onClick={() =>
+              runBusy(async () => {
+                const u = await signInWithGoogle()
                 onCloudUser(u)
                 onStatus(`Signed in as ${u.email}`)
               })
-              .catch((err) => {
-                logClientError('share-signin', err)
-                const msg = shareErrorMessage(err, 'Google sign-in failed')
-                setLocalError(msg)
-                onStatus(msg)
-              })
-              .finally(() => setBusy(false))
-          }}
-        >
-          Sign in with Google
-        </button>
-      ) : (
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="min-w-0 flex-1 text-[12px] text-[var(--ink)]">
-            <div className="truncate font-semibold">{cloudUser.displayName || cloudUser.email}</div>
-            <div className="truncate text-[var(--ink-muted)]">{cloudUser.email}</div>
-          </div>
-          <button
-            type="button"
-            className="rounded-full border border-[var(--glass-border)] px-3 py-1.5 text-xs"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true)
-              void signOutCloud()
-                .then(() => {
+            }
+          >
+            Sign in with Google
+          </button>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="min-w-0 flex-1 text-[12px] text-[var(--ink)]">
+              <div className="truncate font-semibold">
+                {cloudUser.displayName || cloudUser.email}
+              </div>
+              <div className="truncate text-[var(--ink-muted)]">{cloudUser.email}</div>
+            </div>
+            <button
+              type="button"
+              className="rounded-full border border-[var(--glass-border)] px-3 py-1.5 text-xs"
+              disabled={busy}
+              onClick={() =>
+                runBusy(async () => {
+                  await signOutCloud()
                   onCloudUser(null)
                   onStatus('Signed out of sharing')
                 })
-                .finally(() => setBusy(false))
-            }}
-          >
-            Sign out
-          </button>
-        </div>
-      )}
-
-      {cloudUser && pendingMine.length ? (
-        <div className="mt-3 space-y-2">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--coral-deep)]">
-            Invites for you — tap Join to sync
-          </div>
-          {pendingMine.map((inv) => (
-            <div
-              key={`${inv.tripId}-${inv.email}`}
-              className="flex items-center justify-between gap-2 rounded-xl border border-[var(--coral)]/40 bg-[var(--coral)]/10 px-2.5 py-2"
+              }
             >
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-[var(--ink)]">{inv.tripName}</div>
-                <div className="truncate text-[10px] text-[var(--ink-muted)]">
-                  from {inv.invitedByEmail}
-                </div>
-              </div>
-              <button
-                type="button"
-                className="shrink-0 rounded-full bg-[var(--coral)] px-2.5 py-1 text-xs font-semibold text-white"
-                disabled={busy}
-                onClick={() => {
-                  setBusy(true)
-                  void acceptInvite(inv.tripId)
-                    .then(async (t) => {
-                      await onAcceptedTrip?.(t)
-                      onStatus(`Joined “${t.meta.name}”`)
-                      await refreshLists()
-                    })
-                    .catch((err) => {
-                      logClientError('share-accept', err)
-                      const msg = shareErrorMessage(err, 'Could not accept invite')
-                      setLocalError(msg)
-                      onStatus(msg)
-                    })
-                    .finally(() => setBusy(false))
-                }}
-              >
-                Join
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : cloudUser ? (
-        <p className="mt-3 text-[11px] text-[var(--ink-muted)]">
-          No pending invites for <span className="font-medium text-[var(--ink)]">{cloudUser.email}</span>.
-          Ask your partner to Enable sharing → Invite this exact email.
+              Sign out
+            </button>
+          </div>
+        )}
+        <p className="mt-2 text-[10px] text-[var(--ink-muted)]">
+          Invites must match this Google email exactly. There is no email notification —
+          your partner opens Settings → Sharing → Join.
         </p>
+      </section>
+
+      {/* Inbox */}
+      {cloudUser ? (
+        <section className="settings-card">
+          <div className="settings-card-title">Inbox</div>
+          {pendingMine.length ? (
+            <div className="space-y-2">
+              {pendingMine.map((inv) => (
+                <div
+                  key={`${inv.tripId}-${inv.email}`}
+                  className="flex items-center justify-between gap-2 rounded-xl border border-[var(--coral)]/40 bg-[var(--coral)]/10 px-2.5 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-[var(--ink)]">
+                      {inv.tripName}
+                    </div>
+                    <div className="truncate text-[10px] text-[var(--ink-muted)]">
+                      from {inv.invitedByEmail}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-full bg-[var(--coral)] px-2.5 py-1 text-xs font-semibold text-white"
+                    disabled={busy}
+                    onClick={() =>
+                      runBusy(async () => {
+                        const t = await acceptInvite(inv.tripId)
+                        await onAcceptedTrip?.(t)
+                        onStatus(`Joined “${t.meta.name}”`)
+                        await refreshLists()
+                      })
+                    }
+                  >
+                    Join
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-[var(--ink-muted)]">
+              No pending invites for{' '}
+              <span className="font-medium text-[var(--ink)]">{cloudUser.email}</span>.
+            </p>
+          )}
+        </section>
       ) : null}
 
+      {/* This trip */}
       {cloudUser && trip ? (
-        <div className="mt-3 space-y-2 border-t border-[var(--glass-border)] pt-3">
+        <section className="settings-card space-y-2">
+          <div className="settings-card-title">This trip</div>
           {!shared ? (
-            <button
-              type="button"
-              className="w-full rounded-full border border-[var(--glass-border)] px-3 py-2 text-sm font-semibold text-[var(--ink)] disabled:opacity-60"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true)
-                setLocalError(null)
-                void enableTripSharing(trip)
-                  .then(async (next) => {
+            <>
+              <p className="text-[11px] text-[var(--ink-muted)]">
+                Not shared. Enable to upload Journey + Plan to the cloud and invite a partner.
+              </p>
+              <button
+                type="button"
+                className="w-full rounded-full border border-[var(--glass-border)] px-3 py-2 text-sm font-semibold text-[var(--ink)] disabled:opacity-60"
+                disabled={busy}
+                onClick={() =>
+                  runBusy(async () => {
+                    const next = await enableTripSharing(trip)
                     await onTripChange(next)
                     onStatus('Sharing enabled · invite your partner by email')
                     await refreshLists()
                   })
-                  .catch((err) => {
-                    logClientError('share-enable', err)
-                    const msg = shareErrorMessage(err, 'Could not enable sharing')
-                    setLocalError(msg)
-                    onStatus(msg)
-                  })
-                  .finally(() => setBusy(false))
-              }}
-            >
-              {busy ? 'Enabling…' : 'Enable sharing on this trip'}
-            </button>
-          ) : (
+                }
+              >
+                {busy ? 'Enabling…' : 'Enable sharing'}
+              </button>
+            </>
+          ) : owner ? (
             <>
               <p className="text-[11px] text-[var(--sky)]">
-                Shared · near-live · {trip.shareOwnerEmail || 'owner'}
+                Shared as owner · near-live · {trip.shareOwnerEmail || cloudUser.email}
               </p>
-              {owner ? (
-                <>
-                  <div className="flex gap-1.5">
-                    <input
-                      type="email"
-                      className="min-w-0 flex-1 rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] px-2 py-1.5 text-sm"
-                      placeholder="partner@gmail.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className="rounded-full bg-[var(--coral)] px-3 py-1.5 text-xs font-semibold text-white"
-                      disabled={busy || !email.trim()}
-                      onClick={() => {
-                        setBusy(true)
-                        void inviteToTrip(trip, email)
-                          .then(async () => {
-                            setEmail('')
-                            onStatus(`Invited ${email.trim().toLowerCase()}`)
-                            await refreshLists()
-                          })
-                          .catch((err) => {
-                            logClientError('share-invite', err)
-                            const msg = shareErrorMessage(err, 'Could not send invite')
-                            setLocalError(msg)
-                            onStatus(msg)
-                          })
-                          .finally(() => setBusy(false))
-                      }}
-                    >
-                      Invite
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-[var(--ink-muted)]">
-                    Invite email must match their Google account exactly.
-                  </p>
-                  <button
-                    type="button"
-                    className="text-[11px] text-[var(--ink-muted)] underline"
-                    disabled={busy}
-                    onClick={() => {
-                      setBusy(true)
-                      void stopSharing(trip)
-                        .then(async (next) => {
-                          await onTripChange(next)
-                          onStatus('Sharing stopped — partner access revoked')
-                          await refreshLists()
-                        })
-                        .catch((err) => {
-                          logClientError('share-stop', err)
-                          const msg = shareErrorMessage(err, 'Could not stop sharing')
-                          setLocalError(msg)
-                          onStatus(msg)
-                        })
-                        .finally(() => setBusy(false))
-                    }}
-                  >
-                    Stop sharing / revoke all access
-                  </button>
-                </>
-              ) : (
-                <div className="space-y-2">
-                  <p className="text-[11px] text-[var(--ink-muted)]">
-                    You are an editor on this trip. Only the owner can invite or revoke others.
-                  </p>
-                  <button
-                    type="button"
-                    className="text-[11px] text-rose-600 underline"
-                    disabled={busy}
-                    onClick={() => {
-                      setBusy(true)
-                      void leaveSharedTrip(trip)
-                        .then(async (next) => {
-                          await onTripChange(next)
-                          onStatus('Left shared trip — kept on this device only')
-                          await refreshLists()
-                        })
-                        .catch((err) => {
-                          logClientError('share-leave', err)
-                          const msg = shareErrorMessage(err, 'Could not leave share')
-                          setLocalError(msg)
-                          onStatus(msg)
-                        })
-                        .finally(() => setBusy(false))
-                    }}
-                  >
-                    Leave shared trip
-                  </button>
-                </div>
-              )}
-
-              {members.length ? (
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
-                    Members
-                  </div>
-                  <ul className="mt-1 space-y-1">
-                    {members.map((m) => (
-                      <li key={m.uid} className="flex items-center justify-between gap-2 text-[12px]">
-                        <span className="truncate text-[var(--ink)]">
-                          {m.email}
-                          {m.role === 'owner' ? ' · owner' : ''}
-                        </span>
-                        {owner && m.role !== 'owner' ? (
-                          <button
-                            type="button"
-                            className="shrink-0 text-[11px] text-rose-500"
-                            disabled={busy}
-                            onClick={() => {
-                              setBusy(true)
-                              void revokeMember(trip, m.uid)
-                                .then(async () => {
-                                  onStatus(`Revoked ${m.email}`)
-                                  await refreshLists()
-                                })
-                                .catch((err) => {
-                                  logClientError('share-revoke-member', err)
-                                  const msg = shareErrorMessage(err, 'Could not revoke')
-                                  setLocalError(msg)
-                                  onStatus(msg)
-                                })
-                                .finally(() => setBusy(false))
-                            }}
-                          >
-                            Revoke
-                          </button>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              {invites.filter((i) => i.status === 'pending').length ? (
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
-                    Pending invites
-                  </div>
-                  <ul className="mt-1 space-y-1">
-                    {invites
-                      .filter((i) => i.status === 'pending')
-                      .map((i) => (
-                        <li
-                          key={i.email}
-                          className="flex items-center justify-between gap-2 text-[12px]"
-                        >
-                          <span className="truncate">{i.email}</span>
-                          {owner ? (
-                            <button
-                              type="button"
-                              className="text-[11px] text-rose-500"
-                              disabled={busy}
-                              onClick={() => {
-                                setBusy(true)
-                                void revokeInvite(trip, i.email)
-                                  .then(async () => {
-                                    onStatus(`Revoked ${i.email}`)
-                                    await refreshLists()
-                                  })
-                                  .catch((err) => {
-                                    logClientError('share-revoke', err)
-                                    const msg = shareErrorMessage(err, 'Could not revoke')
-                                    setLocalError(msg)
-                                    onStatus(msg)
-                                  })
-                                  .finally(() => setBusy(false))
-                              }}
-                            >
-                              Revoke
-                            </button>
-                          ) : null}
-                        </li>
-                      ))}
-                  </ul>
-                </div>
-              ) : null}
+              <div className="flex gap-1.5">
+                <input
+                  type="email"
+                  className="min-w-0 flex-1 rounded-xl border border-[var(--glass-border)] bg-[var(--paper)] px-2 py-1.5 text-sm"
+                  placeholder="partner@gmail.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="rounded-full bg-[var(--coral)] px-3 py-1.5 text-xs font-semibold text-white"
+                  disabled={busy || !email.trim()}
+                  onClick={() => {
+                    const raw = email
+                    runBusy(async () => {
+                      await inviteToTrip(trip, raw)
+                      setEmail('')
+                      onStatus(`Invited ${raw.trim().toLowerCase()}`)
+                      await refreshLists()
+                    })
+                  }}
+                >
+                  Invite
+                </button>
+              </div>
             </>
+          ) : (
+            <p className="text-[11px] text-[var(--ink-muted)]">
+              Shared as editor · owner {trip.shareOwnerEmail || '—'}. Only the owner can
+              invite or revoke.
+            </p>
           )}
-        </div>
+        </section>
       ) : null}
 
-        <p className="mt-3 text-[10px] text-[var(--ink-muted)]">
-          Drive Excel export is a personal backup and may include notes/confirmations — prefer
-          shared sync for the couple workspace.
-        </p>
-        <p className="mt-1 text-[10px] text-[var(--ink-muted)]">
-          First-time setup: Firebase Console → Firestore → Rules → paste{' '}
-          <code className="rounded bg-white/10 px-1">firestore.rules</code> from the repo →
-          Publish. Project:{' '}
+      {/* People */}
+      {cloudUser && trip && shared && (members.length > 0 || pendingOwned.length > 0) ? (
+        <section className="settings-card space-y-3">
+          <div className="settings-card-title">People</div>
+          {members.length ? (
+            <ul className="space-y-1">
+              {members.map((m) => (
+                <li key={m.uid} className="flex items-center justify-between gap-2 text-[12px]">
+                  <span className="truncate text-[var(--ink)]">
+                    {m.email}
+                    {m.role === 'owner' ? ' · owner' : ''}
+                  </span>
+                  {owner && m.role !== 'owner' ? (
+                    <button
+                      type="button"
+                      className="shrink-0 text-[11px] font-semibold text-rose-500"
+                      disabled={busy}
+                      onClick={() =>
+                        setConfirm({
+                          title: `Revoke ${m.email}?`,
+                          body: 'They lose cloud access. You can invite them again later.',
+                          action: async () => {
+                            await revokeMember(trip, m.uid)
+                            onStatus(`Revoked ${m.email}`)
+                            await refreshLists()
+                          },
+                        })
+                      }
+                    >
+                      Revoke
+                    </button>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {pendingOwned.length ? (
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
+                Pending invites
+              </div>
+              <ul className="space-y-1">
+                {pendingOwned.map((i) => (
+                  <li
+                    key={i.email}
+                    className="flex items-center justify-between gap-2 text-[12px]"
+                  >
+                    <span className="truncate">{i.email}</span>
+                    {owner ? (
+                      <button
+                        type="button"
+                        className="text-[11px] font-semibold text-rose-500"
+                        disabled={busy}
+                        onClick={() =>
+                          setConfirm({
+                            title: `Cancel invite to ${i.email}?`,
+                            body: 'They will no longer see this trip in their inbox.',
+                            action: async () => {
+                              await revokeInvite(trip, i.email)
+                              onStatus(`Revoked ${i.email}`)
+                              await refreshLists()
+                            },
+                          })
+                        }
+                      >
+                        Revoke
+                      </button>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {/* Danger */}
+      {cloudUser && trip && shared ? (
+        <section className="settings-card space-y-2">
+          <div className="settings-card-title">Access</div>
+          {owner ? (
+            <>
+              <button
+                type="button"
+                className="text-[12px] font-semibold text-rose-600 underline"
+                disabled={busy}
+                onClick={() =>
+                  setConfirm({
+                    title: 'Stop sharing?',
+                    body: 'Revokes partner access but keeps the cloud trip so you can re-enable later. Delete the trip to wipe the cloud copy.',
+                    action: async () => {
+                      const next = await stopSharing(trip)
+                      await onTripChange(next)
+                      onStatus('Sharing stopped — partner access revoked')
+                      await refreshLists()
+                    },
+                  })
+                }
+              >
+                Stop sharing (keep cloud)
+              </button>
+              <p className="text-[10px] text-[var(--ink-muted)]">
+                To delete the cloud copy for everyone, delete the trip from the trip switcher.
+              </p>
+            </>
+          ) : isEditor ? (
+            <button
+              type="button"
+              className="text-[12px] font-semibold text-rose-600 underline"
+              disabled={busy}
+              onClick={() =>
+                setConfirm({
+                  title: 'Leave shared trip?',
+                  body: 'You keep a local copy. The owner can invite you again later.',
+                  action: async () => {
+                    const next = await leaveSharedTrip(trip)
+                    await onTripChange(next)
+                    onStatus('Left shared trip — kept on this device only')
+                    await refreshLists()
+                  },
+                })
+              }
+            >
+              Leave shared trip
+            </button>
+          ) : null}
+        </section>
+      ) : null}
+
+      {management ? (
+        <p className="px-1 text-[10px] text-[var(--ink-muted)]">
+          Project{' '}
           <code className="rounded bg-white/10 px-1">
             {String(import.meta.env.VITE_FIREBASE_PROJECT_ID || '…')}
           </code>
+          . After rules changes: Firebase → Firestore → Rules → Publish.
         </p>
+      ) : null}
     </div>
   )
 }

@@ -110,6 +110,8 @@ export function clearLocalShare(trip: TripRecord): TripRecord {
     ...trip,
     shareEnabled: false,
     cloudTripId: '',
+    shareOwnerUid: '',
+    shareOwnerEmail: '',
     updatedAt: nowIso(),
   }
 }
@@ -419,20 +421,9 @@ async function writeRevokedInvite(
   const batch = writeBatch(db)
   batch.set(doc(db, 'trips', tripId, 'invites', key), forFirestore(revoked))
   batch.set(doc(db, 'emailInvites', key, 'trips', tripId), forFirestore(revoked))
+  // Delete member doc so a later re-invite can create a fresh active membership
   if (uidToRevoke) {
-    const memberSnap = await getDoc(doc(db, 'trips', tripId, 'members', uidToRevoke))
-    const existing = memberSnap.exists() ? (memberSnap.data() as TripMember) : null
-    batch.set(
-      doc(db, 'trips', tripId, 'members', uidToRevoke),
-      forFirestore({
-        uid: uidToRevoke,
-        email: existing?.email || email,
-        role: existing?.role || prev?.role || 'editor',
-        status: 'revoked',
-        joinedAt: existing?.joinedAt || nowIso(),
-      } satisfies TripMember),
-      { merge: true },
-    )
+    batch.delete(doc(db, 'trips', tripId, 'members', uidToRevoke))
   }
   await batch.commit()
 }
@@ -484,11 +475,9 @@ export async function revokeMember(trip: TripRecord, memberUid: string): Promise
   if (key) {
     await writeRevokedInvite(trip, email, prev, memberUid)
   } else {
-    await setDoc(
-      memberRef,
-      forFirestore({ ...member, status: 'revoked' } satisfies TripMember),
-      { merge: true },
-    )
+    const batch = writeBatch(db)
+    batch.delete(memberRef)
+    await batch.commit()
   }
 }
 
@@ -503,19 +492,35 @@ export async function leaveSharedTrip(trip: TripRecord): Promise<TripRecord> {
 
   const tripId = trip.cloudTripId
   const memberRef = doc(db, 'trips', tripId, 'members', user.uid)
+  const key = emailDocKey(user.email)
+  const batch = writeBatch(db)
+
   const memberSnap = await getDoc(memberRef)
   if (memberSnap.exists()) {
-    const member = memberSnap.data() as TripMember
-    await setDoc(
-      memberRef,
-      forFirestore({
-        ...member,
-        uid: user.uid,
-        status: 'revoked',
-      } satisfies TripMember),
-      { merge: true },
-    )
+    batch.delete(memberRef)
   }
+
+  if (key) {
+    const tripInviteRef = doc(db, 'trips', tripId, 'invites', key)
+    const emailInviteRef = doc(db, 'emailInvites', key, 'trips', tripId)
+    const prevSnap = await getDoc(emailInviteRef)
+    const prev = prevSnap.exists() ? (prevSnap.data() as TripInvite) : null
+    const revoked: TripInvite = {
+      tripId,
+      tripName: trip.meta.name || 'Shared trip',
+      email: user.email,
+      role: prev?.role || 'editor',
+      status: 'revoked',
+      invitedByUid: prev?.invitedByUid || trip.shareOwnerUid || user.uid,
+      invitedByEmail: prev?.invitedByEmail || trip.shareOwnerEmail || user.email,
+      invitedAt: prev?.invitedAt || nowIso(),
+      acceptedUid: user.uid,
+    }
+    batch.set(tripInviteRef, forFirestore(revoked))
+    batch.set(emailInviteRef, forFirestore(revoked))
+  }
+
+  await batch.commit()
   return clearLocalShare(trip)
 }
 

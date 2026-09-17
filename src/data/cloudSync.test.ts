@@ -271,10 +271,17 @@ describe('isTripShared / canManageShare / tripRecordForCloud', () => {
 
   it('clearLocalShare strips share flags', () => {
     const next = clearLocalShare(
-      sampleTrip({ cloudTripId: 'T1', shareEnabled: true, shareOwnerUid: owner.uid }),
+      sampleTrip({
+        cloudTripId: 'T1',
+        shareEnabled: true,
+        shareOwnerUid: owner.uid,
+        shareOwnerEmail: owner.email,
+      }),
     )
     expect(next.shareEnabled).toBe(false)
     expect(next.cloudTripId).toBe('')
+    expect(next.shareOwnerUid).toBe('')
+    expect(next.shareOwnerEmail).toBe('')
   })
 
   it('tripRecordForCloud fills cloudTripId and revision', () => {
@@ -851,28 +858,104 @@ describe('invite / list / accept / revoke / stop', () => {
     expect(updateDocMock).not.toHaveBeenCalled()
   })
 
-  it('leaveSharedTrip revokes self and clears local share', async () => {
+  it('leaveSharedTrip deletes member, revokes invite, clears local share', async () => {
     currentUser = partner
     const shared = sampleTrip({
       cloudTripId: 'T1',
       shareEnabled: true,
       shareOwnerUid: owner.uid,
+      shareOwnerEmail: owner.email,
     })
-    getDocMock.mockResolvedValueOnce(
-      snapExists({
-        uid: partner.uid,
-        email: partner.email,
-        role: 'editor',
-        status: 'active',
-        joinedAt: nowIso(),
-      } satisfies TripMember),
-    )
+    getDocMock
+      .mockResolvedValueOnce(
+        snapExists({
+          uid: partner.uid,
+          email: partner.email,
+          role: 'editor',
+          status: 'active',
+          joinedAt: nowIso(),
+        } satisfies TripMember),
+      )
+      .mockResolvedValueOnce(
+        snapExists({
+          tripId: 'T1',
+          tripName: 'Our trip',
+          email: partner.email,
+          role: 'editor',
+          status: 'accepted',
+          invitedByUid: owner.uid,
+          invitedByEmail: owner.email,
+          invitedAt: nowIso(),
+          acceptedUid: partner.uid,
+        } satisfies TripInvite),
+      )
     const next = await leaveSharedTrip(shared)
     expect(next.shareEnabled).toBe(false)
     expect(next.cloudTripId).toBe('')
-    expect(setDocMock).toHaveBeenCalled()
-    const payload = setDocMock.mock.calls[0]![1] as TripMember
-    expect(payload.status).toBe('revoked')
+    expect(next.shareOwnerUid).toBe('')
+    expect(batchDeleteMock).toHaveBeenCalled()
+    expect(batchSetMock).toHaveBeenCalled()
+    const payloads = batchSetMock.mock.calls.map((c) => c[1] as { status?: string })
+    expect(payloads.some((p) => p.status === 'revoked')).toBe(true)
+  })
+
+  it('re-join after revoke: invite accept works without leftover member doc', async () => {
+    currentUser = owner
+    const shared = sampleTrip({
+      cloudTripId: 'T1',
+      shareEnabled: true,
+      shareOwnerUid: owner.uid,
+    })
+    // revokeInvite: load invite
+    getDocMock.mockResolvedValueOnce(
+      snapExists({
+        tripId: 'T1',
+        tripName: 'Our trip',
+        email: partner.email,
+        role: 'editor',
+        status: 'accepted',
+        invitedByUid: owner.uid,
+        invitedByEmail: owner.email,
+        invitedAt: nowIso(),
+        acceptedUid: partner.uid,
+      } satisfies TripInvite),
+    )
+    await revokeInvite(shared, partner.email)
+    expect(batchDeleteMock).toHaveBeenCalled()
+
+    // Re-invite + accept as partner
+    batchSetMock.mockClear()
+    batchDeleteMock.mockClear()
+    batchCommitMock.mockClear()
+    currentUser = partner
+    getDocMock
+      .mockResolvedValueOnce(
+        snapExists({
+          tripId: 'T1',
+          tripName: 'Our trip',
+          email: partner.email,
+          role: 'editor',
+          status: 'pending',
+          invitedByUid: owner.uid,
+          invitedByEmail: owner.email,
+          invitedAt: nowIso(),
+        } satisfies TripInvite),
+      )
+      .mockResolvedValueOnce(
+        snapExists({
+          ownerUid: owner.uid,
+          ownerEmail: owner.email,
+          revision: 2,
+          updatedAt: nowIso(),
+          lastWriterUid: owner.uid,
+          record: encodeRecordForFirestore(shared),
+        } satisfies CloudTripDoc),
+      )
+    const joined = await acceptInvite('T1')
+    expect(joined.shareEnabled).toBe(true)
+    expect(batchSetMock).toHaveBeenCalled()
+    const memberWrites = batchSetMock.mock.calls.map((c) => c[1] as { status?: string; uid?: string })
+    expect(memberWrites.some((p) => p.status === 'active' && p.uid === partner.uid)).toBe(true)
   })
 
   it('leaveSharedTrip rejects owners', async () => {
