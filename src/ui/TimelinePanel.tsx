@@ -1,27 +1,12 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { ItemType, TripItem, TripMeta } from '../domain/types'
-import { TYPE_COLORS } from '../domain/types'
+import { TYPE_COLORS, TYPE_EMOJI } from '../domain/types'
 import { dayIndex, stepOrderMap } from '../data/analytics'
 import { dayColor } from '../data/dayTheme'
 import { sortItems } from '../data/db'
 import { isPlaceholderBase, itemTouchesDay, listTripDays } from '../data/dayBases'
 import { createTapTracker, TOUCH_SCROLL_Y } from './scrollGesture'
-
-const TYPE_EMOJI: Record<ItemType, string> = {
-  flight: '✈️',
-  train: '🚆',
-  bus: '🚌',
-  ferry: '⛴️',
-  drive: '🚗',
-  hotel: '🛏️',
-  sight: '📍',
-  restaurant: '🍽️',
-  activity: '🎟️',
-  city: '🏙️',
-  note: '📝',
-  other: '✨',
-}
 
 type Props = {
   meta: TripMeta
@@ -323,11 +308,16 @@ export function TimelinePanel({
                         </span>
                       ) : null}
                       <span
-                        className="truncate rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white"
+                        className="inline-flex max-w-full items-center gap-0.5 truncate rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white"
                         style={{
                           background: placeholder ? '#d97706' : TYPE_COLORS[item.type],
                         }}
                       >
+                        {!placeholder ? (
+                          <span aria-hidden className="text-[10px] font-normal normal-case leading-none">
+                            {TYPE_EMOJI[item.type]}
+                          </span>
+                        ) : null}
                         {placeholder ? 'base' : item.type}
                       </span>
                       {viaEndDate && endDayNum != null ? (

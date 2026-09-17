@@ -67,30 +67,66 @@ The repo includes `vercel.json` (SPA rewrite + asset caching).
 
 1. Push to GitHub and import the project on [Vercel](https://vercel.com)
 2. Framework: Vite · Build: `npm run build` · Output: `dist`
-3. No env vars required for the free stack
+3. Set env vars as needed (see `.env.example`): `GOOGLE_MAPS_API_KEY`, optional `GEMINI_API_KEY`, `VITE_GOOGLE_OAUTH_CLIENT_ID`, and for couple sharing the `VITE_FIREBASE_*` keys
 
-Optional later: set Cesium ion / Google keys in the app’s **Data** panel (stored in IndexedDB on that browser), not as Vercel env unless you wire that yourself.
+Optional: set Cesium ion / Google keys in the app’s **Data** panel (stored in IndexedDB on that browser).
 
-**Note:** IndexedDB is per browser/device. Deploying does not sync trips across phones unless you export/import Excel (or add your own sync later).
+**Note:** IndexedDB is per browser/device. Couple sharing (below) syncs full trips (Journey + Plan) via Firestore when enabled.
+
+## Couple sharing (Firebase)
+
+Invite-only near-live sync for two Google accounts.
+
+1. Create a Firebase project (Spark free tier is enough).
+2. Enable **Authentication → Google** and add hosts under **Authorized domains**:
+   - `localhost`
+   - your production Vercel host
+   - **each preview host** you test (e.g. `trip-visualizer-git-feature-sharing-….vercel.app`) — Firebase does not wildcard `*.vercel.app`
+   - Also set `VITE_FIREBASE_*` for **Preview** (not only Production) in Vercel env settings
+3. Create **Firestore** (production mode).
+4. **Publish security rules (required before Enable sharing works):**
+   - Open [Firestore Rules](https://console.firebase.google.com/project/triptracker-11e7e/firestore/rules) (replace project id if different)
+   - Paste the contents of `firestore.rules` from this repo
+   - Click **Publish**
+   - Or CLI: `npx firebase deploy --only firestore:rules`
+5. Register a Web app; copy config into Vercel / `.env.local` as `VITE_FIREBASE_*`.
+6. In the app: **Settings → Share trip → Sign in with Google → Enable sharing → Invite** partner’s email.
+7. Partner signs in with **that** Google account and taps **Join**. Sync includes Journey steps and Plan lists/days/POIs. No public links.
+8. **Re-publish rules** whenever `firestore.rules` changes in the repo (revokes, leave, and delete rely on the latest rules).
+
+**Join flow:** Sharing is invite → Join, not automatic. Partner signs in with the invited Google account → Settings → Sharing → **Join**. Until they Join, the deployment stays empty even if the owner sees them on the invite list.
+
+**Re-join:** After revoke, leave, or stop sharing, the member doc is deleted so a fresh invite + Join works again. Republish `firestore.rules` after pulling rules that allow invitees to revoke their own invite on leave.
+
+**If Join never appears:** Republish `firestore.rules`. Confirm local and Vercel use the **same** Firebase project (`VITE_FIREBASE_PROJECT_ID`). Invite the exact Google email shown after partner sign-in.
+
+**Sign-in tip:** `auth/internal-error` on a preview URL is usually one of:
+1. Hostname missing from Firebase **Authorized domains** (exact host, no `https://` — Firebase does not wildcard `*.vercel.app`)
+2. **Google Cloud → Credentials**: Firebase browser API key has HTTP referrer restrictions that omit this preview URL, *or* the “Web client (auto created by Google Service)” OAuth client is missing this origin under **Authorized JavaScript origins**
+3. Preview deploy missing `VITE_FIREBASE_*` (must be enabled for Preview, not only Production)
+4. Deploy predates the CSP allowlist for `*.firebaseapp.com` / `*.web.app`
+
+After fixing, hard-refresh. Sign-in now falls back to full-page Google redirect if the popup path fails.
+
+Drive Excel remains a personal backup (full-fidelity notes/confirmations) — prefer shared sync for the couple workspace.
 
 ## Security (OWASP WSTG–aligned)
 
-This is a **local-first SPA** (no multi-user API). Controls that apply:
-
 | Control | How it’s handled |
 | --- | --- |
-| **WSTG-INPV** | Zod allowlist schemas on trip meta/items; Excel rows sanitized; size/row caps; https-only media URLs |
-| **WSTG-ATHN/ATHZ** | No shared backend — data stays in the browser’s IndexedDB (no IDOR across users) |
+| **WSTG-INPV** | Zod allowlist schemas on trip meta/items/plan; Excel rows sanitized; size/row caps; https-only media URLs |
+| **WSTG-ATHN/ATHZ** | Local trips stay in IndexedDB. Shared trips require verified Google email on an invite allowlist; Firestore rules enforce owner/member access; revoke clears cloud access |
 | **WSTG-CRYP** | No hardcoded API keys; optional Maps/Ion tokens are password-masked and stored locally only |
-| **WSTG-ERRH** | Generic UI errors; detailed logs only in local dev (secrets redacted) |
-| **WSTG-CONF** | Vercel headers: CSP, HSTS, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy, Permissions-Policy |
+| **WSTG-ERRH** | Generic UI errors; detailed logs only in local client log (secrets redacted) |
+| **WSTG-CONF** | Vercel headers: CSP (incl. Firebase endpoints), HSTS, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy, Permissions-Policy |
 
 ## Stack
 
 - Vite + React 19 + TypeScript + Tailwind 4
-- CesiumJS, SheetJS (`xlsx`), IndexedDB (`idb`), Zod, ECharts
+- CesiumJS, SheetJS (`xlsx`), IndexedDB (`idb`), Zod, ECharts, Firebase Auth + Firestore
 - Nominatim / Wikidata / OSRM for enrichment and routes
 - Frankfurter (ECB) for FX totals
+- Vitest unit tests; GitHub Actions (`.github/workflows/ci.yml`) runs `npm test`, `tsc`, and production build on push/PR
 
 ## License
 

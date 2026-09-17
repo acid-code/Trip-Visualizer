@@ -1,0 +1,88 @@
+/**
+ * Firestore rejects `undefined` anywhere in a document.
+ * Convert TripRecord (and nested objects) into a plain JSON-safe payload.
+ */
+export function forFirestore<T>(value: T): T {
+  return JSON.parse(
+    JSON.stringify(value, (_key, v) => (v === undefined ? undefined : v)),
+  ) as T
+}
+
+/**
+ * Throw like the Firestore SDK when a write payload still contains `undefined`.
+ * Used by unit-test mocks so missing `forFirestore()` fails in CI the same way.
+ */
+export function assertNoUndefinedFields(value: unknown, path = ''): void {
+  if (value === undefined) {
+    throw new Error(
+      `Unsupported field value: undefined${
+        path ? ` (found in field ${path})` : ''
+      }`,
+    )
+  }
+  if (value === null || typeof value !== 'object') return
+  if (Array.isArray(value)) {
+    value.forEach((v, i) =>
+      assertNoUndefinedFields(v, path ? `${path}.${i}` : String(i)),
+    )
+    return
+  }
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    assertNoUndefinedFields(v, path ? `${path}.${k}` : k)
+  }
+}
+
+/** User-facing share/sync errors — keep codes actionable, no stacks. */
+export function shareErrorMessage(err: unknown, fallback: string): string {
+  const code =
+    err && typeof err === 'object' && 'code' in err
+      ? String((err as { code?: string }).code || '')
+      : ''
+  const msg =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'string'
+        ? err
+        : ''
+
+  if (code === 'permission-denied' || /permission/i.test(msg)) {
+    return 'Permission denied — publish firestore.rules in Firebase Console (Firestore → Rules), then retry'
+  }
+  if (
+    code === 'auth/internal-error' ||
+    code === 'auth/unauthorized-domain' ||
+    /auth\/internal-error|unauthorized.domain|auth\/unauthorized/i.test(msg)
+  ) {
+    const host =
+      typeof window !== 'undefined' ? window.location.hostname : 'this host'
+    return `Google sign-in blocked on “${host}”. In Firebase → Authentication → Settings → Authorized domains, add that exact hostname (no https://). Also check Google Cloud → Credentials: the Firebase API key’s HTTP referrers and the Web OAuth client’s Authorized JavaScript origins must allow this preview URL. Then hard-refresh.`
+  }
+  if (code === 'auth/popup-blocked' || /popup.?blocked/i.test(msg)) {
+    return 'Sign-in popup was blocked — allow popups for this site and try again'
+  }
+  if (code === 'auth/popup-closed-by-user' || /popup.?closed/i.test(msg)) {
+    return 'Sign-in cancelled'
+  }
+  if (code === 'unavailable' || /offline|network/i.test(msg)) {
+    return 'Network unavailable — check connection and try again'
+  }
+  if (
+    code === 'invalid-argument' ||
+    /unsupported field|undefined|nested array|Nested arrays/i.test(msg)
+  ) {
+    return 'Could not upload trip data — try again after refreshing'
+  }
+  if (/not configured|VITE_FIREBASE/i.test(msg)) {
+    return msg
+  }
+  if (/PARTNER_UPDATED/.test(msg)) {
+    return 'Someone else updated — reloaded cloud version (your last edit was not pushed)'
+  }
+  if (msg === 'SHARE_GONE' || code === 'SHARE_GONE') {
+    return 'Shared trip is no longer available in the cloud'
+  }
+  if (msg && msg.length < 160 && !/firebase|stack|http/i.test(msg)) {
+    return msg
+  }
+  return fallback
+}

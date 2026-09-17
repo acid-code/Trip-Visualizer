@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import type { PlanPlace, PlanSection, TripRecord } from '../domain/types'
 import { listTripDays } from '../data/dayBases'
 import {
@@ -50,6 +50,14 @@ type Props = {
   googleApiKey?: string
   /** Surface short status (e.g. synced to Journey). */
   onStatus?: (msg: string) => void
+  /** Shared with Journey Steps — null means all days. */
+  dayFilter?: string | null
+  onDayFilter?: (day: string | null) => void
+  /** Keep Plan map camera aligned with Journey. */
+  initialMapFocus?: import('../data/mapFocus').MapFocus | null
+  mapFocusApiRef?: MutableRefObject<
+    import('../data/mapFocus').MapFocusApi | null
+  >
 }
 
 type PlanMode = 'discover' | 'days'
@@ -62,6 +70,7 @@ const SUGGEST_CATS: Array<{
 }> = [
   { id: 'all', short: 'All', emoji: '✨', blurb: 'Popular places nearby' },
   { id: 'sights', short: 'Sights', emoji: '🏛️', blurb: 'Museums & landmarks' },
+  { id: 'activity', short: 'Do', emoji: '🎟️', blurb: 'Fun & tickets' },
   { id: 'food', short: 'Food', emoji: '🍽️', blurb: 'Restaurants & cafés' },
   { id: 'drink', short: 'Drinks', emoji: '🍷', blurb: 'Bars & wine' },
   { id: 'hotel', short: 'Hotels', emoji: '🛏️', blurb: 'Places to stay' },
@@ -111,10 +120,23 @@ export function PlanBoard({
   placesEnabled = false,
   googleApiKey,
   onStatus,
+  dayFilter = null,
+  onDayFilter,
+  initialMapFocus = null,
+  mapFocusApiRef,
 }: Props) {
   const days = listTripDays(trip.meta)
   const [mode, setMode] = useState<PlanMode>('discover')
-  const [activeDay, setActiveDay] = useState(days[0] ?? '')
+  const daysAll = dayFilter == null
+  const activeDay =
+    dayFilter && days.includes(dayFilter) ? dayFilter : (days[0] ?? '')
+  const setDaysAll = (all: boolean) => {
+    if (all) onDayFilter?.(null)
+    else if (activeDay) onDayFilter?.(activeDay)
+  }
+  const setActiveDay = (day: string) => {
+    onDayFilter?.(day)
+  }
   const [activeSectionId, setActiveSectionId] = useState(
     trip.planSections.find((s) => s.title !== JOURNEY_SECTION_TITLE)?.id ??
       trip.planSections[0]?.id ??
@@ -131,7 +153,6 @@ export function PlanBoard({
     lon: number
     radiusM: number
   } | null>(null)
-  const [daysAll, setDaysAll] = useState(true)
   const [focusPlaceId, setFocusPlaceId] = useState<string | null>(null)
   const [focusSuggestionId, setFocusSuggestionId] = useState<string | null>(null)
   const [detailPlace, setDetailPlace] = useState<ExplorePlace | null>(null)
@@ -427,6 +448,7 @@ export function PlanBoard({
             place.category === 'drink' ||
             place.category === 'hotel' ||
             place.category === 'sights' ||
+            place.category === 'activity' ||
             place.category === 'nature'
           if (typed) setSuggestCat(place.category)
           else {
@@ -533,7 +555,6 @@ export function PlanBoard({
   function schedulePlace(placeId: string, day: string) {
     onChange(promotePlanPlaceToStep(trip, placeId, day))
     setSelectedUnscheduledId(null)
-    setDaysAll(false)
     setActiveDay(day)
     const idx = days.indexOf(day)
     onStatus?.(
@@ -875,6 +896,8 @@ export function PlanBoard({
             focusPlaceId={focusPlaceId}
             focusSuggestionId={focusSuggestionId}
             linkedItemTypes={linkedItemTypes}
+            initialFocus={initialMapFocus}
+            mapFocusApiRef={mapFocusApiRef}
             onPlaceClick={(id) => {
               openSavedPlaceDetail(id)
             }}

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type MutableRefObject } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import { setWorkerUrl } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
@@ -63,6 +63,11 @@ type Props = {
   onViewportIdle?: (view: { lat: number; lon: number; radiusM: number }) => void
   /** Journey step type by linked item id — pins use type emoji instead of section icon. */
   linkedItemTypes?: Record<string, ItemType>
+  /** Shared focus from Journey — used on first mount and via mapFocusApiRef.apply. */
+  initialFocus?: { lat: number; lon: number; zoom: number } | null
+  mapFocusApiRef?: MutableRefObject<
+    import('../data/mapFocus').MapFocusApi | null
+  >
   className?: string
 }
 
@@ -119,12 +124,14 @@ function sectionEmoji(section: PlanSection | undefined): string {
   // Prefer section icon when it looks like an emoji (not a letter/digit glyph).
   if (icon && !/^[a-z0-9#@]+$/i.test(icon) && icon.length <= 4) return icon
   const t = (section?.title || '').toLowerCase()
-  if (t.includes('food') || t.includes('eat') || t.includes('drink')) return '🍽️'
-  if (t.includes('stay') || t.includes('hotel')) return '🛏️'
+  if (t.includes('food') || t.includes('eat') || t.includes('drink')) {
+    return TYPE_EMOJI.restaurant
+  }
+  if (t.includes('stay') || t.includes('hotel')) return TYPE_EMOJI.hotel
   if (t.includes('nature') || t.includes('outdoor')) return '🌿'
-  if (t.includes('must') || t.includes('sight')) return '🏛️'
-  if (t.includes('maybe') || t.includes('optional')) return '✨'
-  return '📍'
+  if (t.includes('must') || t.includes('sight')) return TYPE_EMOJI.sight
+  if (t.includes('maybe') || t.includes('optional')) return TYPE_EMOJI.other
+  return TYPE_EMOJI.sight
 }
 
 export function PlanMapView({
@@ -142,6 +149,8 @@ export function PlanMapView({
   onSuggestionClick,
   onViewportIdle,
   linkedItemTypes,
+  initialFocus = null,
+  mapFocusApiRef,
   className = '',
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -150,6 +159,7 @@ export function PlanMapView({
   const lastFitKeyRef = useRef('')
   const lastFocusPlaceRef = useRef<string | null>(null)
   const lastFocusSuggestionRef = useRef<string | null>(null)
+  const initialFocusRef = useRef(initialFocus)
   const onPlaceClickRef = useRef(onPlaceClick)
   const onSuggestionClickRef = useRef(onSuggestionClick)
   const onViewportIdleRef = useRef(onViewportIdle)
@@ -159,14 +169,17 @@ export function PlanMapView({
 
   useEffect(() => {
     if (!rootRef.current || mapRef.current) return
+    const boot = initialFocusRef.current
     const map = new maplibregl.Map({
       container: rootRef.current,
       style: DARK_STYLE,
-      center: [5.2, 43.7],
-      zoom: 7.2,
+      center: boot ? [boot.lon, boot.lat] : [5.2, 43.7],
+      zoom: boot?.zoom ?? 7.2,
       attributionControl: { compact: true },
     })
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
+    // Shared Journey focus — don't fitBounds away from it on first pin paint
+    if (boot) lastFitKeyRef.current = '__shared_focus__'
     let idleTimer: ReturnType<typeof setTimeout> | null = null
     const emitIdle = () => {
       const c = map.getCenter()
@@ -207,6 +220,28 @@ export function PlanMapView({
       mapRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    if (!mapFocusApiRef) return
+    mapFocusApiRef.current = {
+      capture: () => {
+        const map = mapRef.current
+        if (!map) return null
+        const c = map.getCenter()
+        return { lat: c.lat, lon: c.lng, zoom: map.getZoom() }
+      },
+      apply: (focus) => {
+        const map = mapRef.current
+        if (!map) return
+        map.resize()
+        map.jumpTo({ center: [focus.lon, focus.lat], zoom: focus.zoom })
+        lastFitKeyRef.current = '__shared_focus__'
+      },
+    }
+    return () => {
+      mapFocusApiRef.current = null
+    }
+  }, [mapFocusApiRef])
 
   useEffect(() => {
     const map = mapRef.current

@@ -209,6 +209,12 @@ export const TripRecordSchema = z.object({
   isExample: z.boolean().default(false),
   createdAt: boundedStr(40),
   updatedAt: boundedStr(40),
+  /** When set with shareEnabled, trip syncs via Firestore. */
+  cloudTripId: boundedStr(64).optional(),
+  shareEnabled: z.boolean().optional(),
+  shareOwnerUid: boundedStr(128).optional(),
+  shareOwnerEmail: boundedStr(320).optional(),
+  revision: z.number().int().min(0).max(1_000_000_000).optional(),
 })
 
 export type TripMeta = z.infer<typeof TripMetaSchema>
@@ -270,7 +276,7 @@ export const TYPE_EMOJI: Record<ItemType, string> = {
   ferry: '⛴️',
   drive: '🚗',
   hotel: '🛏️',
-  sight: '📍',
+  sight: '🏛️',
   restaurant: '🍽️',
   activity: '🎟️',
   city: '🏙️',

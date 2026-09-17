@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ScreenSpaceEventHandler,
@@ -28,6 +28,8 @@ import {
   parseTripEndpoint,
   parseTripItemId,
   pickScreenLonLat,
+  captureGlobeMapFocus,
+  applyGlobeMapFocus,
   routeMidpoint,
   setGlobeRenderActive,
   syncSelectedPathHighlight,
@@ -87,6 +89,8 @@ type Props = {
   phoneFraming?: boolean
   /** When false, pause the WebGL render loop (Plan mode / background). */
   renderActive?: boolean
+  /** Parent registers capture/apply so Journey↔Plan can keep the same map focus. */
+  mapFocusApiRef?: MutableRefObject<import('../data/mapFocus').MapFocusApi | null>
   tempPin?: TempPinDraw | null
   nearbyLinks?: NearbyStepLink[]
   tempFlyToken?: number
@@ -145,6 +149,7 @@ export function GlobeView({
   openingOriginOnly = false,
   phoneFraming = false,
   renderActive = true,
+  mapFocusApiRef,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const walkOverlayRef = useRef<HTMLDivElement>(null)
@@ -419,7 +424,8 @@ export function GlobeView({
           const isPath =
             entityId.endsWith(':arc') ||
             entityId.endsWith(':route') ||
-            entityId.endsWith(':seq')
+            entityId.endsWith(':seq') ||
+            entityId.endsWith(':mid')
           const item = itemsRef.current.find((i) => i.id === itemId)
           const connector =
             connectorsRef.current.find(
@@ -438,11 +444,21 @@ export function GlobeView({
             // Flight arcs are not Maps drives — open Google Flights instead
             const pathCoords = routePathCoords(item, connector)
             const ends = routeEndpoints(item, connector)
-            focusedEntityIdRef.current =
-              item?.latTo != null && item?.lonTo != null
+            const isTripTransport =
+              !!item &&
+              (item.type === 'flight' ||
+                item.type === 'train' ||
+                item.type === 'bus' ||
+                item.type === 'ferry' ||
+                item.type === 'drive')
+            // Focus the mid-path emoji for trip legs; otherwise the destination pin
+            focusedEntityIdRef.current = isTripTransport
+              ? `trip:${itemId}:mid`
+              : item?.latTo != null && item?.lonTo != null
                 ? `trip:${itemId}:b`
                 : `trip:${itemId}`
-            viewer!.selectedEntity = entity
+            // Avoid Cesium's default selection chrome — we draw our own path glow
+            viewer!.selectedEntity = undefined
 
             if (item?.type === 'flight') {
               if (ends && pathCoords && pathCoords.length >= 2) {
@@ -457,8 +473,6 @@ export function GlobeView({
                   destination: ends.destination,
                   coords: pathCoords,
                 })
-              } else {
-                viewer!.selectedEntity = undefined
               }
               return
             }
@@ -501,7 +515,7 @@ export function GlobeView({
 
           focusEndpointRef.current = parseTripEndpoint(entityId)
           focusedEntityIdRef.current = entityId
-          viewer!.selectedEntity = entity
+          viewer!.selectedEntity = undefined
           onSelectRef.current({
             kind: 'step',
             itemId,
@@ -580,6 +594,25 @@ export function GlobeView({
   }, [])
 
   useEffect(() => {
+    if (!mapFocusApiRef) return
+    mapFocusApiRef.current = {
+      capture: () => {
+        const v = viewerRef.current
+        if (!v || v.isDestroyed()) return null
+        return captureGlobeMapFocus(v)
+      },
+      apply: (focus) => {
+        const v = viewerRef.current
+        if (!v || v.isDestroyed()) return
+        applyGlobeMapFocus(v, focus)
+      },
+    }
+    return () => {
+      mapFocusApiRef.current = null
+    }
+  }, [mapFocusApiRef])
+
+  useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return
     try {
@@ -649,6 +682,7 @@ export function GlobeView({
         ? walkTarget.coords
         : null
     syncSelectedPathHighlight(viewer, coords)
+    if (coords) beginRouteFlyRef.current(coords)
   }, [walkTarget])
 
   useEffect(() => {
@@ -667,8 +701,25 @@ export function GlobeView({
     ) {
       focusedEntityIdRef.current = null
     }
+    // Keep the mid-path transport emoji focused while the path glow is active
+    if (
+      selectedId &&
+      (walkTarget?.kind === 'directions' || walkTarget?.kind === 'flights')
+    ) {
+      const item = itemsRef.current.find((i) => i.id === selectedId)
+      if (
+        item &&
+        (item.type === 'flight' ||
+          item.type === 'train' ||
+          item.type === 'bus' ||
+          item.type === 'ferry' ||
+          item.type === 'drive')
+      ) {
+        focusedEntityIdRef.current = `trip:${selectedId}:mid`
+      }
+    }
     applySelectionHighlight(viewer, selectedId ?? null, focusedEntityIdRef.current)
-  }, [selectedId])
+  }, [selectedId, walkTarget])
 
   useEffect(() => {
     const viewer = viewerRef.current
@@ -700,7 +751,10 @@ export function GlobeView({
       return
     }
     // Path taps frame the whole route themselves — don't zoom to the destination pin
-    if (walkTarget?.kind === 'directions' || walkTarget?.kind === 'flights') return
+    if (walkTarget?.kind === 'directions' || walkTarget?.kind === 'flights') {
+      focusEndpointRef.current = null
+      return
+    }
     const item = itemsRef.current.find((i) => i.id === selectedId)
     if (!item) return
     const endpoint = focusEndpointRef.current

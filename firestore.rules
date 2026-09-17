@@ -1,0 +1,153 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Any signed-in Google user with an email. Invite allowlist is enforced
+    // separately via emailInvites + member docs.
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email.size() > 3;
+    }
+
+    function callerEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function tripPath(tripId) {
+      return /databases/$(database)/documents/trips/$(tripId);
+    }
+
+    function memberPath(tripId, uid) {
+      return /databases/$(database)/documents/trips/$(tripId)/members/$(uid);
+    }
+
+    function tripInvitePath(tripId, emailKey) {
+      return /databases/$(database)/documents/trips/$(tripId)/invites/$(emailKey);
+    }
+
+    function isTripOwner(tripId) {
+      return signedIn()
+        && exists(tripPath(tripId))
+        && get(tripPath(tripId)).data.ownerUid == request.auth.uid;
+    }
+
+    function isTripOwnerAfter(tripId) {
+      return signedIn()
+        && existsAfter(tripPath(tripId))
+        && getAfter(tripPath(tripId)).data.ownerUid == request.auth.uid;
+    }
+
+    function isActiveMember(tripId) {
+      return signedIn()
+        && exists(memberPath(tripId, request.auth.uid))
+        && get(memberPath(tripId, request.auth.uid)).data.status == 'active';
+    }
+
+    function canAccessTrip(tripId) {
+      return isTripOwner(tripId) || isActiveMember(tripId);
+    }
+
+    // Pending invite must exist on BOTH emailInvites and trips/.../invites
+    // so a revoked partner cannot revive access via emailInvites alone.
+    function hasPendingInvite(tripId) {
+      return exists(/databases/$(database)/documents/emailInvites/$(callerEmail())/trips/$(tripId))
+        && get(/databases/$(database)/documents/emailInvites/$(callerEmail())/trips/$(tripId)).data.status == 'pending'
+        && get(/databases/$(database)/documents/emailInvites/$(callerEmail())/trips/$(tripId)).data.email == callerEmail()
+        && exists(tripInvitePath(tripId, callerEmail()))
+        && get(tripInvitePath(tripId, callerEmail())).data.status == 'pending'
+        && get(tripInvitePath(tripId, callerEmail())).data.email == callerEmail();
+    }
+
+    // Invitee may only accept: pending -> accepted (cannot un-revoke).
+    function inviteeAcceptOnly() {
+      return resource.data.status == 'pending'
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.email.lower() == callerEmail()
+        && resource.data.email.lower() == callerEmail()
+        && request.resource.data.tripId == resource.data.tripId
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.invitedByUid == resource.data.invitedByUid;
+    }
+
+    // Invitee leaving / declining: pending|accepted -> revoked on their own invite.
+    function inviteeRevokeOwn() {
+      return resource.data.email.lower() == callerEmail()
+        && request.resource.data.email.lower() == callerEmail()
+        && request.resource.data.status == 'revoked'
+        && (resource.data.status == 'pending' || resource.data.status == 'accepted')
+        && request.resource.data.tripId == resource.data.tripId;
+    }
+
+    // Self leave: active -> revoked, identity fields frozen.
+    function selfLeaveMember() {
+      return request.auth.uid == request.resource.data.uid
+        && resource.data.status == 'active'
+        && request.resource.data.status == 'revoked'
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.email == resource.data.email;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.email is string
+        && request.resource.data.email.lower() == callerEmail();
+      allow delete: if false;
+    }
+
+    match /trips/{tripId} {
+      allow read: if canAccessTrip(tripId);
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerEmail is string
+        && request.resource.data.ownerEmail.lower() == callerEmail();
+      allow update: if (isTripOwner(tripId) || isActiveMember(tripId))
+        && resource.data.ownerUid == request.resource.data.ownerUid
+        && resource.data.ownerEmail == request.resource.data.ownerEmail;
+      allow delete: if isTripOwner(tripId);
+
+      match /members/{memberUid} {
+        allow read: if canAccessTrip(tripId) || (signedIn() && request.auth.uid == memberUid);
+        allow create: if signedIn() && request.auth.uid == memberUid
+          && request.resource.data.uid == memberUid
+          && request.resource.data.email is string
+          && request.resource.data.email.lower() == callerEmail()
+          && request.resource.data.status == 'active'
+          && (
+            (request.resource.data.role == 'owner' && isTripOwnerAfter(tripId))
+            || (request.resource.data.role == 'editor' && hasPendingInvite(tripId))
+          );
+        // Owner may revoke anyone; member may only leave (active -> revoked).
+        // Nobody may self-restore revoked -> active.
+        allow update: if isTripOwner(tripId)
+          || (signedIn() && request.auth.uid == memberUid && selfLeaveMember());
+        allow delete: if isTripOwner(tripId)
+          || (signedIn() && request.auth.uid == memberUid);
+      }
+
+      match /invites/{emailKey} {
+        allow read: if canAccessTrip(tripId)
+          || (signedIn() && resource.data.email.lower() == callerEmail());
+        allow create: if isTripOwner(tripId) || isTripOwnerAfter(tripId);
+        allow update: if isTripOwner(tripId)
+          || (signedIn() && inviteeAcceptOnly())
+          || (signedIn() && inviteeRevokeOwn());
+        allow delete: if isTripOwner(tripId);
+      }
+    }
+
+    match /emailInvites/{emailKey}/trips/{tripId} {
+      // Path key is the allowlist — don't also filter on resource.data here or
+      // collection list queries fail with permission-denied (rules aren't filters).
+      allow read: if signedIn() && emailKey == callerEmail();
+      allow create: if (isTripOwner(tripId) || isTripOwnerAfter(tripId))
+        && request.resource.data.email.lower() == emailKey;
+      allow update: if isTripOwner(tripId)
+        || (signedIn()
+          && emailKey == callerEmail()
+          && (inviteeAcceptOnly() || inviteeRevokeOwn()));
+      allow delete: if isTripOwner(tripId);
+    }
+  }
+}

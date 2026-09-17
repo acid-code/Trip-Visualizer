@@ -38,6 +38,11 @@ import { dayColor, dayColorByIndex } from '../data/dayTheme'
 import { stepOrderMap } from '../data/analytics'
 import { isValidCoord } from '../data/validate'
 import { logClientError, sanitizeEntityId } from '../data/security'
+import {
+  heightToZoom,
+  zoomToHeight,
+  type MapFocus,
+} from '../data/mapFocus'
 
 export type MapStack = 'esri' | 'osm' | 'google3d' | 'esri-dark'
 export type MapLook = 'realistic' | 'modern'
@@ -101,7 +106,7 @@ export async function createTripViewer(
     navigationHelpButton: false,
     fullscreenButton: false,
     infoBox: false,
-    selectionIndicator: true,
+    selectionIndicator: false,
     terrainProvider: new EllipsoidTerrainProvider(),
     baseLayer: esriLayer(),
     // Only draw when the camera/scene actually changes — huge heat win on phones.
@@ -278,7 +283,7 @@ function stepPinDataUrl(opts: {
   badge: string
   selected: boolean
 }): string {
-  const key = `${opts.fill}|${opts.emoji}|${opts.badge}|${opts.selected ? 1 : 0}|sm`
+  const key = `${opts.fill}|${opts.emoji}|${opts.badge}|${opts.selected ? 1 : 0}|v2`
   const cached = stepPinImageCache.get(key)
   if (cached) return cached
 
@@ -315,11 +320,13 @@ function stepPinDataUrl(opts: {
     ctx.stroke()
   }
 
-  ctx.font =
-    '13px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif'
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.fillText(opts.emoji || '📍', cx, cy + 0.5)
+  if (opts.emoji) {
+    ctx.font =
+      '13px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(opts.emoji, cx, cy + 0.5)
+  }
 
   const badge = opts.badge.trim()
   if (badge) {
@@ -401,14 +408,16 @@ function stepPinDataSource(viewer: Viewer): CustomDataSource | undefined {
 
 function isStepPinId(id: string): boolean {
   if (!id.startsWith('trip:')) return false
-  if (id.endsWith(':route') || id.endsWith(':arc') || id.endsWith(':seq')) return false
+  if (id.endsWith(':route') || id.endsWith(':arc') || id.endsWith(':seq')) {
+    return false
+  }
   return true
 }
 
-/** Unique step item id — :a / :b ends of the same leg count as one step. */
+/** Unique step item id — :a / :b / :mid of the same leg count as one step. */
 function stepClusterKey(id: string): string | null {
   if (!isStepPinId(id)) return null
-  return id.replace(/:[ab]$/i, '')
+  return id.replace(/:(a|b|mid)$/i, '')
 }
 
 function eachTripEntity(viewer: Viewer, visit: (entity: Entity) => void) {
@@ -648,6 +657,16 @@ function addSeqLabel(
   })
 }
 
+function isTransportLeg(type: TripItem['type']): boolean {
+  return (
+    type === 'flight' ||
+    type === 'train' ||
+    type === 'bus' ||
+    type === 'ferry' ||
+    type === 'drive'
+  )
+}
+
 function addBillboard(
   viewer: Viewer,
   item: TripItem,
@@ -658,11 +677,13 @@ function addBillboard(
     badge: string
     color: Color
     selected: boolean
+    /** Override type emoji; empty string = endpoint marker without transport glyph. */
+    emoji?: string
   },
 ) {
   const selected = opts.selected
   const fillCss = opts.color.toCssColorString()
-  const emoji = typeEmojiForItem(item.type)
+  const emoji = opts.emoji ?? typeEmojiForItem(item.type)
   const collection = stepPinDataSource(viewer)?.entities ?? viewer.entities
   collection.add({
     id: `trip:${sanitizeEntityId(item.id)}${opts.suffix ?? ''}`,
@@ -706,6 +727,48 @@ function addBillboard(
       fillCss,
       emoji,
       pinKind: 'step',
+    },
+  })
+}
+
+/** Type emoji on the path midpoint (not on A/B ends) so destinations stay tappable. */
+function addLegMidPin(
+  viewer: Viewer,
+  item: TripItem,
+  lon: number,
+  lat: number,
+  badge: string,
+  color: Color,
+  selected: boolean,
+) {
+  const fillCss = color.toCssColorString()
+  const emoji = typeEmojiForItem(item.type)
+  const sid = sanitizeEntityId(item.id)
+  const collection = stepPinDataSource(viewer)?.entities ?? viewer.entities
+  collection.add({
+    id: `trip:${sid}:mid`,
+    name: item.title,
+    position: Cartesian3.fromDegrees(lon, lat, SURFACE_H),
+    billboard: {
+      image: stepPinDataUrl({
+        fill: fillCss,
+        emoji,
+        badge,
+        selected,
+      }),
+      verticalOrigin: VerticalOrigin.CENTER,
+      horizontalOrigin: HorizontalOrigin.CENTER,
+      heightReference: HeightReference.NONE,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      scaleByDistance: new NearFarScalar(5e3, 1.08, 2.5e6, 0.7),
+      scale: selected ? 1.08 : 1,
+    },
+    description: sid,
+    properties: {
+      badgeText: badge,
+      fillCss,
+      emoji,
+      pinKind: 'leg-mid',
     },
   })
 }
@@ -759,16 +822,13 @@ function addArc(
     },
     description: sanitizeEntityId(item.id),
   })
-  addSeqLabel(
-    viewer,
-    sanitizeEntityId(item.id),
-    (lon1 + lon2) / 2,
-    (lat1 + lat2) / 2,
-    SURFACE_H,
-    badge,
-    color,
-    item.id,
-  )
+  const mid = midpointLonLat([
+    [lat1, lon1],
+    [lat2, lon2],
+  ])
+  if (mid) {
+    addLegMidPin(viewer, item, mid.lon, mid.lat, badge, color, false)
+  }
 }
 
 function addRoute(
@@ -777,6 +837,7 @@ function addRoute(
   coords: [number, number][],
   color: Color,
   badge: string,
+  selected: boolean,
 ) {
   if (coords.length < 2) return
   viewer.entities.add({
@@ -792,8 +853,7 @@ function addRoute(
   })
   const mid = midpointLonLat(coords)
   if (mid) {
-    const sid = sanitizeEntityId(item.id)
-    addSeqLabel(viewer, sid, mid.lon, mid.lat, SURFACE_H, badge, color, sid)
+    addLegMidPin(viewer, item, mid.lon, mid.lat, badge, color, selected)
   }
 }
 
@@ -874,32 +934,31 @@ export function syncTripEntities(
       const selected = selectedId === item.id
 
       if (item.routeCoords && item.routeCoords.length > 1) {
-        addRoute(viewer, item, item.routeCoords, color, badge)
-        if (hasFrom)
-          addBillboard(viewer, item, item.lon!, item.lat!, {
-            suffix: ':a',
-            badge,
-            color,
-            selected,
-          })
-        if (hasTo)
-          addBillboard(viewer, item, item.lonTo!, item.latTo!, {
-            suffix: ':b',
-            badge,
-            color,
-            selected,
-          })
+        addRoute(viewer, item, item.routeCoords, color, badge, selected)
+        // Transport legs: emoji lives on :mid — skip A/B so destination/origin steps stay tappable
+        if (!isTransportLeg(item.type)) {
+          if (hasFrom)
+            addBillboard(viewer, item, item.lon!, item.lat!, {
+              suffix: ':a',
+              badge,
+              color,
+              selected,
+            })
+          if (hasTo)
+            addBillboard(viewer, item, item.lonTo!, item.latTo!, {
+              suffix: ':b',
+              badge,
+              color,
+              selected,
+            })
+        }
         continue
       }
 
       if (
         hasFrom &&
         hasTo &&
-        (item.type === 'flight' ||
-          item.type === 'train' ||
-          item.type === 'bus' ||
-          item.type === 'ferry' ||
-          item.type === 'drive')
+        isTransportLeg(item.type)
       ) {
         addArc(
           viewer,
@@ -912,18 +971,7 @@ export function syncTripEntities(
           color,
           badge,
         )
-        addBillboard(viewer, item, item.lon!, item.lat!, {
-          suffix: ':a',
-          badge,
-          color,
-          selected,
-        })
-        addBillboard(viewer, item, item.lonTo!, item.latTo!, {
-          suffix: ':b',
-          badge,
-          color,
-          selected,
-        })
+        // Mid-path emoji only — no endpoint circles covering the destination pin
         continue
       }
 
@@ -987,7 +1035,7 @@ export function applySelectionHighlight(
     const isFocused =
       focusedEntityId != null
         ? id === focusedEntityId
-        : !id.endsWith(':b')
+        : !id.endsWith(':b') && !id.endsWith(':mid')
 
     const prop = (name: string): string => {
       const p = entity.properties?.[name]
@@ -996,9 +1044,23 @@ export function applySelectionHighlight(
       return v != null ? String(v) : ''
     }
 
-    if (entity.billboard && prop('pinKind') === 'step') {
+    const pinKind = prop('pinKind')
+    if (entity.billboard && (pinKind === 'step' || pinKind === 'leg-mid')) {
       const fill = prop('fillCss') || '#3b82f6'
-      const emoji = prop('emoji') || '📍'
+      // Preserve empty string for transport endpoints (no glyph); mid pins keep type emoji.
+      const rawEmoji = entity.properties?.emoji
+      const emojiVal =
+        rawEmoji == null
+          ? ''
+          : typeof rawEmoji.getValue === 'function'
+            ? rawEmoji.getValue()
+            : rawEmoji
+      const emoji =
+        emojiVal != null && String(emojiVal).length > 0
+          ? String(emojiVal)
+          : pinKind === 'leg-mid'
+            ? '📍'
+            : ''
       const badge = prop('badgeText') || ''
       entity.billboard.image = new ConstantProperty(
         stepPinDataUrl({
@@ -1008,7 +1070,9 @@ export function applySelectionHighlight(
           selected: isSelected,
         }),
       )
-      entity.billboard.scale = new ConstantProperty(isSelected ? 1.06 : 1)
+      entity.billboard.scale = new ConstantProperty(
+        isSelected ? (pinKind === 'leg-mid' ? 1.08 : 1.06) : 1,
+      )
     } else if (entity.point) {
       entity.point.pixelSize = new ConstantProperty(isSelected ? 16 : 11)
       entity.point.outlineWidth = new ConstantProperty(isSelected ? 3 : 2)
@@ -1029,7 +1093,7 @@ export function applySelectionHighlight(
 export function parseTripItemId(entityId: string): string {
   return String(entityId)
     .replace(/^trip:/, '')
-    .replace(/:(a|b|arc|route|seq)$/, '')
+    .replace(/:(a|b|arc|route|seq|mid)$/, '')
 }
 
 export function parseTripEndpoint(entityId: string): 'a' | 'b' | null {
@@ -1129,6 +1193,37 @@ export function pickCanvasCenterLonLat(
 ): { lon: number; lat: number } | null {
   const canvas = viewer.scene.canvas
   return pickScreenLonLat(viewer, canvas.clientWidth / 2, canvas.clientHeight / 2)
+}
+
+/** Snapshot canvas-center + zoom so Plan can match this view. */
+export function captureGlobeMapFocus(viewer: Viewer): MapFocus | null {
+  const center = pickCanvasCenterLonLat(viewer)
+  if (!center) return null
+  let height = 50_000
+  try {
+    height = viewer.camera.positionCartographic.height
+  } catch {
+    /* ignore */
+  }
+  return {
+    lat: center.lat,
+    lon: center.lon,
+    zoom: heightToZoom(height, center.lat),
+  }
+}
+
+/** Instantly match a Plan/MapLibre focus (no fly animation). */
+export function applyGlobeMapFocus(viewer: Viewer, focus: MapFocus) {
+  if (!isValidCoord(focus.lat, focus.lon)) return
+  const range = zoomToHeight(focus.zoom, focus.lat)
+  const target = Cartesian3.fromDegrees(focus.lon, focus.lat, 0)
+  viewer.camera.lookAt(
+    target,
+    new HeadingPitchRange(0, CesiumMath.toRadians(-42), Math.max(range, 200)),
+  )
+  // Unlock so the user can pan again (lookAt otherwise sticks the transform)
+  viewer.camera.lookAtTransform(Matrix4.IDENTITY)
+  kickRender(viewer)
 }
 
 export function clearTempEntities(viewer: Viewer) {

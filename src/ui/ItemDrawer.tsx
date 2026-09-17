@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
-import type { TripItem } from '../domain/types'
-import { ITEM_STATUSES, ITEM_TYPES, TYPE_COLORS } from '../domain/types'
+import type { ItemType, TripItem } from '../domain/types'
+import { ITEM_STATUSES, ITEM_TYPES, TYPE_COLORS, TYPE_EMOJI } from '../domain/types'
 import { pinItemOnMap } from '../data/enrichment'
 import { COMMON_CURRENCIES, normalizeCurrency } from '../data/fx'
 import {
@@ -24,6 +24,21 @@ import {
   sanitizeTitle,
 } from '../data/validate'
 import { DateField } from './DateField'
+
+const TYPE_BLURB: Partial<Record<ItemType, string>> = {
+  flight: 'Air',
+  train: 'Rail',
+  bus: 'Coach',
+  ferry: 'Boat',
+  drive: 'Car',
+  hotel: 'Stay',
+  sight: 'Visit',
+  restaurant: 'Meal',
+  activity: 'Ticket',
+  city: 'Hub',
+  note: 'Note',
+  other: 'Other',
+}
 
 type Props = {
   item: TripItem | null
@@ -147,9 +162,12 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <span
-            className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-950"
+            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize text-slate-950"
             style={{ background: TYPE_COLORS[item.type] }}
           >
+            <span aria-hidden className="text-[12px] leading-none">
+              {TYPE_EMOJI[item.type]}
+            </span>
             {item.type}
           </span>
           <h3 className="mt-1 text-lg font-semibold text-stone-900">{item.title}</h3>
@@ -204,6 +222,49 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
         />
       ) : null}
 
+      <div>
+        <div className="mb-1.5 text-xs font-medium text-stone-500">Type</div>
+        <div
+          className="grid grid-cols-4 gap-1.5 sm:grid-cols-6"
+          role="listbox"
+          aria-label="Step type"
+          title="Switching type remembers each type’s fields for this step. Shared fields like confirm, place, and cost carry over."
+        >
+          {ITEM_TYPES.map((t) => {
+            const on = item.type === t
+            return (
+              <button
+                key={t}
+                type="button"
+                role="option"
+                aria-selected={on}
+                onClick={() => set('type', t)}
+                className={`flex flex-col items-center gap-0.5 rounded-2xl border px-1 py-2 text-center transition ${
+                  on
+                    ? 'border-transparent text-white shadow-sm'
+                    : 'border-stone-200/90 bg-white text-stone-700 hover:border-orange-200 hover:bg-orange-50/40'
+                }`}
+                style={on ? { background: TYPE_COLORS[t] } : undefined}
+              >
+                <span aria-hidden className="text-[17px] leading-none">
+                  {TYPE_EMOJI[t]}
+                </span>
+                <span className="text-[10px] font-semibold capitalize leading-tight">
+                  {t}
+                </span>
+                <span
+                  className={`text-[9px] leading-tight ${
+                    on ? 'text-white/80' : 'text-stone-400'
+                  }`}
+                >
+                  {TYPE_BLURB[t] ?? ''}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 gap-2">
         <Field label="Title *">
           <input
@@ -213,20 +274,6 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
             onChange={(e) => set('title', e.target.value)}
             onBlur={(e) => set('title', sanitizeTitle(e.target.value, item.title))}
           />
-        </Field>
-        <Field label="Type">
-          <select
-            className={inputCls}
-            value={item.type}
-            onChange={(e) => set('type', e.target.value as TripItem['type'])}
-            title="Switching type remembers each type’s fields for this step. Shared fields like confirm, place, and cost carry over."
-          >
-            {ITEM_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
         </Field>
         <Field label="Date *">
           <DateField

@@ -14,6 +14,8 @@ export const ALLOWED_SETTING_KEYS = [
   'walkApp',
   /** JSON string[] of feature-guide tip ids the user has already seen */
   'featureGuideSeen',
+  /** '1' while the auto-seeded first trip still needs name + dates */
+  'awaitingFirstTripSetup',
   'appMode',
   'colorMode',
 ] as const

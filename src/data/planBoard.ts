@@ -455,7 +455,7 @@ export function planSectionForExploreCategory(
       ? 'food'
       : cat === 'hotel'
         ? 'stay'
-        : cat === 'nature' || cat === 'sights' || cat === 'other'
+        : cat === 'nature' || cat === 'sights' || cat === 'activity' || cat === 'other'
           ? 'must'
           : 'maybe'
   return trip.planSections.find((s) => {
