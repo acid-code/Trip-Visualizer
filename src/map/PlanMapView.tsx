@@ -175,7 +175,9 @@ export function PlanMapView({
       style: DARK_STYLE,
       center: boot ? [boot.lon, boot.lat] : [5.2, 43.7],
       zoom: boot?.zoom ?? 7.2,
-      attributionControl: { compact: true },
+      // Attribution lives on the basemap source string; hide the compact "i"
+      // so it isn't clipped under the Discover/Days sheet.
+      attributionControl: false,
     })
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
     // Shared Journey focus — don't fitBounds away from it on first pin paint

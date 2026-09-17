@@ -42,22 +42,22 @@ export function createTapTracker(thresholdPx = TAP_MOVE_THRESHOLD_PX) {
   }
 }
 
-/** Shared phone sheet height tokens — keep UI + tests in sync. */
+/** Shared phone sheet height tokens — CSS classes backed by --sheet-* in index.css. */
 export const MOBILE_SHEET_HEIGHT = {
   /** Day Coach chat / options */
-  aiCoach: 'h-[min(52vh,24rem)]',
+  aiCoach: 'sheet-h-ai',
   /** Day Coach option detail overlay */
-  aiCoachDetail: 'max-h-[min(70vh,28rem)]',
+  aiCoachDetail: 'sheet-h-ai-detail',
   /** Steps strip while browsing */
-  steps: 'max-h-[38vh]',
+  steps: 'sheet-h-steps',
   /** Steps while reviewing an AI draft — keep short so Save/Discard stay clear on phones */
-  aiReviewSteps: 'h-[min(30vh,13rem)]',
+  aiReviewSteps: 'sheet-h-ai-review',
   /** Explore list */
-  explore: 'h-[min(41vh,18.5rem)]',
+  explore: 'sheet-h-explore',
   /** Explore place detail */
-  exploreDetail: 'h-[min(62vh,26.5rem)]',
+  exploreDetail: 'sheet-h-explore-detail',
   /** Stats / Data */
-  tall: 'h-[min(72vh,32rem)]',
+  tall: 'sheet-h-tall',
 } as const
 
 /** CSS classes every vertical touch scroller in sheets should include. */

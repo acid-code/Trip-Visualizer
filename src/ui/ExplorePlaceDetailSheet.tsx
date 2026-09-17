@@ -54,7 +54,7 @@ export function ExplorePlaceDetailSheet({
       role={backdrop ? 'presentation' : undefined}
     >
       <div
-        className="pointer-events-auto mt-auto max-h-[min(72vh,30rem)] overflow-y-auto overscroll-contain touch-pan-y rounded-t-3xl border border-[var(--glass-border)] bg-[var(--paper-solid)] text-[var(--ink)] shadow-2xl"
+        className="pointer-events-auto sheet-h-explore-overlay mt-auto overflow-y-auto overscroll-contain touch-pan-y rounded-t-3xl border border-[var(--glass-border)] bg-[var(--paper-solid)] text-[var(--ink)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-[var(--glass-border)] bg-[var(--paper)] px-4 py-2.5 backdrop-blur">

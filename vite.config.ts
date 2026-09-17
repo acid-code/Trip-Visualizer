@@ -119,11 +119,8 @@ function placesDevProxy(): Plugin {
         })()
       })
 
-      const handle = (
-        path: string,
-        run: (body: Record<string, unknown>) => Promise<unknown>,
-      ) => {
-        server.middlewares.use(path, (req, res, next) => {
+      const mountApiPost = (route: string, apiFile: string) => {
+        server.middlewares.use(route, (req, res, next) => {
           if (req.method === 'OPTIONS') {
             res.statusCode = 204
             res.end()
@@ -140,10 +137,53 @@ function placesDevProxy(): Plugin {
               try {
                 const raw = Buffer.concat(chunks).toString('utf8')
                 const body = JSON.parse(raw || '{}') as Record<string, unknown>
-                const payload = await run(body)
-                res.statusCode = 200
-                res.setHeader('Content-Type', 'application/json')
-                res.end(JSON.stringify(payload))
+                // Absolute path + ssrLoadModule: relative import() resolves under .vite-temp.
+                const mod = await server.ssrLoadModule(
+                  path.resolve(__dirname, apiFile),
+                )
+                const handler = mod.default as (
+                  req: {
+                    method?: string
+                    body?: unknown
+                    headers?: Record<string, string | string[] | undefined>
+                  },
+                  res: {
+                    status: (code: number) => unknown
+                    setHeader: (name: string, value: string) => void
+                    json: (body: unknown) => void
+                    send: (body: string) => void
+                  },
+                ) => Promise<void>
+                const fakeRes = {
+                  statusCode: 200,
+                  status(code: number) {
+                    this.statusCode = code
+                    return this
+                  },
+                  setHeader(name: string, value: string) {
+                    res.setHeader(name, value)
+                  },
+                  json(payload: unknown) {
+                    res.statusCode = this.statusCode
+                    res.setHeader('Content-Type', 'application/json')
+                    res.end(JSON.stringify(payload))
+                  },
+                  send(payload: string) {
+                    res.statusCode = this.statusCode
+                    res.end(payload)
+                  },
+                }
+                await handler(
+                  {
+                    method: 'POST',
+                    body,
+                    headers: {
+                      origin: String(req.headers.origin || ''),
+                      referer: String(req.headers.referer || ''),
+                    },
+                  },
+                  fakeRes,
+                )
               } catch (err) {
                 res.statusCode = 502
                 res.setHeader('Content-Type', 'application/json')
@@ -158,62 +198,9 @@ function placesDevProxy(): Plugin {
         })
       }
 
-      handle('/api/places-nearby', async (body) => {
-        const apiKey = resolveKey(body.apiKey)
-        if (!apiKey) throw new Error('Google Maps API key required')
-        const { searchNearbyPlacesGoogle, GOOGLE_NEARBY_MAX } = await import(
-          './src/data/placesGoogle'
-        )
-        const ac = new AbortController()
-        const timer = setTimeout(() => ac.abort(), 18_000)
-        try {
-          const places = await searchNearbyPlacesGoogle({
-            lat: Number(body.lat),
-            lon: Number(body.lon),
-            radiusM: Number(body.radiusM) || 1500,
-            maxResultCount: Math.min(
-              Number(body.maxResultCount) || GOOGLE_NEARBY_MAX,
-              GOOGLE_NEARBY_MAX,
-            ),
-            apiKey,
-            signal: ac.signal,
-          })
-          return { places }
-        } catch (err) {
-          if (err instanceof Error && err.name === 'AbortError') {
-            throw new Error(
-              'Google Places timed out — check network or Places API (New) enablement',
-            )
-          }
-          if (err instanceof Error && /Failed to fetch|fetch failed|ECONN|ENOTFOUND/i.test(err.message)) {
-            throw new Error(
-              'Cannot reach Google Places from this machine (network/firewall/DNS)',
-            )
-          }
-          throw err
-        } finally {
-          clearTimeout(timer)
-        }
-      })
-
-      handle('/api/places-text', async (body) => {
-        const apiKey = resolveKey(body.apiKey)
-        if (!apiKey) throw new Error('Google Maps API key required')
-        const query = String(body.query || '').trim()
-        if (!query) throw new Error('Missing query')
-        const biasRaw = body.bias as { lat?: number; lon?: number; radiusM?: number } | undefined
-        const bias =
-          biasRaw && Number.isFinite(biasRaw.lat) && Number.isFinite(biasRaw.lon)
-            ? {
-                lat: Number(biasRaw.lat),
-                lon: Number(biasRaw.lon),
-                radiusM: biasRaw.radiusM,
-              }
-            : undefined
-        const { searchTextPlaceGoogle } = await import('./src/data/placesGoogle')
-        const place = await searchTextPlaceGoogle({ query, apiKey, bias })
-        return { place }
-      })
+      // Use standalone /api handlers (not src/data) — client modules touch import.meta.env.
+      mountApiPost('/api/places-nearby', 'api/places-nearby.ts')
+      mountApiPost('/api/places-text', 'api/places-text.ts')
 
       // Same multi-mirror Overpass handler as Vercel (Vite http-proxy only hit one host).
       server.middlewares.use('/api/overpass', (req, res, next) => {

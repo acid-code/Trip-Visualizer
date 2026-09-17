@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   assertTouchScrollClass,
@@ -54,22 +57,25 @@ describe('touch scroll class helpers', () => {
 })
 
 describe('MOBILE_SHEET_HEIGHT', () => {
-  it('keeps Day Coach under ~55vh so phones are not mostly sheet', () => {
-    expect(MOBILE_SHEET_HEIGHT.aiCoach).toMatch(/52vh/)
-    expect(MOBILE_SHEET_HEIGHT.aiCoach).not.toMatch(/68vh|75vh|90vh/)
+  it('uses shared CSS sheet classes (dvh tokens live in index.css)', () => {
+    expect(MOBILE_SHEET_HEIGHT.aiCoach).toBe('sheet-h-ai')
+    expect(MOBILE_SHEET_HEIGHT.aiCoachDetail).toBe('sheet-h-ai-detail')
+    expect(MOBILE_SHEET_HEIGHT.steps).toBe('sheet-h-steps')
+    expect(MOBILE_SHEET_HEIGHT.aiReviewSteps).toBe('sheet-h-ai-review')
+    expect(MOBILE_SHEET_HEIGHT.explore).toBe('sheet-h-explore')
+    expect(MOBILE_SHEET_HEIGHT.exploreDetail).toBe('sheet-h-explore-detail')
+    expect(MOBILE_SHEET_HEIGHT.tall).toBe('sheet-h-tall')
   })
 
-  it('keeps option detail under 90%', () => {
-    expect(MOBILE_SHEET_HEIGHT.aiCoachDetail).toMatch(/70vh/)
-    expect(MOBILE_SHEET_HEIGHT.aiCoachDetail).not.toMatch(/90%/)
-  })
-
-  it('keeps normal Steps strip modest', () => {
-    expect(MOBILE_SHEET_HEIGHT.steps).toMatch(/38vh/)
-  })
-
-  it('keeps AI review Steps short so Save/Discard stay clear', () => {
-    expect(MOBILE_SHEET_HEIGHT.aiReviewSteps).toMatch(/30vh/)
-    expect(MOBILE_SHEET_HEIGHT.aiReviewSteps).toMatch(/13rem/)
+  it('index.css keeps Day Coach under ~55dvh so phones are not mostly sheet', () => {
+    const css = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'index.css'),
+      'utf8',
+    )
+    expect(css).toMatch(/--sheet-ai:\s*min\(52(?:d)?vh,\s*24rem\)/)
+    expect(css).not.toMatch(/--sheet-ai:\s*min\((?:68|75|90)(?:d)?vh/)
+    expect(css).toMatch(/--sheet-ai-detail:\s*min\(70(?:d)?vh,\s*28rem\)/)
+    expect(css).toMatch(/--sheet-steps-soft:\s*min\(38(?:d)?vh/)
+    expect(css).toMatch(/--sheet-ai-review:\s*min\(30(?:d)?vh,\s*13rem\)/)
   })
 })

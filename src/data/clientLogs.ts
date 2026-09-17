@@ -51,7 +51,8 @@ export function appendClientLog(
     },
   ]
   notify()
-  if (import.meta.env.DEV) {
+  // Vite may load this module from Node middleware where import.meta.env is unset.
+  if (import.meta.env?.DEV) {
     const line = `[${context}] ${msg}`
     if (level === 'error') console.error(line)
     else console.info(line)

@@ -18,7 +18,7 @@ export function AiReviewChrome({
   onSave,
 }: Props) {
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-[calc(3.1rem+min(30vh,13rem)+0.35rem)] top-auto z-[45] flex justify-end px-[max(0.5rem,env(safe-area-inset-right))] pb-1 sm:inset-y-0 sm:bottom-auto sm:right-0 sm:items-center sm:px-0 sm:pr-[max(0.5rem,env(safe-area-inset-right))]">
+    <div className="pointer-events-none absolute inset-x-0 ai-review-chrome-offset top-auto z-[45] flex justify-end px-[max(0.5rem,env(safe-area-inset-right))] pb-1 sm:inset-y-0 sm:bottom-auto sm:right-0 sm:items-center sm:px-0 sm:pr-[max(0.5rem,env(safe-area-inset-right))]">
       <div
         className="pointer-events-auto flex w-[min(100%,11.5rem)] flex-row gap-2 rounded-2xl border border-stone-200/90 bg-white/95 p-2 shadow-[0_8px_28px_rgba(15,23,42,0.28)] backdrop-blur sm:w-[7.5rem] sm:flex-col"
         title={REVIEW_TIP}

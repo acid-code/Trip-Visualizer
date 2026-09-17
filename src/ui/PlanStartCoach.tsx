@@ -4,6 +4,8 @@ import { createPortal } from 'react-dom'
 type Props = {
   open: boolean
   onDismiss: () => void
+  /** Opens Plan tip cards — arrows stay the default; tips are opt-in. */
+  onBrowseTips?: () => void
 }
 
 type Spot = { x: number; y: number; w: number; h: number }
@@ -59,7 +61,7 @@ function CoachArrow({
 }
 
 /** First-open Plan coach — colored arrows at Discover/Days, map, and lists. */
-export function PlanStartCoach({ open, onDismiss }: Props) {
+export function PlanStartCoach({ open, onDismiss, onBrowseTips }: Props) {
   const [spots, setSpots] = useState<{
     tabs: Spot | null
     map: Spot | null
@@ -183,8 +185,29 @@ export function PlanStartCoach({ open, onDismiss }: Props) {
       </svg>
 
       <div
-        className="coach-chip pointer-events-none absolute max-w-[11.5rem] rounded-2xl border border-orange-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
+        className="coach-chip pointer-events-auto absolute max-w-[11.5rem] cursor-pointer rounded-2xl border border-orange-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
         style={{ left: tabsLabel.x, top: tabsLabel.y }}
+        role={onBrowseTips ? 'button' : undefined}
+        tabIndex={onBrowseTips ? 0 : undefined}
+        onClick={
+          onBrowseTips
+            ? () => {
+                onDismiss()
+                onBrowseTips()
+              }
+            : undefined
+        }
+        onKeyDown={
+          onBrowseTips
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onDismiss()
+                  onBrowseTips()
+                }
+              }
+            : undefined
+        }
       >
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-orange-300">
           Discover · Days
@@ -192,26 +215,77 @@ export function PlanStartCoach({ open, onDismiss }: Props) {
         <p className="mt-0.5 text-xs leading-snug text-white/90">
           Collect ideas first, then drop them into day buckets
         </p>
+        {onBrowseTips ? (
+          <p className="mt-1 text-[9px] font-semibold text-orange-200/80">Tap for tips →</p>
+        ) : null}
       </div>
 
       <div
-        className="coach-chip pointer-events-none absolute max-w-[12.5rem] rounded-2xl border border-teal-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
+        className="coach-chip pointer-events-auto absolute max-w-[12.5rem] cursor-pointer rounded-2xl border border-teal-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
         style={{ left: mapLabel.x, top: mapLabel.y }}
+        role={onBrowseTips ? 'button' : undefined}
+        tabIndex={onBrowseTips ? 0 : undefined}
+        onClick={
+          onBrowseTips
+            ? () => {
+                onDismiss()
+                onBrowseTips()
+              }
+            : undefined
+        }
+        onKeyDown={
+          onBrowseTips
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onDismiss()
+                  onBrowseTips()
+                }
+              }
+            : undefined
+        }
       >
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-teal-300">Map</p>
         <p className="mt-0.5 text-xs leading-snug text-white/90">
           Tap pins for details · layers hide lists & nearby
         </p>
+        {onBrowseTips ? (
+          <p className="mt-1 text-[9px] font-semibold text-teal-200/80">Tap for tips →</p>
+        ) : null}
       </div>
 
       <div
-        className="coach-chip pointer-events-none absolute max-w-[12.5rem] rounded-2xl border border-violet-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
+        className="coach-chip pointer-events-auto absolute max-w-[12.5rem] cursor-pointer rounded-2xl border border-violet-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
         style={{ left: sheetLabel.x, top: sheetLabel.y }}
+        role={onBrowseTips ? 'button' : undefined}
+        tabIndex={onBrowseTips ? 0 : undefined}
+        onClick={
+          onBrowseTips
+            ? () => {
+                onDismiss()
+                onBrowseTips()
+              }
+            : undefined
+        }
+        onKeyDown={
+          onBrowseTips
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onDismiss()
+                  onBrowseTips()
+                }
+              }
+            : undefined
+        }
       >
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-300">Lists</p>
         <p className="mt-0.5 text-xs leading-snug text-white/90">
           Save must-sees here, then schedule them on Days
         </p>
+        {onBrowseTips ? (
+          <p className="mt-1 text-[9px] font-semibold text-violet-200/80">Tap for tips →</p>
+        ) : null}
       </div>
 
       <div className="pointer-events-auto absolute inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] flex justify-center px-4">
@@ -224,7 +298,7 @@ export function PlanStartCoach({ open, onDismiss }: Props) {
           </h2>
           <p className="mt-1.5 text-sm text-[var(--ink-muted)]">
             Discover ideas on the map, park them in lists, then order days — Journey adds times
-            later.
+            later. Tip cards also appear the next time you open Plan tools.
           </p>
           <button
             type="button"
@@ -233,6 +307,18 @@ export function PlanStartCoach({ open, onDismiss }: Props) {
           >
             Got it — let’s plan
           </button>
+          {onBrowseTips ? (
+            <button
+              type="button"
+              className="mt-2 w-full rounded-full border border-[var(--glass-border)] px-4 py-2.5 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--paper-2)]"
+              onClick={() => {
+                onDismiss()
+                onBrowseTips()
+              }}
+            >
+              Browse Plan tips
+            </button>
+          ) : null}
         </div>
       </div>
     </div>,

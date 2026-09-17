@@ -84,6 +84,17 @@ describe('scroll surface source contracts', () => {
     expect(readSrc('src/data/regionPacks.ts')).toContain('REGION_PACKS')
   })
 
+  it('phone layout uses shared rem scale + dvh sheet tokens', () => {
+    const css = readSrc('src/index.css')
+    expect(css).toContain('calc(100vw * 16 / 430)')
+    expect(css).toContain('clamp(15px')
+    expect(css).toContain('--sheet-plan')
+    expect(css).toContain('100dvh')
+    expect(css).toContain('.plan-sheet-band')
+    expect(readSrc('src/ui/PlanBoard.tsx')).toContain('plan-sheet-band')
+    expect(readSrc('src/ui/PlanBoard.tsx')).toContain('plan-map-band')
+  })
+
   it('Modern map look uses esri-dark stack', () => {
     const src = readSrc('src/globe/viewer.ts')
     expect(src).toContain('esri-dark')

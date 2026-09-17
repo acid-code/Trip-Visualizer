@@ -115,11 +115,16 @@ import {
 import { hydrateGooglePlacePhoto } from './data/placesGoogle'
 import {
   FEATURE_TIPS,
+  JOURNEY_TIP_CONTEXTS,
   PLAN_START_COACH_ID,
+  PLAN_TIP_CONTEXTS,
+  featureTipsForContexts,
   parseSeenTipIds,
   serializeSeenTipIds,
   unseenFeatureTips,
+  unseenFeatureTipsForContexts,
   type FeatureTip,
+  type TipContext,
 } from './data/featureGuide'
 import {
   DEFAULT_MAP_LOOK,
@@ -377,9 +382,15 @@ export default function App() {
   const [planStartCoachOpen, setPlanStartCoachOpen] = useState(false)
   const [cloudUser, setCloudUser] = useState<CloudUser | null>(null)
   const [pendingInviteCount, setPendingInviteCount] = useState(0)
-  const guideAutoShownRef = useRef(false)
   const planCoachShownRef = useRef(false)
-  const pendingStartCoachAfterTipsRef = useRef(false)
+  const contextTipsTimerRef = useRef<number | null>(null)
+  const seenTipIdsRef = useRef<Set<string>>(new Set())
+  const tipBlockersRef = useRef({
+    guideOpen: false,
+    startCoachOpen: false,
+    planStartCoachOpen: false,
+    hasTripDialog: false,
+  })
   const cloudPushTimerRef = useRef<number | null>(null)
   const cloudApplyingRemoteRef = useRef(false)
   const lastPushedRevisionRef = useRef<number>(-1)
@@ -477,7 +488,6 @@ export default function App() {
       const seeded = all.find((t) => t.id === seededId)
       if (seeded) {
         // Open immediately (delete-all / fresh seed) — not only on page reload.
-        guideAutoShownRef.current = true
         setTripDialog({
           mode: 'edit',
           firstRun: true,
@@ -520,15 +530,14 @@ export default function App() {
       setWalkApp(isWalkAppPref(walkPref) ? walkPref : 'maps')
       const seen = parseSeenTipIds(await getSetting('featureGuideSeen'))
       setSeenTipIds(seen)
-      const unseen = unseenFeatureTips(seen)
+      seenTipIdsRef.current = seen
       const awaitingSetup = (await getSetting('awaitingFirstTripSetup')) === '1'
       if (awaitingSetup) {
-        // Name/dates first — defer boot tips until setup submit.
+        // Name/dates first — arrows show after setup submit (no tip deck on boot).
         const all = await listTrips()
         const trip =
           all.find((t) => !t.isExample && t.id !== EXAMPLE_TRIP_ID) ?? all[0] ?? null
         if (trip) {
-          guideAutoShownRef.current = true
           setTripDialog({
             mode: 'edit',
             firstRun: true,
@@ -541,19 +550,14 @@ export default function App() {
         } else {
           await setSetting('awaitingFirstTripSetup', '')
         }
-      }
-      if (!guideAutoShownRef.current) {
-        const needsPlanCoach = bootMode === 'plan' && !seen.has(PLAN_START_COACH_ID)
-        if (needsPlanCoach && !planCoachShownRef.current) {
-          // Prefer the Plan arrow coach when landing in Plan; skip modal tips this boot.
-          planCoachShownRef.current = true
-          guideAutoShownRef.current = true
-          window.setTimeout(() => setPlanStartCoachOpen(true), 420)
-        } else if (unseen.length) {
-          guideAutoShownRef.current = true
-          setGuideTips(unseen)
-          setGuideOpen(true)
-        }
+      } else if (
+        bootMode === 'plan' &&
+        !seen.has(PLAN_START_COACH_ID) &&
+        !planCoachShownRef.current
+      ) {
+        // Only default onboarding: Plan arrow coach when landing in Plan.
+        planCoachShownRef.current = true
+        window.setTimeout(() => setPlanStartCoachOpen(true), 420)
       }
     })()
   }, [refresh])
@@ -683,17 +687,77 @@ export default function App() {
     setSeenTipIds((prev) => {
       const next = new Set(prev)
       for (const id of ids) next.add(id)
+      seenTipIdsRef.current = next
       void setSetting('featureGuideSeen', serializeSeenTipIds(next))
       return next
     })
   }
 
-  function openFeatureGuide(opts?: { all?: boolean }) {
-    const tips = opts?.all ? FEATURE_TIPS : unseenFeatureTips(seenTipIds)
-    const deck = tips.length ? tips : FEATURE_TIPS
-    setGuideTips(deck)
+  function openFeatureGuide(opts?: { all?: boolean; contexts?: TipContext[] }) {
+    if (contextTipsTimerRef.current) {
+      window.clearTimeout(contextTipsTimerRef.current)
+      contextTipsTimerRef.current = null
+    }
+    let tips: FeatureTip[]
+    if (opts?.contexts?.length) {
+      const scoped = opts.all
+        ? featureTipsForContexts(opts.contexts)
+        : unseenFeatureTipsForContexts(seenTipIdsRef.current, opts.contexts)
+      tips = scoped.length ? scoped : featureTipsForContexts(opts.contexts)
+    } else if (opts?.all) {
+      tips = FEATURE_TIPS
+    } else {
+      const unseen = unseenFeatureTips(seenTipIdsRef.current)
+      tips = unseen.length ? unseen : FEATURE_TIPS
+    }
+    if (!tips.length) tips = FEATURE_TIPS
+    setGuideTips(tips)
     setGuideOpen(true)
   }
+
+  /** Auto tip cards when the user opens a surface — never on cold boot. */
+  function maybeShowContextTips(contexts: TipContext[]) {
+    const blockers = tipBlockersRef.current
+    if (
+      blockers.guideOpen ||
+      blockers.startCoachOpen ||
+      blockers.planStartCoachOpen ||
+      blockers.hasTripDialog
+    ) {
+      return
+    }
+    const tips = unseenFeatureTipsForContexts(seenTipIdsRef.current, contexts)
+    if (!tips.length) return
+    if (contextTipsTimerRef.current) window.clearTimeout(contextTipsTimerRef.current)
+    contextTipsTimerRef.current = window.setTimeout(() => {
+      contextTipsTimerRef.current = null
+      const b = tipBlockersRef.current
+      if (b.guideOpen || b.startCoachOpen || b.planStartCoachOpen || b.hasTripDialog) return
+      const next = unseenFeatureTipsForContexts(seenTipIdsRef.current, contexts)
+      if (!next.length) return
+      setGuideTips(next)
+      setGuideOpen(true)
+    }, 480)
+  }
+
+  useEffect(() => {
+    seenTipIdsRef.current = seenTipIds
+  }, [seenTipIds])
+
+  useEffect(() => {
+    tipBlockersRef.current = {
+      guideOpen,
+      startCoachOpen,
+      planStartCoachOpen,
+      hasTripDialog: !!tripDialog,
+    }
+  }, [guideOpen, startCoachOpen, planStartCoachOpen, tripDialog])
+
+  useEffect(() => {
+    return () => {
+      if (contextTipsTimerRef.current) window.clearTimeout(contextTipsTimerRef.current)
+    }
+  }, [])
 
   // When switching trips: clear selection; GlobeView frames the first step without selecting it.
   useEffect(() => {
@@ -1041,14 +1105,8 @@ export default function App() {
       setNavTab('timeline')
       setPanelOpen(true)
       setLowerMode('none')
-      const unseen = unseenFeatureTips(seenTipIds)
-      if (unseen.length) {
-        pendingStartCoachAfterTipsRef.current = true
-        setGuideTips(unseen)
-        setGuideOpen(true)
-      } else {
-        setStartCoachOpen(true)
-      }
+      // Name/dates first → arrow coach only (tip cards wait until they open a surface).
+      setStartCoachOpen(true)
       return
     }
 
@@ -1810,6 +1868,7 @@ export default function App() {
     setDetailExpanded(false)
     setPanelOpen(true)
     setNavTab('timeline')
+    maybeShowContextTips(['explore'])
 
     void (async () => {
       let showedCache = false
@@ -1918,7 +1977,7 @@ export default function App() {
   function openAiCoach() {
     if (aiReview) return
     if (active && isTripShared(active) && !cloudUser) {
-      setStatus('Sign in with Google (Settings â†’ Share) to use AI on a shared trip')
+      setStatus('Sign in with Google (Settings → Share) to use AI on a shared trip')
       return
     }
     if (exploreOpen) closeExplore()
@@ -1929,6 +1988,7 @@ export default function App() {
     setAiOpen(true)
     setPanelOpen(true)
     setNavTab('timeline')
+    maybeShowContextTips(['ai'])
   }
 
   function closeAiCoach() {
@@ -2177,9 +2237,12 @@ export default function App() {
       return
     }
 
-    // Different binder, or revealing Steps under AI â†’ open that panel
+    // Different binder, or revealing Steps under AI → open that panel
     setNavTab(id)
     setPanelOpen(true)
+    if (id === 'timeline') maybeShowContextTips(['steps'])
+    else if (id === 'settings') maybeShowContextTips(['settings'])
+    else if (id === 'charts') maybeShowContextTips(['charts'])
   }
 
   /**
@@ -2400,7 +2463,7 @@ export default function App() {
 
       {/* Map-side header — hit targets only on controls (not the whole top band) */}
       <header
-        className={`pointer-events-none absolute top-0 z-40 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] ${
+        className={`phone-chrome-top pointer-events-none absolute top-0 z-40 px-3 pb-3 ${
           isPhone
             ? 'inset-x-0'
             : 'inset-x-0 pl-[min(24rem,90vw)]'
@@ -2436,6 +2499,8 @@ export default function App() {
                   if (!seenTipIds.has(PLAN_START_COACH_ID) && !planCoachShownRef.current) {
                     planCoachShownRef.current = true
                     window.setTimeout(() => setPlanStartCoachOpen(true), 320)
+                  } else if (seenTipIds.has(PLAN_START_COACH_ID)) {
+                    maybeShowContextTips(['plan'])
                   }
                 } else {
                   const focus =
@@ -2815,9 +2880,7 @@ export default function App() {
       {/* Detail / Insert bottom sheet — covers steps on phone; tongues stay reachable */}
       {lowerOpen ? (
         <section
-          className={`journal-sheet absolute inset-x-0 z-50 flex flex-col rounded-t-[1.75rem] border shadow-[0_-12px_40px_rgba(15,23,42,0.35)] transition-all ${
-            'bottom-[3.1rem]'
-          } ${
+          className={`journal-sheet journal-sheet-tongue-clear absolute inset-x-0 z-50 flex flex-col rounded-t-[1.75rem] border shadow-[0_-12px_40px_rgba(15,23,42,0.35)] transition-all ${
             lowerMode === 'insert'
               ? isPhone
                 ? 'h-[82%]'
@@ -2908,13 +2971,7 @@ export default function App() {
       <FeatureGuide
         open={guideOpen}
         tips={guideTips}
-        onClose={() => {
-          setGuideOpen(false)
-          if (pendingStartCoachAfterTipsRef.current) {
-            pendingStartCoachAfterTipsRef.current = false
-            setStartCoachOpen(true)
-          }
-        }}
+        onClose={() => setGuideOpen(false)}
         onMarkSeen={(ids) => void markTipsSeen(ids)}
       />
       <TripMetaDialog
@@ -2933,12 +2990,19 @@ export default function App() {
         open={startCoachOpen}
         tripName={active?.meta.name}
         onDismiss={() => setStartCoachOpen(false)}
+        onBrowseTips={() =>
+          openFeatureGuide({ all: true, contexts: JOURNEY_TIP_CONTEXTS })
+        }
       />
       <PlanStartCoach
         open={planStartCoachOpen}
         onDismiss={() => {
           setPlanStartCoachOpen(false)
           void markTipsSeen([PLAN_START_COACH_ID])
+        }}
+        onBrowseTips={() => {
+          void markTipsSeen([PLAN_START_COACH_ID])
+          openFeatureGuide({ all: true, contexts: PLAN_TIP_CONTEXTS })
         }}
       />
     </div>

@@ -5,6 +5,8 @@ type Props = {
   open: boolean
   tripName?: string
   onDismiss: () => void
+  /** Opens the tip cards (map + steps) — arrows stay the default; tips are opt-in. */
+  onBrowseTips?: () => void
 }
 
 type Spot = { x: number; y: number; w: number; h: number }
@@ -59,7 +61,7 @@ function CoachArrow({
   )
 }
 
-export function TripStartCoach({ open, tripName, onDismiss }: Props) {
+export function TripStartCoach({ open, tripName, onDismiss, onBrowseTips }: Props) {
   const [spots, setSpots] = useState<{
     search: Spot | null
     steps: Spot | null
@@ -185,27 +187,99 @@ export function TripStartCoach({ open, tripName, onDismiss }: Props) {
       </svg>
 
       <div
-        className="coach-chip pointer-events-none absolute max-w-[11rem] rounded-2xl border border-orange-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
+        className="coach-chip pointer-events-auto absolute max-w-[11rem] cursor-pointer rounded-2xl border border-orange-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
         style={{ left: searchLabel.x, top: searchLabel.y }}
+        role={onBrowseTips ? 'button' : undefined}
+        tabIndex={onBrowseTips ? 0 : undefined}
+        onClick={
+          onBrowseTips
+            ? () => {
+                onDismiss()
+                onBrowseTips()
+              }
+            : undefined
+        }
+        onKeyDown={
+          onBrowseTips
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onDismiss()
+                  onBrowseTips()
+                }
+              }
+            : undefined
+        }
       >
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-orange-300">Search</p>
         <p className="mt-0.5 text-xs leading-snug text-white/90">Find a place, address, or paste a Maps link</p>
+        {onBrowseTips ? (
+          <p className="mt-1 text-[9px] font-semibold text-orange-200/80">Tap for tips →</p>
+        ) : null}
       </div>
 
       <div
-        className="coach-chip pointer-events-none absolute max-w-[12.5rem] rounded-2xl border border-teal-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
+        className="coach-chip pointer-events-auto absolute max-w-[12.5rem] cursor-pointer rounded-2xl border border-teal-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
         style={{ left: pinLabel.x, top: pinLabel.y }}
+        role={onBrowseTips ? 'button' : undefined}
+        tabIndex={onBrowseTips ? 0 : undefined}
+        onClick={
+          onBrowseTips
+            ? () => {
+                onDismiss()
+                onBrowseTips()
+              }
+            : undefined
+        }
+        onKeyDown={
+          onBrowseTips
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onDismiss()
+                  onBrowseTips()
+                }
+              }
+            : undefined
+        }
       >
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-teal-300">Long-press</p>
         <p className="mt-0.5 text-xs leading-snug text-white/90">Hold on the map to drop a pin where you are</p>
+        {onBrowseTips ? (
+          <p className="mt-1 text-[9px] font-semibold text-teal-200/80">Tap for tips →</p>
+        ) : null}
       </div>
 
       <div
-        className="coach-chip pointer-events-none absolute max-w-[12.5rem] rounded-2xl border border-violet-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
+        className="coach-chip pointer-events-auto absolute max-w-[12.5rem] cursor-pointer rounded-2xl border border-violet-300/50 bg-[#0f1a24]/92 px-3 py-2 text-left shadow-xl backdrop-blur"
         style={{ left: stepsLabel.x, top: stepsLabel.y }}
+        role={onBrowseTips ? 'button' : undefined}
+        tabIndex={onBrowseTips ? 0 : undefined}
+        onClick={
+          onBrowseTips
+            ? () => {
+                onDismiss()
+                onBrowseTips()
+              }
+            : undefined
+        }
+        onKeyDown={
+          onBrowseTips
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onDismiss()
+                  onBrowseTips()
+                }
+              }
+            : undefined
+        }
       >
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-300">Base steps</p>
         <p className="mt-0.5 text-xs leading-snug text-white/90">Tap a day base to set your hotel or arrival</p>
+        {onBrowseTips ? (
+          <p className="mt-1 text-[9px] font-semibold text-violet-200/80">Tap for tips →</p>
+        ) : null}
       </div>
 
       <div className="pointer-events-auto absolute inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] flex justify-center px-4">
@@ -218,6 +292,7 @@ export function TripStartCoach({ open, tripName, onDismiss }: Props) {
           </h2>
           <p className="mt-1.5 text-sm text-[var(--ink-muted)]">
             Start with search, a long-press pin, or by filling in a base day — arrows show where.
+            More tips appear when you open Steps, Settings, and other tools.
           </p>
           <button
             type="button"
@@ -226,6 +301,18 @@ export function TripStartCoach({ open, tripName, onDismiss }: Props) {
           >
             Got it — let’s go
           </button>
+          {onBrowseTips ? (
+            <button
+              type="button"
+              className="mt-2 w-full rounded-full border border-[var(--glass-border)] px-4 py-2.5 text-sm font-semibold text-[var(--ink)] hover:bg-[var(--paper-2)]"
+              onClick={() => {
+                onDismiss()
+                onBrowseTips()
+              }}
+            >
+              Browse all journey tips
+            </button>
+          ) : null}
         </div>
       </div>
     </div>,

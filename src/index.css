@@ -34,7 +34,80 @@
   --drive: #fbbf24;
   --train: #22d3ee;
   --note: #94a3b8;
+  /* Phone layout — authored for ~430×932; rem scales on narrower phones. */
+  --app-vh: 100vh;
+  --tongue-h: 50px;
+  --plan-map-min: 11rem;
+  --plan-sheet-radius: 1.75rem;
+  /* Shared top inset for Journey|Plan and Discover|Days */
+  --phone-chrome-top: max(0.75rem, env(safe-area-inset-top));
+
+  --sheet-steps: min(26vh, 11.5rem);
+  --sheet-tall: min(72vh, 32rem);
+  --sheet-ai: min(52vh, 24rem);
+  --sheet-ai-detail: min(70vh, 28rem);
+  --sheet-explore: min(41vh, 18.5rem);
+  --sheet-explore-detail: min(62vh, 26.5rem);
+  --sheet-ai-review: min(30vh, 13rem);
+  --sheet-desktop: min(42vh, 20rem);
+  --sheet-plan: min(56vh, 28rem);
+  --sheet-steps-soft: min(38vh, 100%);
+  --sheet-explore-overlay: min(72vh, 30rem);
+  --layers-panel-max: min(22rem, 55vh);
   color-scheme: dark;
+}
+
+@supports (height: 1dvh) {
+  :root,
+  [data-theme="dark"],
+  [data-theme="light"] {
+    --app-vh: 100dvh;
+    --sheet-steps: min(26dvh, 11.5rem);
+    --sheet-tall: min(72dvh, 32rem);
+    --sheet-ai: min(52dvh, 24rem);
+    --sheet-ai-detail: min(70dvh, 28rem);
+    --sheet-explore: min(41dvh, 18.5rem);
+    --sheet-explore-detail: min(62dvh, 26.5rem);
+    --sheet-ai-review: min(30dvh, 13rem);
+    --sheet-desktop: min(42dvh, 20rem);
+    --sheet-plan: min(56dvh, 28rem);
+    --sheet-steps-soft: min(38dvh, 100%);
+    --sheet-explore-overlay: min(72dvh, 30rem);
+    --layers-panel-max: min(22rem, 55dvh);
+  }
+}
+
+/* Scale rem with phone width — keep near 16px so tongues/controls stay thumb-sized. */
+@media (max-width: 767px) {
+  html {
+    font-size: clamp(15px, calc(100vw * 16 / 430), 16px);
+  }
+}
+
+/* Shorter viewports (Android browser chrome, compact phones): ease sheet floors. */
+@media (max-width: 767px) and (max-height: 740px) {
+  :root,
+  [data-theme="dark"],
+  [data-theme="light"] {
+    --plan-map-min: 8.5rem;
+    --sheet-plan: min(52vh, 26rem);
+    --sheet-tall: min(68vh, 28rem);
+    --sheet-ai: min(48vh, 21rem);
+    --sheet-explore-detail: min(58vh, 23rem);
+  }
+}
+
+@supports (height: 1dvh) {
+  @media (max-width: 767px) and (max-height: 740px) {
+    :root,
+    [data-theme="dark"],
+    [data-theme="light"] {
+      --sheet-plan: min(52dvh, 26rem);
+      --sheet-tall: min(68dvh, 28rem);
+      --sheet-ai: min(48dvh, 21rem);
+      --sheet-explore-detail: min(58dvh, 23rem);
+    }
+  }
 }
 
 /* Cream light — the warmer paper look */
@@ -78,7 +151,9 @@ html,
 body,
 #root {
   margin: 0;
-  height: 100%;
+  height: var(--app-vh);
+  max-height: var(--app-vh);
+  overflow: hidden;
   background: var(--bg);
   color: var(--ink);
   font-family: "Space Grotesk", "DM Sans", "Segoe UI", system-ui, sans-serif;
@@ -199,8 +274,9 @@ textarea {
   z-index: calc(10 + var(--layer));
   box-sizing: border-box;
   min-width: 0;
-  height: calc(1.85rem + (4 - var(--layer)) * var(--cascade-rise));
-  min-height: 1.85rem;
+  /* px sizes stay thumb-friendly when root rem scales on narrow phones */
+  height: calc(30px + (4 - var(--layer)) * 3px);
+  min-height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -209,7 +285,7 @@ textarea {
   border-radius: 0.8rem 0.8rem 0 0;
   background: var(--divider-face);
   color: var(--ink-muted);
-  font-size: 0.6rem;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -241,12 +317,12 @@ textarea {
 }
 
 .book-dock:has(.book-volume-open) .book-divider:not(.book-divider-on) {
-  height: 1.9rem;
+  height: 31px;
 }
 
 .book-divider-on {
   z-index: 40 !important;
-  height: 2.25rem !important;
+  height: 36px !important;
   transform: none !important;
   background: linear-gradient(165deg, var(--coral) 0%, #ff8f6b 100%);
   color: #fff;
@@ -319,56 +395,117 @@ textarea {
   max-height: 0;
 }
 .book-volume-open .book-pages-steps {
-  height: min(26vh, 11.5rem);
-  max-height: min(26vh, 11.5rem);
+  height: var(--sheet-steps);
+  max-height: var(--sheet-steps);
 }
 
 .book-pages-tall {
   max-height: 0;
 }
 .book-volume-open .book-pages-tall {
-  height: min(72vh, 32rem);
-  max-height: min(72vh, 32rem);
+  height: var(--sheet-tall);
+  max-height: var(--sheet-tall);
 }
 
 .book-pages-ai {
   max-height: 0;
 }
 .book-volume-open .book-pages-ai {
-  height: min(52vh, 24rem);
-  max-height: min(52vh, 24rem);
+  height: var(--sheet-ai);
+  max-height: var(--sheet-ai);
 }
 
 .book-pages-explore {
   max-height: 0;
 }
 .book-volume-open .book-pages-explore {
-  height: min(41vh, 18.5rem);
-  max-height: min(41vh, 18.5rem);
+  height: var(--sheet-explore);
+  max-height: var(--sheet-explore);
 }
 
 .book-pages-explore-detail {
   max-height: 0;
 }
 .book-volume-open .book-pages-explore-detail {
-  height: min(62vh, 26.5rem);
-  max-height: min(62vh, 26.5rem);
+  height: var(--sheet-explore-detail);
+  max-height: var(--sheet-explore-detail);
 }
 
 .book-pages-ai-review {
   max-height: 0;
 }
 .book-volume-open .book-pages-ai-review {
-  height: min(30vh, 13rem);
-  max-height: min(30vh, 13rem);
+  height: var(--sheet-ai-review);
+  max-height: var(--sheet-ai-review);
 }
 
 .book-pages-desktop {
   max-height: 0;
 }
 .book-volume-open .book-pages-desktop {
-  height: min(42vh, 20rem);
-  max-height: min(42vh, 20rem);
+  height: var(--sheet-desktop);
+  max-height: var(--sheet-desktop);
+}
+
+/* Shared height utility classes (keep in sync with MOBILE_SHEET_HEIGHT). */
+.sheet-h-ai {
+  height: var(--sheet-ai);
+}
+.sheet-h-ai-detail {
+  max-height: var(--sheet-ai-detail);
+}
+.sheet-h-steps {
+  max-height: var(--sheet-steps-soft);
+}
+.sheet-h-ai-review {
+  height: var(--sheet-ai-review);
+}
+.sheet-h-explore {
+  height: var(--sheet-explore);
+}
+.sheet-h-explore-detail {
+  height: var(--sheet-explore-detail);
+}
+.sheet-h-tall {
+  height: var(--sheet-tall);
+}
+.sheet-h-explore-overlay {
+  max-height: var(--sheet-explore-overlay);
+}
+
+.phone-chrome-top {
+  padding-top: var(--phone-chrome-top);
+}
+
+.plan-sheet-band {
+  height: var(--sheet-plan);
+  flex-shrink: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.ai-review-chrome-offset {
+  bottom: calc(var(--tongue-h) + var(--sheet-ai-review) + 0.35rem);
+}
+
+@media (min-width: 640px) {
+  .ai-review-chrome-offset {
+    bottom: auto;
+  }
+}
+
+.journal-sheet-tongue-clear {
+  bottom: var(--tongue-h);
+}
+
+.feature-guide-card {
+  max-height: min(92vh, 40rem);
+  max-height: min(92dvh, 40rem);
+}
+
+.feature-guide-art {
+  max-height: min(36vh, 16rem);
+  max-height: min(36dvh, 16rem);
 }
 
 .mobile-dock {
@@ -654,7 +791,7 @@ textarea {
 
 /* Zoom +/- under Journey|Plan + layers FAB (top-right chrome). */
 .plan-phone .maplibre-plan-root .maplibregl-ctrl-top-right {
-  top: max(7.85rem, calc(env(safe-area-inset-top) + 6.85rem));
+  top: max(7.85rem, calc(var(--phone-chrome-top) + 7.1rem));
   right: 0.65rem;
 }
 
@@ -662,7 +799,7 @@ textarea {
 .plan-map-layers-panel.map-layers-panel {
   width: min(13.5rem, calc(100vw - 2.5rem));
   /* Don't use % height — parent is only the FAB size. */
-  max-height: min(22rem, 55vh);
+  max-height: var(--layers-panel-max);
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -789,9 +926,11 @@ textarea {
 }
 
 .plan-itin-sheet {
-  background: var(--paper);
+  /* Opaque so the map tucked under the radius does not show through */
+  background: var(--paper-solid);
   border: 1px solid var(--glass-border);
   border-bottom: 0;
+  border-radius: var(--plan-sheet-radius) var(--plan-sheet-radius) 0 0;
   box-shadow: 0 -12px 40px rgba(15, 23, 42, 0.22);
 }
 

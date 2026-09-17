@@ -34,8 +34,8 @@ export function FeatureGuide({ tips, open, onClose, onMarkSeen }: Props) {
       aria-modal="true"
       aria-labelledby="feature-guide-title"
     >
-      <div className="flex w-full max-w-sm flex-col overflow-hidden rounded-3xl border border-white/15 bg-[#0f1a24] text-slate-100 shadow-2xl">
-        <div className="relative aspect-[4/3] overflow-hidden bg-gradient-to-b from-[#1a2d3d] to-[#0c1520]">
+      <div className="feature-guide-card flex w-full max-w-sm flex-col overflow-y-auto overscroll-contain rounded-3xl border border-white/15 bg-[#0f1a24] text-slate-100 shadow-2xl">
+        <div className="feature-guide-art relative aspect-[4/3] shrink-0 overflow-hidden bg-gradient-to-b from-[#1a2d3d] to-[#0c1520]">
           <TipFrame visual={tip.visual} />
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#0f1a24] to-transparent" />
         </div>
@@ -417,6 +417,177 @@ function TipFrame({ visual }: { visual: FeatureTipVisual }) {
             <Pin className="absolute left-[40%] top-[48%]" color="#38bdf8" />
             <Pin className="absolute left-[58%] top-[40%]" color="#fb923c" />
             <Caption>Toggle layers</Caption>
+          </>
+        ) : null}
+
+        {visual === 'sharing' ? (
+          <>
+            <div className="absolute left-3 right-3 top-3 rounded-2xl border border-sky-300/40 bg-sky-950/70 p-3 shadow-lg">
+              <div className="text-[9px] font-semibold uppercase tracking-wide text-sky-300">
+                Sharing
+              </div>
+              <div className="mt-2 space-y-1.5">
+                <div className="rounded-lg bg-white/10 px-2 py-1.5 text-[10px] text-white/90">
+                  Enable · invite by email
+                </div>
+                <div className="rounded-lg bg-white/10 px-2 py-1.5 text-[10px] text-white/90">
+                  Partner · Join from Settings
+                </div>
+              </div>
+            </div>
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-sky-500 px-3 py-1 text-[10px] font-semibold text-white shadow">
+              Near-live sync
+            </div>
+          </>
+        ) : null}
+
+        {visual === 'my-maps' ? (
+          <>
+            <div className="absolute left-3 right-3 top-3 rounded-2xl border border-emerald-400/40 bg-emerald-950/70 p-2.5 shadow">
+              <div className="text-[9px] font-semibold uppercase tracking-wide text-emerald-300">
+                My Maps import
+              </div>
+              <div className="mt-1.5 space-y-1">
+                {['Days', 'Pins', 'Paths'].map((label) => (
+                  <div
+                    key={label}
+                    className="flex items-center justify-between rounded-lg bg-white/10 px-2 py-1"
+                  >
+                    <span className="text-[10px] text-white/90">{label} sheet</span>
+                    <span className="text-[9px] text-emerald-300">Layer</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <Caption>Prepare → Import</Caption>
+          </>
+        ) : null}
+
+        {visual === 'excel' ? (
+          <>
+            <div className="absolute left-4 right-4 top-4 rounded-xl border border-white/20 bg-white/95 p-2.5 shadow-lg">
+              <div className="flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded bg-emerald-600 text-[10px] font-bold text-white">
+                  XLS
+                </div>
+                <div>
+                  <div className="text-[11px] font-semibold text-stone-800">trip.xlsx</div>
+                  <div className="text-[9px] text-stone-500">How to use · Steps · Days</div>
+                </div>
+              </div>
+            </div>
+            <div className="absolute bottom-3 left-3 right-3 flex gap-2">
+              <div className="flex-1 rounded-full bg-orange-500 py-1.5 text-center text-[10px] font-semibold text-white">
+                Export
+              </div>
+              <div className="flex-1 rounded-full border border-white/30 bg-black/45 py-1.5 text-center text-[10px] font-semibold text-white">
+                Import
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {visual === 'day-coach' ? (
+          <>
+            <div className="absolute left-3 right-3 top-3 rounded-2xl border border-violet-300/40 bg-[#0f1a24]/90 p-3 shadow-lg">
+              <div className="text-[9px] font-semibold uppercase tracking-wide text-violet-300">
+                Day Coach · beta
+              </div>
+              <div className="mt-2 space-y-1.5">
+                <div className="h-2 w-[80%] rounded bg-white/20" />
+                <div className="h-2 w-[60%] rounded bg-white/15" />
+                <div className="mt-2 rounded-lg bg-violet-500/30 px-2 py-1.5 text-[10px] text-violet-100">
+                  Suggested day plan…
+                </div>
+              </div>
+            </div>
+            <div className="absolute bottom-3 left-3 right-3 flex gap-2">
+              <div className="flex-1 rounded-full bg-emerald-500 py-1.5 text-center text-[10px] font-semibold text-white">
+                Save
+              </div>
+              <div className="flex-1 rounded-full border border-white/30 bg-black/45 py-1.5 text-center text-[10px] font-semibold text-white">
+                Discard
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {visual === 'appearance' ? (
+          <>
+            <div className="absolute left-3 top-4 w-[42%] rounded-xl border border-stone-300 bg-[#f5f0e8] p-2 shadow">
+              <div className="h-2 w-10 rounded bg-stone-400/50" />
+              <div className="mt-2 h-8 rounded-lg bg-white/80" />
+              <div className="mt-1 text-[8px] font-semibold text-stone-600">Cream</div>
+            </div>
+            <div className="absolute right-3 top-4 w-[42%] rounded-xl border border-white/20 bg-[#152536] p-2 shadow">
+              <div className="h-2 w-10 rounded bg-white/30" />
+              <div className="mt-2 h-8 rounded-lg bg-white/10" />
+              <div className="mt-1 text-[8px] font-semibold text-white/70">Dark</div>
+            </div>
+            <Caption>Appearance</Caption>
+          </>
+        ) : null}
+
+        {visual === 'walk-app' ? (
+          <>
+            <Pin className="absolute left-[48%] top-[36%]" color="#38bdf8" />
+            <div className="absolute bottom-4 left-3 right-3 flex gap-2">
+              <div className="flex-1 rounded-xl border border-sky-300/50 bg-sky-500/25 px-2 py-2 text-center">
+                <div className="text-[10px] font-bold text-sky-100">Maps</div>
+                <div className="text-[8px] text-white/60">Street View</div>
+              </div>
+              <div className="flex-1 rounded-xl border border-white/20 bg-white/10 px-2 py-2 text-center">
+                <div className="text-[10px] font-bold text-white/90">Earth</div>
+                <div className="text-[8px] text-white/50">Alternate</div>
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {visual === 'map-look' ? (
+          <>
+            <div className="absolute right-3 top-3 w-[7.5rem] rounded-2xl border border-white/20 bg-[#0f1a24]/95 p-2 shadow-xl">
+              <div className="text-[8px] font-semibold uppercase tracking-wide text-orange-300/90">
+                Map look
+              </div>
+              <div className="mt-1.5 space-y-1">
+                {['Classic', 'Modern', 'Esri', 'OSM', 'Google 3D'].map((label, i) => (
+                  <div
+                    key={label}
+                    className="flex items-center justify-between rounded-lg bg-white/10 px-1.5 py-1"
+                  >
+                    <span className="text-[9px] text-white/90">{label}</span>
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${i === 0 || i === 2 ? 'bg-orange-400' : 'bg-white/30'}`}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <Caption>Basemap & style</Caption>
+          </>
+        ) : null}
+
+        {visual === 'charts' ? (
+          <>
+            <div className="absolute left-3 right-3 top-3 rounded-2xl border border-white/15 bg-[var(--paper)] p-3 text-[var(--ink)] shadow-xl">
+              <div className="text-[9px] font-semibold uppercase tracking-wide text-stone-400">
+                Stats
+              </div>
+              <div className="mt-2 flex items-end gap-1.5">
+                {[40, 65, 35, 80, 55].map((h, i) => (
+                  <div
+                    key={i}
+                    className="flex-1 rounded-t bg-orange-400/80"
+                    style={{ height: `${h * 0.45}px` }}
+                  />
+                ))}
+              </div>
+              <div className="mt-2 flex justify-between text-[9px] text-stone-500">
+                <span>Distance</span>
+                <span>Time · Spend</span>
+              </div>
+            </div>
           </>
         ) : null}
       </div>
