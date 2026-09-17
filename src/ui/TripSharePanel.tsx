@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { TripRecord } from '../domain/types'
 import type { CloudUser } from '../data/cloudAuth'
 import {
@@ -133,41 +134,71 @@ export function TripSharePanel({
 
   const pendingOwned = invites.filter((i) => i.status === 'pending')
 
+  useEffect(() => {
+    if (!confirm) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !busy) setConfirm(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [confirm, busy])
+
+  const confirmModal =
+    confirm && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            className="fixed inset-0 z-[200] flex items-end justify-center bg-black/55 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] sm:items-center"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="share-confirm-title"
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              if (e.target === e.currentTarget && !busy) setConfirm(null)
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-full max-w-sm overflow-hidden rounded-3xl border border-[var(--glass-border)] bg-[var(--paper)] text-[var(--ink)] shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+              <div className="px-5 pt-5">
+                <h2 id="share-confirm-title" className="text-[15px] font-semibold leading-snug">
+                  {confirm.title}
+                </h2>
+                <p className="mt-2 text-sm text-[var(--ink-muted)]">{confirm.body}</p>
+              </div>
+              <div className="flex gap-2 px-5 py-5">
+                <button
+                  type="button"
+                  className="flex-1 rounded-full border border-[var(--glass-border)] bg-white/60 px-4 py-3 text-sm font-medium text-[var(--ink-muted)] disabled:opacity-50"
+                  disabled={busy}
+                  onClick={() => setConfirm(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="flex-1 rounded-full bg-rose-600 px-4 py-3 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                  disabled={busy}
+                  onClick={() => {
+                    const action = confirm.action
+                    setConfirm(null)
+                    runBusy(action)
+                  }}
+                >
+                  Confirm
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null
+
   return (
     <div className="space-y-3">
+      {confirmModal}
       {localError ? (
         <p className="rounded-xl border border-rose-300/50 bg-rose-500/10 px-2.5 py-2 text-[12px] text-rose-700 dark:text-rose-200">
           {localError}
         </p>
-      ) : null}
-
-      {confirm ? (
-        <div className="rounded-xl border border-[var(--coral)]/40 bg-[var(--coral)]/10 px-3 py-2.5">
-          <div className="text-[13px] font-semibold text-[var(--ink)]">{confirm.title}</div>
-          <p className="mt-1 text-[11px] text-[var(--ink-muted)]">{confirm.body}</p>
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              className="rounded-full bg-[var(--coral)] px-3 py-1.5 text-xs font-semibold text-white"
-              disabled={busy}
-              onClick={() => {
-                const action = confirm.action
-                setConfirm(null)
-                runBusy(action)
-              }}
-            >
-              Confirm
-            </button>
-            <button
-              type="button"
-              className="rounded-full border border-[var(--glass-border)] px-3 py-1.5 text-xs"
-              disabled={busy}
-              onClick={() => setConfirm(null)}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
       ) : null}
 
       {/* Identity */}

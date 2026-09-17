@@ -361,15 +361,18 @@ export default function App() {
   const [guideOpen, setGuideOpen] = useState(false)
   const [guideTips, setGuideTips] = useState<FeatureTip[]>([])
   const [seenTipIds, setSeenTipIds] = useState<Set<string>>(() => new Set())
-  const [tripDialog, setTripDialog] = useState<null | { mode: 'create' | 'edit'; draft: TripMetaDraft }>(
-    null,
-  )
+  const [tripDialog, setTripDialog] = useState<null | {
+    mode: 'create' | 'edit'
+    draft: TripMetaDraft
+    firstRun?: boolean
+  }>(null)
   const [startCoachOpen, setStartCoachOpen] = useState(false)
   const [planStartCoachOpen, setPlanStartCoachOpen] = useState(false)
   const [cloudUser, setCloudUser] = useState<CloudUser | null>(null)
   const [pendingInviteCount, setPendingInviteCount] = useState(0)
   const guideAutoShownRef = useRef(false)
   const planCoachShownRef = useRef(false)
+  const pendingStartCoachAfterTipsRef = useRef(false)
   const cloudPushTimerRef = useRef<number | null>(null)
   const cloudApplyingRemoteRef = useRef(false)
   const lastPushedRevisionRef = useRef<number>(-1)
@@ -404,10 +407,10 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     let all = await listTrips()
-    // Fresh install / cleared storage: seed a same-day empty trip so Plan/Journey
-    // can start without requiring a full itinerary first — unless Firebase invites
-    // are waiting (partner should join instead of creating a second blank trip).
+    // Fresh install / cleared storage: seed an empty trip so Plan/Journey can start
+    // — unless Firebase invites are waiting (partner should join instead).
     let skipBlank = false
+    let seededId: string | null = null
     if (all.length === 0 && isCloudAuthConfigured()) {
       try {
         const pending = await listMyPendingInvites()
@@ -417,7 +420,12 @@ export default function App() {
       }
     }
     if (all.length === 0 && !skipBlank) {
-      const trip = await createBlankTrip()
+      const draft = defaultCreateDraft()
+      const trip = await createBlankTrip({
+        name: draft.name,
+        startDate: draft.startDate,
+        endDate: draft.endDate,
+      })
       const withBases = applyTripMetaRange(
         trip.meta,
         trip.items,
@@ -435,7 +443,9 @@ export default function App() {
           items: withBases.items,
         }),
       )
+      await setSetting('awaitingFirstTripSetup', '1')
       all = await listTrips()
+      seededId = all.find((t) => t.id === trip.id)?.id ?? all[0]?.id ?? null
     }
     const hasPersonal = all.some((t) => !t.isExample && t.id !== EXAMPLE_TRIP_ID)
     if (hasPersonal && !keepExampleRef.current) {
@@ -446,15 +456,32 @@ export default function App() {
       }
     }
     setTrips(all)
-    // Prefer the latest personal / WIP trip; fall back to the example only if nothing else
-    setActiveId(
-      (prev) =>
-        prev ??
+    setActiveId((prev) => {
+      if (seededId) return seededId
+      if (prev && all.some((t) => t.id === prev)) return prev
+      return (
         all.find((t) => !t.isExample && t.id !== EXAMPLE_TRIP_ID)?.id ??
         all.find((t) => t.isExample || t.id === EXAMPLE_TRIP_ID)?.id ??
         all[0]?.id ??
-        null,
-    )
+        null
+      )
+    })
+    if (seededId) {
+      const seeded = all.find((t) => t.id === seededId)
+      if (seeded) {
+        // Open immediately (delete-all / fresh seed) — not only on page reload.
+        guideAutoShownRef.current = true
+        setTripDialog({
+          mode: 'edit',
+          firstRun: true,
+          draft: {
+            name: '',
+            startDate: seeded.meta.startDate,
+            endDate: seeded.meta.endDate,
+          },
+        })
+      }
+    }
   }, [])
 
   async function retireExampleTrip() {
@@ -487,16 +514,39 @@ export default function App() {
       const seen = parseSeenTipIds(await getSetting('featureGuideSeen'))
       setSeenTipIds(seen)
       const unseen = unseenFeatureTips(seen)
-      const needsPlanCoach = bootMode === 'plan' && !seen.has(PLAN_START_COACH_ID)
-      if (needsPlanCoach && !planCoachShownRef.current) {
-        // Prefer the Plan arrow coach when landing in Plan; skip modal tips this boot.
-        planCoachShownRef.current = true
-        guideAutoShownRef.current = true
-        window.setTimeout(() => setPlanStartCoachOpen(true), 420)
-      } else if (unseen.length && !guideAutoShownRef.current) {
-        guideAutoShownRef.current = true
-        setGuideTips(unseen)
-        setGuideOpen(true)
+      const awaitingSetup = (await getSetting('awaitingFirstTripSetup')) === '1'
+      if (awaitingSetup) {
+        // Name/dates first — defer boot tips until setup submit.
+        const all = await listTrips()
+        const trip =
+          all.find((t) => !t.isExample && t.id !== EXAMPLE_TRIP_ID) ?? all[0] ?? null
+        if (trip) {
+          guideAutoShownRef.current = true
+          setTripDialog({
+            mode: 'edit',
+            firstRun: true,
+            draft: {
+              name: '',
+              startDate: trip.meta.startDate,
+              endDate: trip.meta.endDate,
+            },
+          })
+        } else {
+          await setSetting('awaitingFirstTripSetup', '')
+        }
+      }
+      if (!guideAutoShownRef.current) {
+        const needsPlanCoach = bootMode === 'plan' && !seen.has(PLAN_START_COACH_ID)
+        if (needsPlanCoach && !planCoachShownRef.current) {
+          // Prefer the Plan arrow coach when landing in Plan; skip modal tips this boot.
+          planCoachShownRef.current = true
+          guideAutoShownRef.current = true
+          window.setTimeout(() => setPlanStartCoachOpen(true), 420)
+        } else if (unseen.length) {
+          guideAutoShownRef.current = true
+          setGuideTips(unseen)
+          setGuideOpen(true)
+        }
       }
     })()
   }, [refresh])
@@ -954,11 +1004,12 @@ export default function App() {
         'keep-outside',
       )
       await saveTrip({ ...trip, meta: withBases.meta, items: withBases.items })
+      await setSetting('awaitingFirstTripSetup', '')
       await retireExampleTrip()
       await refresh()
       setActiveId(trip.id)
       setOverviewToken((n) => n + 1)
-      setStatus(`Created â€œ${withBases.meta.name}â€ Â· ${countDaysLabel(draft)}`)
+      setStatus(`Created “${withBases.meta.name}” · ${countDaysLabel(draft)}`)
       setTripDialog(null)
       setNavTab('timeline')
       setPanelOpen(true)
@@ -974,13 +1025,31 @@ export default function App() {
 
     const result = applyTripMetaRange(active.meta, active.items, draft, rangeMode)
     await persist({ ...active, meta: result.meta, items: result.items })
+    const wasFirstRun = !!tripDialog?.firstRun
     setTripDialog(null)
 
-    let msg = `Updated â€œ${result.meta.name}â€`
+    if (wasFirstRun) {
+      await setSetting('awaitingFirstTripSetup', '')
+      setStatus(`Created “${result.meta.name}” · ${countDaysLabel(draft)}`)
+      setNavTab('timeline')
+      setPanelOpen(true)
+      setLowerMode('none')
+      const unseen = unseenFeatureTips(seenTipIds)
+      if (unseen.length) {
+        pendingStartCoachAfterTipsRef.current = true
+        setGuideTips(unseen)
+        setGuideOpen(true)
+      } else {
+        setStartCoachOpen(true)
+      }
+      return
+    }
+
+    let msg = `Updated “${result.meta.name}”`
     if (result.removedCount > 0) {
-      msg += ` Â· removed ${result.removedCount} step${result.removedCount === 1 ? '' : 's'} outside the dates`
+      msg += ` · removed ${result.removedCount} step${result.removedCount === 1 ? '' : 's'} outside the dates`
     } else if (result.widened) {
-      msg += ' Â· dates widened to keep your existing steps'
+      msg += ' · dates widened to keep your existing steps'
     }
     setStatus(msg)
   }
@@ -2832,7 +2901,13 @@ export default function App() {
       <FeatureGuide
         open={guideOpen}
         tips={guideTips}
-        onClose={() => setGuideOpen(false)}
+        onClose={() => {
+          setGuideOpen(false)
+          if (pendingStartCoachAfterTipsRef.current) {
+            pendingStartCoachAfterTipsRef.current = false
+            setStartCoachOpen(true)
+          }
+        }}
         onMarkSeen={(ids) => void markTipsSeen(ids)}
       />
       <TripMetaDialog
@@ -2840,7 +2915,11 @@ export default function App() {
         mode={tripDialog?.mode ?? 'create'}
         initial={tripDialog?.draft ?? defaultCreateDraft()}
         trip={tripDialog?.mode === 'edit' ? active : null}
-        onClose={() => setTripDialog(null)}
+        requiredSetup={!!tripDialog?.firstRun}
+        onClose={() => {
+          if (tripDialog?.firstRun) return
+          setTripDialog(null)
+        }}
         onSubmit={onTripDialogSubmit}
       />
       <TripStartCoach

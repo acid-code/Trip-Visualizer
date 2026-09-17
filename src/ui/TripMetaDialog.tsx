@@ -21,6 +21,11 @@ type Props = {
   initial: TripMetaDraft
   /** Existing trip when editing — used for outside-range warnings. */
   trip?: TripRecord | null
+  /**
+   * First-run setup after auto-seeding a blank trip: require a name, block dismiss,
+   * and use “name your trip” copy until they save.
+   */
+  requiredSetup?: boolean
   onClose: () => void
   onSubmit: (draft: TripMetaDraft, rangeMode: RangeReconcileMode) => void | Promise<void>
 }
@@ -48,7 +53,15 @@ export function draftFromMeta(meta: TripMeta): TripMetaDraft {
   }
 }
 
-export function TripMetaDialog({ open, mode, initial, trip, onClose, onSubmit }: Props) {
+export function TripMetaDialog({
+  open,
+  mode,
+  initial,
+  trip,
+  requiredSetup = false,
+  onClose,
+  onSubmit,
+}: Props) {
   const titleId = useId()
   const [name, setName] = useState(initial.name)
   const [startDate, setStartDate] = useState(initial.startDate)
@@ -56,6 +69,7 @@ export function TripMetaDialog({ open, mode, initial, trip, onClose, onSubmit }:
   const [rangeMode, setRangeMode] = useState<RangeReconcileMode>('keep-outside')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const introAsCreate = mode === 'create' || requiredSetup
 
   useEffect(() => {
     if (!open) return
@@ -68,13 +82,13 @@ export function TripMetaDialog({ open, mode, initial, trip, onClose, onSubmit }:
   }, [open, initial.name, initial.startDate, initial.endDate])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || requiredSetup) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !busy) onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, busy, onClose])
+  }, [open, busy, onClose, requiredSetup])
 
   const dates = useMemo(() => {
     if (!isIsoDate(startDate) || !isIsoDate(endDate)) return null
@@ -103,12 +117,18 @@ export function TripMetaDialog({ open, mode, initial, trip, onClose, onSubmit }:
       setError('Trips can be at most about 6 months in the planner — shorten the range.')
       return
     }
+    if (requiredSetup && !name.trim()) {
+      setError('Give your trip a name to continue.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
       await onSubmit(
         {
-          name: name.trim() || (mode === 'create' ? 'New trip' : 'Untitled trip'),
+          name:
+            name.trim() ||
+            (mode === 'create' || requiredSetup ? 'New trip' : 'Untitled trip'),
           startDate: dates.startDate,
           endDate: dates.endDate,
         },
@@ -127,6 +147,7 @@ export function TripMetaDialog({ open, mode, initial, trip, onClose, onSubmit }:
       aria-modal="true"
       aria-labelledby={titleId}
       onMouseDown={(e) => {
+        if (requiredSetup) return
         if (e.target === e.currentTarget && !busy) onClose()
       }}
     >
@@ -150,13 +171,13 @@ export function TripMetaDialog({ open, mode, initial, trip, onClose, onSubmit }:
             }}
           />
           <p className="relative text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--coral-deep)]">
-            {mode === 'create' ? 'New adventure' : 'Trip details'}
+            {introAsCreate ? 'New adventure' : 'Trip details'}
           </p>
           <h2 id={titleId} className="brand-mark relative mt-1 text-2xl text-[var(--ink)]">
-            {mode === 'create' ? 'Name your trip' : 'Edit trip'}
+            {introAsCreate ? 'Name your trip' : 'Edit trip'}
           </h2>
           <p className="relative mt-1 text-sm text-[var(--ink-muted)]">
-            {mode === 'create'
+            {introAsCreate
               ? 'We’ll set up a sleep/base spot for each day so the timeline is ready to fill.'
               : 'Update the name or dates — day bases adjust automatically.'}
           </p>
@@ -214,7 +235,7 @@ export function TripMetaDialog({ open, mode, initial, trip, onClose, onSubmit }:
               <span className="font-semibold">
                 {dayCount} day{dayCount === 1 ? '' : 's'}
               </span>
-              {mode === 'create'
+              {introAsCreate
                 ? ' — a base spot will be ready on each morning.'
                 : ' in range — empty days get a base spot; extras outside tidy up.'}
               {longTrip && !hugeTrip ? (
@@ -281,20 +302,28 @@ export function TripMetaDialog({ open, mode, initial, trip, onClose, onSubmit }:
         </div>
 
         <div className="flex gap-2 px-5 pb-5 pt-3">
-          <button
-            type="button"
-            className="flex-1 rounded-full border border-[#e7e0d5] bg-white px-4 py-2.5 text-sm font-medium text-[var(--ink-muted)] hover:bg-stone-50 disabled:opacity-50"
-            onClick={onClose}
-            disabled={busy}
-          >
-            Cancel
-          </button>
+          {requiredSetup ? null : (
+            <button
+              type="button"
+              className="flex-1 rounded-full border border-[#e7e0d5] bg-white px-4 py-2.5 text-sm font-medium text-[var(--ink-muted)] hover:bg-stone-50 disabled:opacity-50"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          )}
           <button
             type="submit"
             className="flex-1 rounded-full bg-[var(--coral)] px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--coral-deep)] disabled:opacity-50"
             disabled={busy || !dates || hugeTrip}
           >
-            {busy ? 'Saving…' : mode === 'create' ? 'Create trip' : 'Save changes'}
+            {busy
+              ? 'Saving…'
+              : requiredSetup
+                ? 'Start trip'
+                : mode === 'create'
+                  ? 'Create trip'
+                  : 'Save changes'}
           </button>
         </div>
       </form>
