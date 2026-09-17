@@ -37,7 +37,10 @@ export function shareErrorMessage(err: unknown, fallback: string): string {
     return msg
   }
   if (/PARTNER_UPDATED/.test(msg)) {
-    return 'Partner updated — reloaded their version'
+    return 'Someone else updated — reloaded cloud version (your last edit was not pushed)'
+  }
+  if (msg === 'SHARE_GONE' || code === 'SHARE_GONE') {
+    return 'Shared trip is no longer available in the cloud'
   }
   if (msg && msg.length < 160 && !/firebase|stack|http/i.test(msg)) {
     return msg

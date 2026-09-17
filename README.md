@@ -88,6 +88,9 @@ Invite-only near-live sync for two Google accounts.
 5. Register a Web app; copy config into Vercel / `.env.local` as `VITE_FIREBASE_*`.
 6. In the app: **Settings → Share trip → Sign in with Google → Enable sharing → Invite** partner’s email.
 7. Partner signs in with **that** Google account and taps **Join**. Sync includes Journey steps and Plan lists/days/POIs. No public links.
+8. **Re-publish rules** whenever `firestore.rules` changes in the repo (revokes, leave, and delete rely on the latest rules).
+
+**Delete / leave:** Owner delete removes the cloud trip for everyone. Partner delete (or **Leave shared trip**) drops their membership and keeps a local copy. **Stop sharing** revokes all editors and pending invites.
 
 Drive Excel remains a personal backup (full-fidelity notes/confirmations) — prefer shared sync for the couple workspace.
 

@@ -9,6 +9,7 @@ import {
   getDoc,
   getDocs,
   onSnapshot,
+  runTransaction,
   setDoc,
   updateDoc,
   writeBatch,
@@ -27,10 +28,18 @@ import type { CloudTripDoc, TripInvite, TripMember } from './shareTypes'
 
 export { shareErrorMessage }
 
+export const SHARE_GONE = 'SHARE_GONE'
+
 function dbOrThrow() {
   const db = getFirestoreDb()
   if (!db) throw new Error('Sharing is not configured — set VITE_FIREBASE_* env vars')
   return db
+}
+
+function requireOwner(trip: TripRecord, user: CloudUser) {
+  if (!trip.shareOwnerUid || trip.shareOwnerUid !== user.uid) {
+    throw new Error('Only the trip owner can manage sharing')
+  }
 }
 
 /**
@@ -95,6 +104,16 @@ export function isTripShared(trip: TripRecord | null | undefined): boolean {
   return Boolean(trip?.cloudTripId && trip.shareEnabled)
 }
 
+/** Local copy kept; share flags cleared (device-only after leave/revoke/gone). */
+export function clearLocalShare(trip: TripRecord): TripRecord {
+  return {
+    ...trip,
+    shareEnabled: false,
+    cloudTripId: '',
+    updatedAt: nowIso(),
+  }
+}
+
 export async function enableTripSharing(trip: TripRecord): Promise<TripRecord> {
   const user = requireCloudUser()
   const db = dbOrThrow()
@@ -131,7 +150,6 @@ export async function enableTripSharing(trip: TripRecord): Promise<TripRecord> {
     await setDoc(doc(db, 'trips', tripId), tripDoc)
     await setDoc(doc(db, 'trips', tripId, 'members', user.uid), memberDoc)
   } catch (err) {
-    // Preserve Firebase code for UI mapping; attach friendly text.
     const friendly = shareErrorMessage(err, 'Could not enable sharing')
     const wrapped = new Error(friendly) as Error & { cause?: unknown; code?: string }
     wrapped.cause = err
@@ -153,42 +171,53 @@ export async function pushSharedTrip(
     throw new Error('Trip is not shared')
   }
   const tripId = trip.cloudTripId
-  const remote = await getDoc(doc(db, 'trips', tripId))
-  if (!remote.exists()) throw new Error('Shared trip not found in cloud')
-  const remoteData = remote.data() as CloudTripDoc
-  if (
-    opts?.expectedRevision != null &&
-    remoteData.revision > opts.expectedRevision &&
-    remoteData.lastWriterUid !== user.uid
-  ) {
-    const err = new Error('PARTNER_UPDATED') as Error & { remote: TripRecord }
-    err.remote = decodeRecordFromFirestore(remoteData.record)
+  const tripRef = doc(db, 'trips', tripId)
+
+  try {
+    return await runTransaction(db, async (tx) => {
+      const remote = await tx.get(tripRef)
+      if (!remote.exists()) throw new Error('Shared trip not found in cloud')
+      const remoteData = remote.data() as CloudTripDoc
+
+      // Any remote revision ahead of what we based on is a conflict —
+      // including same-user multi-device (no lastWriterUid bypass).
+      if (
+        opts?.expectedRevision != null &&
+        remoteData.revision > opts.expectedRevision
+      ) {
+        const err = new Error('PARTNER_UPDATED') as Error & { remote: TripRecord }
+        err.remote = decodeRecordFromFirestore(remoteData.record)
+        throw err
+      }
+
+      const revision = Math.max(remoteData.revision, trip.revision ?? 0) + 1
+      const record = tripRecordForCloud({
+        ...trip,
+        cloudTripId: tripId,
+        shareEnabled: true,
+        shareOwnerUid: trip.shareOwnerUid || remoteData.ownerUid,
+        shareOwnerEmail: trip.shareOwnerEmail || remoteData.ownerEmail,
+        revision,
+        updatedAt: nowIso(),
+      })
+
+      tx.set(
+        tripRef,
+        cloudTripPayload(record, {
+          ownerUid: remoteData.ownerUid,
+          ownerEmail: remoteData.ownerEmail,
+          revision,
+          updatedAt: record.updatedAt,
+          lastWriterUid: user.uid,
+        }),
+        { merge: false },
+      )
+      return record
+    })
+  } catch (err) {
+    if (err instanceof Error && err.message === 'PARTNER_UPDATED') throw err
     throw err
   }
-
-  const revision = Math.max(remoteData.revision, trip.revision ?? 0) + 1
-  const record = tripRecordForCloud({
-    ...trip,
-    cloudTripId: tripId,
-    shareEnabled: true,
-    shareOwnerUid: trip.shareOwnerUid || remoteData.ownerUid,
-    shareOwnerEmail: trip.shareOwnerEmail || remoteData.ownerEmail,
-    revision,
-    updatedAt: nowIso(),
-  })
-
-  await setDoc(
-    doc(db, 'trips', tripId),
-    cloudTripPayload(record, {
-      ownerUid: remoteData.ownerUid,
-      ownerEmail: remoteData.ownerEmail,
-      revision,
-      updatedAt: record.updatedAt,
-      lastWriterUid: user.uid,
-    }),
-    { merge: false },
-  )
-  return record
 }
 
 export async function pullSharedTrip(tripId: string): Promise<TripRecord | null> {
@@ -209,7 +238,12 @@ export function watchSharedTrip(
   return onSnapshot(
     doc(db, 'trips', tripId),
     (snap) => {
-      if (!snap.exists()) return
+      if (!snap.exists()) {
+        const gone = new Error(SHARE_GONE) as Error & { code: string }
+        gone.code = SHARE_GONE
+        onError?.(gone)
+        return
+      }
       try {
         const data = snap.data() as CloudTripDoc
         onTrip(decodeRecordFromFirestore(data.record))
@@ -230,9 +264,7 @@ export async function inviteToTrip(
   if (!isTripShared(trip) || !trip.cloudTripId) {
     throw new Error('Enable sharing on this trip first')
   }
-  if (trip.shareOwnerUid && trip.shareOwnerUid !== user.uid) {
-    throw new Error('Only the trip owner can invite')
-  }
+  requireOwner(trip, user)
   if (!isValidInviteEmail(rawEmail)) throw new Error('Enter a valid email address')
   const email = normalizeEmail(rawEmail)
   if (email === user.email) throw new Error('You already own this trip')
@@ -267,6 +299,13 @@ export async function listTripInvites(tripId: string): Promise<TripInvite[]> {
     .filter((i) => i.status === 'pending' || i.status === 'accepted')
 }
 
+/** All invite docs including revoked (for cascade cleanup). */
+async function listAllTripInvites(tripId: string): Promise<TripInvite[]> {
+  const db = dbOrThrow()
+  const snap = await getDocs(collection(db, 'trips', tripId, 'invites'))
+  return snap.docs.map((d) => d.data() as TripInvite)
+}
+
 export async function listTripMembers(tripId: string): Promise<TripMember[]> {
   const db = dbOrThrow()
   requireCloudUser()
@@ -274,6 +313,13 @@ export async function listTripMembers(tripId: string): Promise<TripMember[]> {
   return snap.docs
     .map((d) => d.data() as TripMember)
     .filter((m) => m.status === 'active')
+}
+
+/** Active + revoked members (for cascade cleanup / stop). */
+async function listAllTripMembers(tripId: string): Promise<TripMember[]> {
+  const db = dbOrThrow()
+  const snap = await getDocs(collection(db, 'trips', tripId, 'members'))
+  return snap.docs.map((d) => d.data() as TripMember)
 }
 
 export async function listMyPendingInvites(): Promise<TripInvite[]> {
@@ -305,6 +351,17 @@ export async function acceptInvite(tripId: string): Promise<TripRecord> {
     throw new Error('Invite is no longer valid')
   }
 
+  // Fresh accept only from pending (rules also enforce). Re-pull if already accepted.
+  if (invite.status === 'accepted') {
+    const existing = await pullSharedTrip(tripId)
+    if (!existing) throw new Error('Could not load shared trip')
+    return {
+      ...existing,
+      cloudTripId: tripId,
+      shareEnabled: true,
+    }
+  }
+
   const member: TripMember = {
     uid: user.uid,
     email: user.email,
@@ -333,21 +390,17 @@ export async function acceptInvite(tripId: string): Promise<TripRecord> {
   }
 }
 
-export async function revokeInvite(trip: TripRecord, rawEmail: string): Promise<void> {
+async function writeRevokedInvite(
+  trip: TripRecord,
+  email: string,
+  prev: TripInvite | null,
+  memberUid?: string,
+): Promise<void> {
   const user = requireCloudUser()
   const db = dbOrThrow()
-  if (!trip.cloudTripId) throw new Error('Trip is not shared')
-  if (trip.shareOwnerUid && trip.shareOwnerUid !== user.uid) {
-    throw new Error('Only the trip owner can revoke access')
-  }
-  const email = normalizeEmail(rawEmail)
+  const tripId = trip.cloudTripId!
   const key = emailDocKey(email)
   if (!key) throw new Error('Invalid email')
-
-  const tripId = trip.cloudTripId
-  const inviteRef = doc(db, 'trips', tripId, 'invites', key)
-  const inviteSnap = await getDoc(inviteRef)
-  const prev = inviteSnap.exists() ? (inviteSnap.data() as TripInvite) : null
 
   const revoked: TripInvite = {
     tripId,
@@ -358,21 +411,24 @@ export async function revokeInvite(trip: TripRecord, rawEmail: string): Promise<
     invitedByUid: prev?.invitedByUid || user.uid,
     invitedByEmail: prev?.invitedByEmail || user.email,
     invitedAt: prev?.invitedAt || nowIso(),
-    acceptedUid: prev?.acceptedUid,
+    acceptedUid: prev?.acceptedUid || memberUid,
   }
 
+  const uidToRevoke = prev?.acceptedUid || memberUid
   const batch = writeBatch(db)
-  batch.set(inviteRef, revoked)
+  batch.set(doc(db, 'trips', tripId, 'invites', key), revoked)
   batch.set(doc(db, 'emailInvites', key, 'trips', tripId), revoked)
-  if (prev?.acceptedUid) {
+  if (uidToRevoke) {
+    const memberSnap = await getDoc(doc(db, 'trips', tripId, 'members', uidToRevoke))
+    const existing = memberSnap.exists() ? (memberSnap.data() as TripMember) : null
     batch.set(
-      doc(db, 'trips', tripId, 'members', prev.acceptedUid),
+      doc(db, 'trips', tripId, 'members', uidToRevoke),
       {
-        uid: prev.acceptedUid,
-        email,
-        role: prev.role || 'editor',
+        uid: uidToRevoke,
+        email: existing?.email || email,
+        role: existing?.role || prev?.role || 'editor',
         status: 'revoked',
-        joinedAt: nowIso(),
+        joinedAt: existing?.joinedAt || nowIso(),
       } satisfies TripMember,
       { merge: true },
     )
@@ -380,33 +436,178 @@ export async function revokeInvite(trip: TripRecord, rawEmail: string): Promise<
   await batch.commit()
 }
 
+export async function revokeInvite(trip: TripRecord, rawEmail: string): Promise<void> {
+  const user = requireCloudUser()
+  if (!trip.cloudTripId) throw new Error('Trip is not shared')
+  requireOwner(trip, user)
+  const email = normalizeEmail(rawEmail)
+  const key = emailDocKey(email)
+  if (!key) throw new Error('Invalid email')
+
+  const tripId = trip.cloudTripId
+  const inviteSnap = await getDoc(doc(dbOrThrow(), 'trips', tripId, 'invites', key))
+  const prev = inviteSnap.exists() ? (inviteSnap.data() as TripInvite) : null
+
+  // Fallback: find active member by email when acceptedUid is missing.
+  let memberUid = prev?.acceptedUid
+  if (!memberUid) {
+    const members = await listTripMembers(tripId)
+    memberUid = members.find((m) => normalizeEmail(m.email) === email && m.role !== 'owner')?.uid
+  }
+
+  await writeRevokedInvite(trip, email, prev, memberUid)
+}
+
+/** Owner revokes an active editor by uid (and matching invite if any). */
+export async function revokeMember(trip: TripRecord, memberUid: string): Promise<void> {
+  const user = requireCloudUser()
+  const db = dbOrThrow()
+  if (!trip.cloudTripId) throw new Error('Trip is not shared')
+  requireOwner(trip, user)
+  if (memberUid === user.uid) throw new Error('Cannot revoke the owner')
+
+  const tripId = trip.cloudTripId
+  const memberRef = doc(db, 'trips', tripId, 'members', memberUid)
+  const memberSnap = await getDoc(memberRef)
+  if (!memberSnap.exists()) throw new Error('Member not found')
+  const member = memberSnap.data() as TripMember
+  if (member.role === 'owner') throw new Error('Cannot revoke the owner')
+
+  const email = normalizeEmail(member.email)
+  const key = emailDocKey(email)
+  const inviteSnap = key
+    ? await getDoc(doc(db, 'trips', tripId, 'invites', key))
+    : null
+  const prev = inviteSnap?.exists() ? (inviteSnap.data() as TripInvite) : null
+
+  if (key) {
+    await writeRevokedInvite(trip, email, prev, memberUid)
+  } else {
+    await setDoc(
+      memberRef,
+      { ...member, status: 'revoked' } satisfies TripMember,
+      { merge: true },
+    )
+  }
+}
+
+/** Partner leaves the share; keeps a local unshared copy. */
+export async function leaveSharedTrip(trip: TripRecord): Promise<TripRecord> {
+  const user = requireCloudUser()
+  const db = dbOrThrow()
+  if (!trip.cloudTripId) return clearLocalShare(trip)
+  if (trip.shareOwnerUid === user.uid) {
+    throw new Error('Owners should stop sharing or delete the cloud trip')
+  }
+
+  const tripId = trip.cloudTripId
+  const memberRef = doc(db, 'trips', tripId, 'members', user.uid)
+  const memberSnap = await getDoc(memberRef)
+  if (memberSnap.exists()) {
+    const member = memberSnap.data() as TripMember
+    await setDoc(
+      memberRef,
+      {
+        ...member,
+        uid: user.uid,
+        status: 'revoked',
+      } satisfies TripMember,
+      { merge: true },
+    )
+  }
+  return clearLocalShare(trip)
+}
+
 export async function stopSharing(trip: TripRecord): Promise<TripRecord> {
   const user = requireCloudUser()
   const db = dbOrThrow()
-  if (!trip.cloudTripId) return { ...trip, shareEnabled: false, cloudTripId: '' }
-  if (trip.shareOwnerUid && trip.shareOwnerUid !== user.uid) {
-    throw new Error('Only the trip owner can stop sharing')
-  }
-  // Soft-stop: mark trip unshared locally; revoke open invites.
-  const invites = await listTripInvites(trip.cloudTripId)
+  if (!trip.cloudTripId) return clearLocalShare(trip)
+  requireOwner(trip, user)
+
+  const tripId = trip.cloudTripId
+  const [invites, members] = await Promise.all([
+    listTripInvites(tripId),
+    listTripMembers(tripId),
+  ])
+
   for (const inv of invites) {
     if (inv.status === 'pending' || inv.status === 'accepted') {
       await revokeInvite(trip, inv.email)
     }
   }
-  await updateDoc(doc(db, 'trips', trip.cloudTripId), {
-    updatedAt: nowIso(),
-    lastWriterUid: user.uid,
-  })
-  return {
+  for (const m of members) {
+    if (m.role !== 'owner' && m.uid !== user.uid) {
+      // May already be revoked via invite; ignore failures for missing docs.
+      try {
+        await revokeMember(trip, m.uid)
+      } catch {
+        /* already revoked */
+      }
+    }
+  }
+
+  const localStopped = {
     ...trip,
     shareEnabled: false,
-    cloudTripId: trip.cloudTripId,
+    cloudTripId: tripId,
     updatedAt: nowIso(),
   }
+  // Keep cloud trip for possible re-enable, but mark record unshared.
+  try {
+    const remote = await getDoc(doc(db, 'trips', tripId))
+    if (remote.exists()) {
+      const remoteData = remote.data() as CloudTripDoc
+      const recorded = decodeRecordFromFirestore(remoteData.record)
+      await updateDoc(doc(db, 'trips', tripId), {
+        updatedAt: nowIso(),
+        lastWriterUid: user.uid,
+        record: encodeRecordForFirestore({
+          ...recorded,
+          shareEnabled: false,
+          cloudTripId: tripId,
+        }),
+      })
+    }
+  } catch {
+    /* best-effort cloud flag */
+  }
+
+  return localStopped
+}
+
+/**
+ * Owner cascade-deletes cloud trip + members + invites.
+ * Does not touch IndexedDB — caller deletes local separately.
+ */
+export async function deleteCloudShare(trip: TripRecord): Promise<void> {
+  const user = requireCloudUser()
+  const db = dbOrThrow()
+  if (!trip.cloudTripId) return
+  requireOwner(trip, user)
+
+  const tripId = trip.cloudTripId
+  const [invites, members] = await Promise.all([
+    listAllTripInvites(tripId),
+    listAllTripMembers(tripId),
+  ])
+
+  // Firestore batches max 500 ops; couple share is tiny.
+  const batch = writeBatch(db)
+  for (const inv of invites) {
+    const key = emailDocKey(normalizeEmail(inv.email))
+    if (key) {
+      batch.delete(doc(db, 'trips', tripId, 'invites', key))
+      batch.delete(doc(db, 'emailInvites', key, 'trips', tripId))
+    }
+  }
+  for (const m of members) {
+    batch.delete(doc(db, 'trips', tripId, 'members', m.uid))
+  }
+  batch.delete(doc(db, 'trips', tripId))
+  await batch.commit()
 }
 
 export function canManageShare(trip: TripRecord, user: CloudUser | null): boolean {
   if (!user || !isTripShared(trip)) return false
-  return !trip.shareOwnerUid || trip.shareOwnerUid === user.uid
+  return Boolean(trip.shareOwnerUid && trip.shareOwnerUid === user.uid)
 }

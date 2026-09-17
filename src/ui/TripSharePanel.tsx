@@ -7,10 +7,12 @@ import {
   enableTripSharing,
   inviteToTrip,
   isTripShared,
+  leaveSharedTrip,
   listMyPendingInvites,
   listTripInvites,
   listTripMembers,
   revokeInvite,
+  revokeMember,
   shareErrorMessage,
   stopSharing,
 } from '../data/cloudSync'
@@ -266,6 +268,9 @@ export function TripSharePanel({
                       Invite
                     </button>
                   </div>
+                  <p className="text-[10px] text-[var(--ink-muted)]">
+                    Invite email must match their Google account exactly.
+                  </p>
                   <button
                     type="button"
                     className="text-[11px] text-[var(--ink-muted)] underline"
@@ -275,7 +280,7 @@ export function TripSharePanel({
                       void stopSharing(trip)
                         .then(async (next) => {
                           await onTripChange(next)
-                          onStatus('Sharing stopped for new invites (existing access revoked)')
+                          onStatus('Sharing stopped — partner access revoked')
                           await refreshLists()
                         })
                         .catch((err) => {
@@ -287,13 +292,38 @@ export function TripSharePanel({
                         .finally(() => setBusy(false))
                     }}
                   >
-                    Stop sharing / revoke invites
+                    Stop sharing / revoke all access
                   </button>
                 </>
               ) : (
-                <p className="text-[11px] text-[var(--ink-muted)]">
-                  You are an editor on this trip. Only the owner can invite or revoke.
-                </p>
+                <div className="space-y-2">
+                  <p className="text-[11px] text-[var(--ink-muted)]">
+                    You are an editor on this trip. Only the owner can invite or revoke others.
+                  </p>
+                  <button
+                    type="button"
+                    className="text-[11px] text-rose-600 underline"
+                    disabled={busy}
+                    onClick={() => {
+                      setBusy(true)
+                      void leaveSharedTrip(trip)
+                        .then(async (next) => {
+                          await onTripChange(next)
+                          onStatus('Left shared trip — kept on this device only')
+                          await refreshLists()
+                        })
+                        .catch((err) => {
+                          logClientError('share-leave', err)
+                          const msg = shareErrorMessage(err, 'Could not leave share')
+                          setLocalError(msg)
+                          onStatus(msg)
+                        })
+                        .finally(() => setBusy(false))
+                    }}
+                  >
+                    Leave shared trip
+                  </button>
+                </div>
               )}
 
               {members.length ? (
@@ -303,11 +333,35 @@ export function TripSharePanel({
                   </div>
                   <ul className="mt-1 space-y-1">
                     {members.map((m) => (
-                      <li key={m.uid} className="flex justify-between gap-2 text-[12px]">
+                      <li key={m.uid} className="flex items-center justify-between gap-2 text-[12px]">
                         <span className="truncate text-[var(--ink)]">
                           {m.email}
                           {m.role === 'owner' ? ' · owner' : ''}
                         </span>
+                        {owner && m.role !== 'owner' ? (
+                          <button
+                            type="button"
+                            className="shrink-0 text-[11px] text-rose-500"
+                            disabled={busy}
+                            onClick={() => {
+                              setBusy(true)
+                              void revokeMember(trip, m.uid)
+                                .then(async () => {
+                                  onStatus(`Revoked ${m.email}`)
+                                  await refreshLists()
+                                })
+                                .catch((err) => {
+                                  logClientError('share-revoke-member', err)
+                                  const msg = shareErrorMessage(err, 'Could not revoke')
+                                  setLocalError(msg)
+                                  onStatus(msg)
+                                })
+                                .finally(() => setBusy(false))
+                            }}
+                          >
+                            Revoke
+                          </button>
+                        ) : null}
                       </li>
                     ))}
                   </ul>

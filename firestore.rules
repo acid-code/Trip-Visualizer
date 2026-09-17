@@ -17,6 +17,14 @@ service cloud.firestore {
       return /databases/$(database)/documents/trips/$(tripId);
     }
 
+    function memberPath(tripId, uid) {
+      return /databases/$(database)/documents/trips/$(tripId)/members/$(uid);
+    }
+
+    function tripInvitePath(tripId, emailKey) {
+      return /databases/$(database)/documents/trips/$(tripId)/invites/$(emailKey);
+    }
+
     function isTripOwner(tripId) {
       return signedIn()
         && exists(tripPath(tripId))
@@ -31,18 +39,43 @@ service cloud.firestore {
 
     function isActiveMember(tripId) {
       return signedIn()
-        && exists(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid))
-        && get(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.status == 'active';
+        && exists(memberPath(tripId, request.auth.uid))
+        && get(memberPath(tripId, request.auth.uid)).data.status == 'active';
     }
 
     function canAccessTrip(tripId) {
       return isTripOwner(tripId) || isActiveMember(tripId);
     }
 
+    // Pending invite must exist on BOTH emailInvites and trips/.../invites
+    // so a revoked partner cannot revive access via emailInvites alone.
     function hasPendingInvite(tripId) {
       return exists(/databases/$(database)/documents/emailInvites/$(callerEmail())/trips/$(tripId))
         && get(/databases/$(database)/documents/emailInvites/$(callerEmail())/trips/$(tripId)).data.status == 'pending'
-        && get(/databases/$(database)/documents/emailInvites/$(callerEmail())/trips/$(tripId)).data.email == callerEmail();
+        && get(/databases/$(database)/documents/emailInvites/$(callerEmail())/trips/$(tripId)).data.email == callerEmail()
+        && exists(tripInvitePath(tripId, callerEmail()))
+        && get(tripInvitePath(tripId, callerEmail())).data.status == 'pending'
+        && get(tripInvitePath(tripId, callerEmail())).data.email == callerEmail();
+    }
+
+    // Invitee may only accept: pending -> accepted (cannot un-revoke).
+    function inviteeAcceptOnly() {
+      return resource.data.status == 'pending'
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.email.lower() == callerEmail()
+        && resource.data.email.lower() == callerEmail()
+        && request.resource.data.tripId == resource.data.tripId
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.invitedByUid == resource.data.invitedByUid;
+    }
+
+    // Self leave: active -> revoked, identity fields frozen.
+    function selfLeaveMember() {
+      return request.auth.uid == request.resource.data.uid
+        && resource.data.status == 'active'
+        && request.resource.data.status == 'revoked'
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.email == resource.data.email;
     }
 
     match /users/{uid} {
@@ -76,9 +109,12 @@ service cloud.firestore {
             (request.resource.data.role == 'owner' && isTripOwnerAfter(tripId))
             || (request.resource.data.role == 'editor' && hasPendingInvite(tripId))
           );
+        // Owner may revoke anyone; member may only leave (active -> revoked).
+        // Nobody may self-restore revoked -> active.
         allow update: if isTripOwner(tripId)
+          || (signedIn() && request.auth.uid == memberUid && selfLeaveMember());
+        allow delete: if isTripOwner(tripId)
           || (signedIn() && request.auth.uid == memberUid);
-        allow delete: if isTripOwner(tripId);
       }
 
       match /invites/{emailKey} {
@@ -86,10 +122,7 @@ service cloud.firestore {
           || (signedIn() && resource.data.email.lower() == callerEmail());
         allow create: if isTripOwner(tripId) || isTripOwnerAfter(tripId);
         allow update: if isTripOwner(tripId)
-          || (signedIn()
-            && resource.data.email.lower() == callerEmail()
-            && request.resource.data.email.lower() == callerEmail()
-            && request.resource.data.status in ['accepted', 'revoked']);
+          || (signedIn() && inviteeAcceptOnly());
         allow delete: if isTripOwner(tripId);
       }
     }
@@ -103,8 +136,7 @@ service cloud.firestore {
       allow update: if isTripOwner(tripId)
         || (signedIn()
           && emailKey == callerEmail()
-          && resource.data.email.lower() == callerEmail()
-          && request.resource.data.email.lower() == callerEmail());
+          && inviteeAcceptOnly());
       allow delete: if isTripOwner(tripId);
     }
   }

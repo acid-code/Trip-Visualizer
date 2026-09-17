@@ -11,9 +11,19 @@ type Props = {
   onPrepareDelete?: () => void
   /** Open the create-trip dialog. */
   onCreate: () => void
+  /** Signed-in share user uid — used for delete copy when trip is shared. */
+  cloudUserUid?: string | null
 }
 
-export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDelete, onCreate }: Props) {
+export function TripSwitcher({
+  trips,
+  activeId,
+  onSelect,
+  onDelete,
+  onPrepareDelete,
+  onCreate,
+  cloudUserUid,
+}: Props) {
   const [open, setOpen] = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -135,7 +145,11 @@ export function TripSwitcher({ trips, activeId, onSelect, onDelete, onPrepareDel
               <p className="mt-3 px-5 text-sm text-[var(--ink-muted)]">
                 {pending.isExample
                   ? 'This only hides the sample here. You can open it again anytime from Data.'
-                  : 'This removes the trip from this device. A Google Drive copy is not deleted automatically — remove it in Drive if you want that gone too.'}
+                  : pending.cloudTripId && pending.shareEnabled
+                    ? pending.shareOwnerUid && pending.shareOwnerUid === cloudUserUid
+                      ? 'Removes this trip for everyone: cloud share, partner access, and this device.'
+                      : 'Leaves the shared trip and deletes your local copy. The owner’s cloud trip stays.'
+                    : 'This removes the trip from this device. A Google Drive copy is not deleted automatically — remove it in Drive if you want that gone too.'}
               </p>
               <div className="flex gap-2 px-5 py-5">
                 <button

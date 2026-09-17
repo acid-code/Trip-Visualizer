@@ -1,7 +1,7 @@
 /** Share / invite types for couple co-planning. */
 
 export type ShareRole = 'owner' | 'editor'
-export type InviteStatus = 'pending' | 'active' | 'revoked' | 'accepted'
+export type InviteStatus = 'pending' | 'revoked' | 'accepted'
 
 export type TripInvite = {
   tripId: string

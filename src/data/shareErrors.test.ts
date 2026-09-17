@@ -39,7 +39,8 @@ describe('shareErrorMessage', () => {
     expect(
       shareErrorMessage(new Error('Sharing is not configured — set VITE_FIREBASE_*'), 'x'),
     ).toMatch(/VITE_FIREBASE/)
-    expect(shareErrorMessage(new Error('PARTNER_UPDATED'), 'x')).toMatch(/Partner updated/)
+    expect(shareErrorMessage(new Error('PARTNER_UPDATED'), 'x')).toMatch(/Someone else updated/)
+    expect(shareErrorMessage(new Error('SHARE_GONE'), 'x')).toMatch(/no longer available/)
   })
 
   it('passes short safe messages and falls back otherwise', () => {

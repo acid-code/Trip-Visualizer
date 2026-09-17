@@ -165,9 +165,13 @@ import {
   type CloudUser,
 } from './data/cloudAuth'
 import {
+  clearLocalShare,
+  deleteCloudShare,
   isTripShared,
+  leaveSharedTrip,
   listMyPendingInvites,
   pushSharedTrip,
+  SHARE_GONE,
   watchSharedTrip,
 } from './data/cloudSync'
 import type { RangeReconcileMode } from './data/dayBases'
@@ -444,13 +448,21 @@ export default function App() {
   useEffect(() => {
     if (!active || !cloudUser || !isTripShared(active) || !active.cloudTripId) return
     lastPushedRevisionRef.current = active.revision ?? 0
+    const watchedId = active.id
     const unsub = watchSharedTrip(
       active.cloudTripId,
       (remote) => {
         if ((remote.revision ?? 0) <= lastPushedRevisionRef.current) return
         cloudApplyingRemoteRef.current = true
         lastPushedRevisionRef.current = remote.revision ?? 0
-        void saveTrip(remote)
+        // Keep local trip id; cloud id may match owner's id.
+        const merged: TripRecord = {
+          ...remote,
+          id: watchedId,
+          cloudTripId: remote.cloudTripId || active.cloudTripId,
+          shareEnabled: true,
+        }
+        void saveTrip(merged)
           .then(async () => {
             setTrips(await listTrips())
             setStatus('Partner updated · synced')
@@ -461,20 +473,23 @@ export default function App() {
           })
       },
       (err) => {
-        logClientError('cloud-watch', err)
-        // Likely revoked — strip share flags locally so cloud access stops.
-        if (active.shareEnabled) {
-          const localOnly: TripRecord = {
-            ...active,
-            shareEnabled: false,
-            cloudTripId: '',
-            updatedAt: nowIso(),
-          }
-          void saveTrip(localOnly).then(async () => {
+        const code =
+          err && typeof err === 'object' && 'code' in err
+            ? String((err as { code?: string }).code || '')
+            : ''
+        const gone =
+          err.message === SHARE_GONE ||
+          code === SHARE_GONE ||
+          code === 'permission-denied' ||
+          /permission/i.test(err.message)
+        if (gone) {
+          void saveTrip(clearLocalShare(active)).then(async () => {
             setTrips(await listTrips())
             setStatus('Shared access ended — trip kept on this device only')
           })
+          return
         }
+        logClientError('cloud-watch', err)
       },
     )
     return () => unsub()
@@ -564,10 +579,16 @@ export default function App() {
             const e = err as Error & { remote?: TripRecord }
             if (e.message === 'PARTNER_UPDATED' && e.remote) {
               cloudApplyingRemoteRef.current = true
-              await saveTrip(e.remote)
+              const merged: TripRecord = {
+                ...e.remote,
+                id: local.id,
+                cloudTripId: e.remote.cloudTripId || local.cloudTripId,
+                shareEnabled: true,
+              }
+              await saveTrip(merged)
               setTrips(await listTrips())
-              lastPushedRevisionRef.current = e.remote.revision ?? 0
-              setStatus('Partner updated — reloaded their version')
+              lastPushedRevisionRef.current = merged.revision ?? 0
+              setStatus('Someone else updated — reloaded cloud version (your last edit was not pushed)')
             } else {
               logClientError('cloud-push', err)
               setStatus(publicErrorMessage(err, 'Could not sync shared trip'))
@@ -780,6 +801,22 @@ export default function App() {
   async function onDeleteTrip(id: string) {
     const doomed = trips.find((t) => t.id === id)
     const wasActive = activeId === id
+
+    if (doomed && isTripShared(doomed) && cloudUser) {
+      const isOwner = doomed.shareOwnerUid === cloudUser.uid
+      try {
+        if (isOwner) {
+          await deleteCloudShare(doomed)
+        } else {
+          await leaveSharedTrip(doomed)
+        }
+      } catch (err) {
+        logClientError('share-delete', err)
+        setStatus(publicErrorMessage(err, 'Could not update cloud share — trip not deleted'))
+        return
+      }
+    }
+
     await deleteTrip(id)
     forgetDriveFileForTrip(id)
     if (id === EXAMPLE_TRIP_ID) keepExampleRef.current = false
@@ -793,9 +830,13 @@ export default function App() {
         null
       setActiveId(next?.id ?? null)
     }
-    setStatus(
-      doomed ? `Deleted “${doomed.meta.name}” from this device` : 'Trip deleted',
-    )
+    const sharedNote =
+      doomed && isTripShared(doomed) && cloudUser && doomed.shareOwnerUid === cloudUser.uid
+        ? ' (cloud share removed for everyone)'
+        : doomed && isTripShared(doomed)
+          ? ' (left shared trip)'
+          : ' from this device'
+    setStatus(doomed ? `Deleted “${doomed.meta.name}”${sharedNote}` : 'Trip deleted')
   }
 
   function openTripEdit() {
@@ -2222,6 +2263,7 @@ export default function App() {
                   activeId={activeId}
                   onSelect={(id) => setActiveId(id)}
                   onDelete={(id) => onDeleteTrip(id)}
+                  cloudUserUid={cloudUser?.uid}
                   onCreate={() => void onBlank()}
                   onPrepareDelete={() => {
                     setPanelOpen(false)
@@ -2488,11 +2530,21 @@ export default function App() {
                   lastPushedRevisionRef.current = trip.revision ?? 0
                 }}
                 onAcceptedTrip={async (trip) => {
-                  await saveTrip(trip)
+                  const cloudId = trip.cloudTripId || trip.id
+                  const existing =
+                    trips.find((t) => t.cloudTripId === cloudId || t.id === cloudId) ?? null
+                  const localId = existing?.id ?? createId('TRIP')
+                  const toSave: TripRecord = {
+                    ...trip,
+                    id: localId,
+                    cloudTripId: cloudId,
+                    shareEnabled: true,
+                  }
+                  await saveTrip(toSave)
                   await retireExampleTrip()
                   await refresh()
-                  setActiveId(trip.id)
-                  lastPushedRevisionRef.current = trip.revision ?? 0
+                  setActiveId(localId)
+                  lastPushedRevisionRef.current = toSave.revision ?? 0
                   setPendingInviteCount((n) => Math.max(0, n - 1))
                   setOverviewToken((n) => n + 1)
                 }}
