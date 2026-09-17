@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import type { PlanPlace, PlanSection, TripRecord } from '../domain/types'
-import { listTripDays } from '../data/dayBases'
+import { listTripDays, weekdayShort } from '../data/dayBases'
 import {
   addPlanPlace,
+  applyExploreEnrichmentToPlanPlace,
   JOURNEY_SECTION_TITLE,
   optimizeDayRoute,
   planMaybeSection,
+  planPlaceNeedsEnrichment,
   planSectionForExploreCategory,
   promotePlanPlaceToStep,
   removePlanPlace,
@@ -13,7 +15,7 @@ import {
   unschedulePlanPlace,
   upsertPlanPlaceToSection,
 } from '../data/planBoard'
-import { REGION_PACKS, findRegionPack } from '../data/regionPacks'
+import { findRegionPack } from '../data/regionPacks'
 import { createId, nowIso } from '../data/db'
 import {
   exploreCategoryEmoji,
@@ -26,6 +28,7 @@ import {
 import {
   explorePlaceFromTextHit,
   fetchGoogleTextViaProxy,
+  googlePlacePhotoMediaUrl,
 } from '../data/placesGoogle'
 import {
   extractCoordsFromText,
@@ -35,9 +38,10 @@ import {
 import { isValidCoord } from '../data/validate'
 import { distKm } from '../data/routes'
 import { PlanMapView } from '../map/PlanMapView'
-import { Chip, IconButton, SegmentedControl } from './primitives'
+import { IconButton, SegmentedControl } from './primitives'
 import { ExplorePlaceDetailSheet } from './ExplorePlaceDetailSheet'
 import { PlanMapLayersControl } from './PlanMapLayersControl'
+import { MapSearchBar } from './MapSearchBar'
 import { AiSparkIcon } from './AiCoachSheet'
 import { TOUCH_SCROLL_X, TOUCH_SCROLL_Y } from './scrollGesture'
 
@@ -143,7 +147,7 @@ export function PlanBoard({
       '',
   )
   const [hiddenSections, setHiddenSections] = useState<Set<string>>(new Set())
-  const [showNearbyPins, setShowNearbyPins] = useState(true)
+  const [showNearbyPins, setShowNearbyPins] = useState(false)
   const [suggestCat, setSuggestCat] = useState<ExploreCategory | 'all'>('sights')
   const [suggestions, setSuggestions] = useState<ExplorePlace[]>([])
   const [suggestBusy, setSuggestBusy] = useState(false)
@@ -159,18 +163,24 @@ export function PlanBoard({
   /** When set, detail sheet is a saved Plan place (not a Nearby suggestion). */
   const [detailSavedId, setDetailSavedId] = useState<string | null>(null)
   const [filterMenu, setFilterMenu] = useState<'type' | 'day' | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
   const [searchBusy, setSearchBusy] = useState(false)
   /** Recommendation search replaces Nearby with a single loaded place. */
   const [pinnedSearch, setPinnedSearch] = useState<ExplorePlace | null>(null)
   const [selectedUnscheduledId, setSelectedUnscheduledId] = useState<string | null>(null)
   const [aiPrompt, setAiPrompt] = useState('')
-  const [packsOpen, setPacksOpen] = useState(false)
   const [showJourneyPins, setShowJourneyPins] = useState(true)
   const suggestAbortRef = useRef<AbortController | null>(null)
   const filterMenuRef = useRef<HTMLDivElement>(null)
+  const discoverListRef = useRef<HTMLDivElement>(null)
   /** Nearby layer preference while in Discover — restored when leaving Days. */
-  const discoverNearbyPrefRef = useRef(true)
+  const discoverNearbyPrefRef = useRef(false)
+  const tripRef = useRef(trip)
+  tripRef.current = trip
+  /** Place ids we've already tried to backfill this session. */
+  const enrichAttemptedRef = useRef(new Set<string>())
+  const enrichInFlightRef = useRef(new Set<string>())
+  const detailSavedIdRef = useRef<string | null>(null)
+  detailSavedIdRef.current = detailSavedId
 
   const daySafe = days.includes(activeDay) ? activeDay : (days[0] ?? '')
 
@@ -366,7 +376,7 @@ export function PlanBoard({
         setDetailPlace(null)
         setDetailSavedId(null)
         setPinnedSearch(null)
-        setSearchQuery('')
+        setPinnedSearch(null)
       }
       return !on
     })
@@ -383,7 +393,6 @@ export function PlanBoard({
 
   function clearPinnedSearch() {
     setPinnedSearch(null)
-    setSearchQuery('')
     setDetailPlace(null)
     setDetailSavedId(null)
     setFocusSuggestionId(null)
@@ -419,7 +428,6 @@ export function PlanBoard({
           tags: { source: 'search' },
         }
         setPinnedSearch(place)
-        setShowNearbyPins(true)
         setSuggestCat('all')
         setFocusSuggestionId(place.id)
         setFocusPlaceId(null)
@@ -456,14 +464,13 @@ export function PlanBoard({
             setSuggestCat('sights')
           }
           setPinnedSearch(place)
-          setShowNearbyPins(true)
           setFocusSuggestionId(place.id)
           setFocusPlaceId(null)
           setDetailSavedId(null)
           setDetailPlace(place)
           onStatus?.(
             typed
-              ? `Found ${exploreCategoryLabel(place.category).toLowerCase()} — save from Nearby`
+              ? `Found ${exploreCategoryLabel(place.category).toLowerCase()} — save when ready`
               : 'Loaded place — save to Must see when ready',
           )
           return
@@ -503,7 +510,6 @@ export function PlanBoard({
       }
       setPinnedSearch(place)
       setSuggestCat('sights')
-      setShowNearbyPins(true)
       setFocusSuggestionId(place.id)
       setFocusPlaceId(null)
       setDetailSavedId(null)
@@ -531,9 +537,20 @@ export function PlanBoard({
       city: '',
       lat: place.lat,
       lon: place.lon,
-      notes: place.summary || place.cuisine || '',
+      notes: '',
+      url: place.website || '',
       googleMapsUri: place.tags.googleMapsUri || '',
-      osmId: place.id.startsWith('osm:') ? place.id : '',
+      osmId: place.id.startsWith('osm:') || place.id.startsWith('google:')
+        ? place.id
+        : place.osmId || '',
+      enrichmentSummary: place.summary || '',
+      enrichmentImage: place.images[0] || '',
+      images: place.images.slice(0, 6),
+      openingHours: place.openingHours || '',
+      openingPeriods: place.openingPeriods || [],
+      rating: place.rating,
+      cuisine: place.cuisine || '',
+      googlePhotoName: place.tags.googlePhotoName || '',
     })
     onChange(result.trip)
     setFocusSuggestionId(null)
@@ -541,7 +558,6 @@ export function PlanBoard({
     setDetailSavedId(null)
     if (pinnedSearch && pinnedSearch.id === place.id) {
       setPinnedSearch(null)
-      setSearchQuery('')
     }
     if (!result.created && !result.moved) {
       onStatus?.(`“${place.name}” is already in ${result.sectionTitle}`)
@@ -576,39 +592,6 @@ export function PlanBoard({
     setFocusPlaceId(placeId)
   }
 
-  function applyPack(packId: string) {
-    const pack = findRegionPack(packId)
-    if (!pack) return
-    let next = trip
-    for (const p of pack.places) {
-      let section = next.planSections.find(
-        (s) => s.title.toLowerCase() === p.section.toLowerCase(),
-      )
-      if (!section) {
-        section = {
-          id: createId('SEC'),
-          title: p.section,
-          color: '#60a5fa',
-          icon: '📍',
-          order: next.planSections.length,
-        }
-        next = { ...next, planSections: [...next.planSections, section] }
-      }
-      next = addPlanPlace(next, {
-        sectionId: section.id,
-        name: p.name,
-        city: p.city,
-        lat: p.lat,
-        lon: p.lon,
-        notes: p.notes,
-      })
-    }
-    onChange(next)
-    setMode('discover')
-    setPacksOpen(false)
-    onStatus?.(`Added ideas from ${pack.label}`)
-  }
-
   const activeCatMeta =
     SUGGEST_CATS.find((c) => c.id === suggestCat) ?? SUGGEST_CATS[1]!
   const activeDayIdx = daySafe ? Math.max(0, days.indexOf(daySafe)) : 0
@@ -638,12 +621,113 @@ export function PlanBoard({
     setActiveSectionId(p.sectionId)
     setDetailSavedId(p.id)
     setDetailPlace(planPlaceToExplorePlace(p, section, days, anchor))
+    if (planPlaceNeedsEnrichment(p)) {
+      void refillPlanPlaceEnrichment(placeId)
+    }
+  }
+
+  async function refillPlanPlaceEnrichment(placeId: string) {
+    if (!placesEnabled && !googleApiKey) return
+    if (enrichInFlightRef.current.has(placeId)) return
+    const current = tripRef.current.planPlaces.find((p) => p.id === placeId)
+    if (!current || !planPlaceNeedsEnrichment(current)) return
+    enrichInFlightRef.current.add(placeId)
+    enrichAttemptedRef.current.add(placeId)
+    try {
+      const query = [current.name, current.place, current.city]
+        .filter(Boolean)
+        .join(', ')
+        .trim()
+      if (!query) return
+      const bias =
+        isValidCoord(current.lat, current.lon)
+          ? { lat: current.lat!, lon: current.lon!, radiusM: 8_000 }
+          : mapView
+            ? { lat: mapView.lat, lon: mapView.lon, radiusM: 50_000 }
+            : tripMapAnchor(tripRef.current)
+      const hit = await fetchGoogleTextViaProxy({
+        query,
+        apiKey: googleApiKey || undefined,
+        bias,
+      })
+      if (!hit) return
+      const explored = explorePlaceFromTextHit(
+        hit,
+        { lat: hit.lat, lon: hit.lon },
+        googleApiKey,
+      )
+      // Prefer Google reviews blurb when summary is empty.
+      if (!explored.summary && hit.userRatingCount) {
+        explored.summary = `${hit.userRatingCount} Google reviews`
+      }
+      const latest = tripRef.current
+      const before = latest.planPlaces.find((p) => p.id === placeId)
+      if (!before || !planPlaceNeedsEnrichment(before)) return
+      const enriched = applyExploreEnrichmentToPlanPlace(before, explored)
+      onChange({
+        ...latest,
+        planPlaces: latest.planPlaces.map((p) =>
+          p.id === placeId ? enriched : p,
+        ),
+        updatedAt: nowIso(),
+      })
+      // Refresh open detail if still viewing this place.
+      if (detailSavedIdRef.current === placeId) {
+        const section = latest.planSections.find((s) => s.id === enriched.sectionId)
+        const anchor = mapView
+          ? { lat: mapView.lat, lon: mapView.lon }
+          : tripMapAnchor(latest)
+        setDetailPlace(planPlaceToExplorePlace(enriched, section, days, anchor))
+      }
+    } catch {
+      /* keep thin snapshot; user can reopen later */
+    } finally {
+      enrichInFlightRef.current.delete(placeId)
+    }
   }
 
   function closePlaceDetail() {
     setDetailPlace(null)
     setDetailSavedId(null)
   }
+
+  useEffect(() => {
+    if (!focusPlaceId || mode !== 'discover') return
+    const root = discoverListRef.current
+    if (!root) return
+    const el = root.querySelector(
+      `[data-plan-place-id="${CSS.escape(focusPlaceId)}"]`,
+    ) as HTMLElement | null
+    if (!el) return
+    const raf = requestAnimationFrame(() => {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [focusPlaceId, mode])
+
+  // Quietly backfill photo / hours / summary for places saved before enrichment existed.
+  useEffect(() => {
+    if (!placesEnabled && !googleApiKey) return
+    enrichAttemptedRef.current = new Set()
+    let cancelled = false
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+    void (async () => {
+      await sleep(600)
+      const pending = tripRef.current.planPlaces.filter(
+        (p) => planPlaceNeedsEnrichment(p) && !enrichAttemptedRef.current.has(p.id),
+      )
+      for (const p of pending) {
+        if (cancelled) break
+        await refillPlanPlaceEnrichment(p.id)
+        await sleep(450)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // Only re-run when trip identity or Places availability changes — not every place edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trip.id, placesEnabled, googleApiKey])
 
   function saveLabelFor(place: ExplorePlace): string {
     const section = planSectionForExploreCategory(trip, place.category)
@@ -683,8 +767,48 @@ export function PlanBoard({
 
   return (
     <div className="plan-phone relative flex h-full min-h-0 flex-col">
-      {/* Map band — only the area above Discover/Days; Nearby uses this viewport center */}
-      <div className="plan-map-band relative z-0 min-w-0 flex-1" data-coach="plan-map">
+      {/* Full-bleed map under Discover/Days — fills corner wedges, stays below the sheet */}
+      <div className="absolute inset-0 z-0" data-coach="plan-map">
+        <PlanMapView
+          meta={trip.meta}
+          sections={trip.planSections}
+          places={trip.planPlaces}
+          visibleSectionIds={visibleSectionIds}
+          visibleDays={mapVisibleDays}
+          colorBy={mode === 'days' ? 'day' : 'section'}
+          hideScheduled={false}
+          suggestions={suggestionPins}
+          focusPlaceId={focusPlaceId}
+          focusSuggestionId={focusSuggestionId}
+          linkedItemTypes={linkedItemTypes}
+          initialFocus={initialMapFocus}
+          mapFocusApiRef={mapFocusApiRef}
+          onPlaceClick={(id) => {
+            openSavedPlaceDetail(id)
+          }}
+          onSuggestionClick={(id) => {
+            const place = filteredSuggestions.find((p) => p.id === id)
+            if (place) openSuggestionDetail(place)
+          }}
+          onViewportIdle={(view) => {
+            setMapView((prev) => {
+              if (
+                prev &&
+                Math.abs(prev.lat - view.lat) < 0.0015 &&
+                Math.abs(prev.lon - view.lon) < 0.0015 &&
+                Math.abs(prev.radiusM - view.radiusM) < Math.max(200, view.radiusM * 0.08)
+              ) {
+                return prev
+              }
+              return view
+            })
+          }}
+          className="h-full"
+        />
+      </div>
+
+      {/* Map chrome band — layout space above the sheet; taps pass through to the map */}
+      <div className="plan-map-band pointer-events-none relative z-10 min-w-0 flex-1">
         {/* Layers FAB — mirrors Journey map layers, under Journey|Plan */}
         <div
           className="pointer-events-auto absolute right-3 top-[max(4.35rem,calc(var(--phone-chrome-top)+3.6rem))] z-20"
@@ -702,6 +826,18 @@ export function PlanBoard({
             onToggleJourney={() => setShowJourneyPins((v) => !v)}
             onToggleSection={toggleSectionLayer}
             panelPlacement="below"
+          />
+        </div>
+
+        {/* Search — bottom-left, tucked against Discover/Days sheet */}
+        <div className="pointer-events-auto absolute bottom-[0.35rem] left-3 z-20">
+          <MapSearchBar
+            portal={false}
+            busy={searchBusy}
+            onSearch={(q) => void searchRecommendation(q)}
+            onClear={clearPinnedSearch}
+            hint={pinnedSearch ? pinnedSearch.name : undefined}
+            hintTone={pinnedSearch ? 'pin' : 'quiet'}
           />
         </div>
 
@@ -807,7 +943,9 @@ export function PlanBoard({
                       <span className="text-base leading-none" aria-hidden>
                         📅
                       </span>
-                      <span className="font-semibold">Day {activeDayIdx + 1}</span>
+                      <span className="font-semibold">
+                        Day {activeDayIdx + 1}
+                      </span>
                     </>
                   )}
                   <svg
@@ -870,7 +1008,7 @@ export function PlanBoard({
                               Day {idx + 1}
                             </span>
                             <span className="block text-[11px] text-[var(--ink-muted)]">
-                              {day}
+                              {weekdayShort(day)} · {day.slice(5)}
                             </span>
                           </span>
                         </button>
@@ -881,45 +1019,6 @@ export function PlanBoard({
               </div>
             </div>
           </div>
-        </div>
-
-        <div className="absolute inset-0 z-0">
-          <PlanMapView
-            meta={trip.meta}
-            sections={trip.planSections}
-            places={trip.planPlaces}
-            visibleSectionIds={visibleSectionIds}
-            visibleDays={mapVisibleDays}
-            colorBy={mode === 'days' ? 'day' : 'section'}
-            hideScheduled={false}
-            suggestions={suggestionPins}
-            focusPlaceId={focusPlaceId}
-            focusSuggestionId={focusSuggestionId}
-            linkedItemTypes={linkedItemTypes}
-            initialFocus={initialMapFocus}
-            mapFocusApiRef={mapFocusApiRef}
-            onPlaceClick={(id) => {
-              openSavedPlaceDetail(id)
-            }}
-            onSuggestionClick={(id) => {
-              const place = filteredSuggestions.find((p) => p.id === id)
-              if (place) openSuggestionDetail(place)
-            }}
-            onViewportIdle={(view) => {
-              setMapView((prev) => {
-                if (
-                  prev &&
-                  Math.abs(prev.lat - view.lat) < 0.0015 &&
-                  Math.abs(prev.lon - view.lon) < 0.0015 &&
-                  Math.abs(prev.radiusM - view.radiusM) < Math.max(200, view.radiusM * 0.08)
-                ) {
-                  return prev
-                }
-                return view
-              })
-            }}
-            className="h-full"
-          />
         </div>
       </div>
 
@@ -967,9 +1066,9 @@ export function PlanBoard({
         />
       ) : null}
 
-      {/* Discover / Days sheet — owns the bottom; map is only above this */}
+      {/* Discover / Days sheet — above the full-bleed map; corners show map wedges */}
       <div
-        className="plan-sheet-band relative z-10 flex flex-col"
+        className="plan-sheet-band relative z-20 flex flex-col"
         data-coach="plan-sheet"
       >
         <div
@@ -978,32 +1077,20 @@ export function PlanBoard({
           <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-[var(--ink-muted)]/35" />
 
           {mode === 'discover' ? (
-            <div className="flex min-h-0 flex-1 flex-col gap-3 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
-              <div className="flex items-end justify-between gap-2">
-                <div>
-                  <h2 className="text-lg font-semibold tracking-tight text-[var(--ink)]">
-                    Discover
-                  </h2>
-                  <p className="text-[12px] text-[var(--ink-muted)]">
-                    Save map ideas to lists, then schedule them on Days.
-                  </p>
-                </div>
-                <Chip on={packsOpen} onClick={() => setPacksOpen((v) => !v)}>
-                  Packs
-                </Chip>
+            <div
+              ref={discoverListRef}
+              className="flex min-h-0 flex-1 flex-col gap-3 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3"
+            >
+              <div>
+                <h2 className="text-lg font-semibold tracking-tight text-[var(--ink)]">
+                  Discover
+                </h2>
+                <p className="text-[12px] text-[var(--ink-muted)]">
+                  Save map ideas to lists, then schedule them on Days.
+                </p>
               </div>
 
-              {packsOpen ? (
-                <div className={`flex gap-1.5 ${TOUCH_SCROLL_X}`}>
-                  {REGION_PACKS.map((pack) => (
-                    <Chip key={pack.id} onClick={() => applyPack(pack.id)} title={pack.country}>
-                      + {pack.label}
-                    </Chip>
-                  ))}
-                </div>
-              ) : null}
-
-              {showNearbyPins ? (
+              {showNearbyPins || pinnedSearch ? (
               <div>
                 <div className="mb-1.5 flex items-center justify-between gap-2">
                   <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
@@ -1107,33 +1194,6 @@ export function PlanBoard({
                   onRemove={(placeId) => onChange(removePlanPlace(trip, placeId))}
                 />
               ))}
-
-              <div className="plan-card">
-                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-muted)]">
-                  Find a recommendation
-                </div>
-                <p className="mb-2 text-[11px] text-[var(--ink-muted)]">
-                  Paste a name, address, or Maps link — we’ll load it into Nearby so you can save it.
-                </p>
-                <form
-                  className="flex gap-1.5"
-                  onSubmit={(e) => {
-                    e.preventDefault()
-                    void searchRecommendation(searchQuery)
-                  }}
-                >
-                  <input
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Place name or Maps link…"
-                    className="plan-input"
-                    disabled={searchBusy}
-                  />
-                  <IconButton type="submit" disabled={searchBusy || !searchQuery.trim()}>
-                    {searchBusy ? '…' : 'Go'}
-                  </IconButton>
-                </form>
-              </div>
 
               {onAskAi ? (
                 <div className="plan-card plan-card-ai">
@@ -1269,7 +1329,7 @@ export function PlanBoard({
                               Day {idx + 1}
                             </span>
                             <span className="block text-[10px] text-[var(--ink-muted)]">
-                              {day.slice(5)}
+                              {weekdayShort(day)} · {day.slice(5)}
                               {places.length
                                 ? ` · ${places.length} stop${places.length === 1 ? '' : 's'}`
                                 : ' · empty'}
@@ -1437,6 +1497,7 @@ function ListSection({
           return (
             <div
               key={p.id}
+              data-plan-place-id={p.id}
               className={`plan-list-row ${focused ? 'plan-list-row-on' : ''}`}
             >
               <button
@@ -1553,11 +1614,22 @@ function planPlaceToExplorePlace(
   from: { lat: number; lon: number },
 ): ExplorePlace {
   const dayIdx = p.scheduledDay ? days.indexOf(p.scheduledDay) : -1
-  const summaryBits = [
-    section?.title ? `In ${section.title}` : 'Saved place',
+  const metaBits = [
+    section?.title ? `In ${section.title}` : null,
     dayIdx >= 0 ? `Scheduled · Day ${dayIdx + 1}` : null,
-    p.notes?.trim() || null,
   ].filter(Boolean)
+  const summary =
+    (p.enrichmentSummary || '').trim() ||
+    (p.notes || '').trim() ||
+    metaBits.join(' · ') ||
+    'Saved place'
+
+  const images = (p.images || []).filter(Boolean)
+  if (!images.length && p.enrichmentImage) images.push(p.enrichmentImage)
+  if (!images.length && p.googlePhotoName) {
+    const url = googlePlacePhotoMediaUrl(p.googlePhotoName)
+    if (url) images.push(url)
+  }
 
   return {
     id: p.id,
@@ -1568,21 +1640,23 @@ function planPlaceToExplorePlace(
     osmType: 'plan',
     osmId: p.osmId || '',
     wikidata: '',
-    images: [],
-    summary: summaryBits.join(' · '),
+    images,
+    summary,
     distKm:
       isValidCoord(p.lat, p.lon) && isValidCoord(from.lat, from.lon)
         ? distKm(from, { lat: p.lat!, lon: p.lon! })
         : 0,
-    rating: null,
-    cuisine: '',
+    rating: p.rating ?? null,
+    cuisine: p.cuisine || '',
     website: p.url || '',
     menuUrl: '',
-    openingHours: '',
+    openingHours: p.openingHours || '',
+    openingPeriods: p.openingPeriods?.length ? p.openingPeriods : undefined,
     address: [p.place, p.city].filter(Boolean).join(', '),
     tags: {
-      source: 'plan',
+      source: p.googlePhotoName || p.osmId.startsWith('google:') ? 'google' : 'plan',
       ...(p.googleMapsUri ? { googleMapsUri: p.googleMapsUri } : {}),
+      ...(p.googlePhotoName ? { googlePhotoName: p.googlePhotoName } : {}),
     },
   }
 }

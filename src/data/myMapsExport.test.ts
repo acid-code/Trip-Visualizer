@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { TripRecord } from '../domain/types'
+import { blankPlanPlaceEnrichment, type TripRecord } from '../domain/types'
 import {
   buildJourneyLayerRows,
   buildMyMapsLayers,
@@ -112,6 +112,7 @@ function sampleTrip(over: Partial<TripRecord> = {}): TripRecord {
         scheduledDay: '',
         dayOrder: null,
         linkedItemId: '',
+        ...blankPlanPlaceEnrichment(),
       },
       {
         id: 'PP2',
@@ -128,6 +129,7 @@ function sampleTrip(over: Partial<TripRecord> = {}): TripRecord {
         scheduledDay: '',
         dayOrder: null,
         linkedItemId: '',
+        ...blankPlanPlaceEnrichment(),
       },
       {
         id: 'PP3',
@@ -144,6 +146,7 @@ function sampleTrip(over: Partial<TripRecord> = {}): TripRecord {
         scheduledDay: '2026-06-02',
         dayOrder: 0,
         linkedItemId: 'I1',
+        ...blankPlanPlaceEnrichment(),
       },
     ],
     isExample: false,

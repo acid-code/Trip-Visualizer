@@ -20,6 +20,9 @@ const TEXT_FIELD_MASK = [
   'places.photos',
   'places.websiteUri',
   'places.googleMapsUri',
+  'places.regularOpeningHours',
+  'places.editorialSummary',
+  'places.generativeSummary',
 ].join(',')
 
 type VercelReq = {
@@ -47,6 +50,18 @@ type GooglePlace = {
   photos?: Array<{ name?: string }>
   websiteUri?: string
   googleMapsUri?: string
+  regularOpeningHours?: {
+    weekdayDescriptions?: string[]
+    periods?: Array<{
+      open?: { day?: number; hour?: number; minute?: number }
+      close?: { day?: number; hour?: number; minute?: number }
+    }>
+  }
+  editorialSummary?: { text?: string }
+  generativeSummary?: {
+    overview?: { text?: string }
+    description?: { text?: string }
+  }
 }
 
 function header(req: VercelReq, name: string): string {
@@ -246,6 +261,39 @@ export default async function handler(req: VercelReq, res: VercelRes) {
         : null
     const mapsUri = httpsUrl(gp.googleMapsUri || '')
     const website = httpsUrl(gp.websiteUri || '')
+    const openingHours = (gp.regularOpeningHours?.weekdayDescriptions || [])
+      .map((d) => String(d || '').trim())
+      .filter(Boolean)
+      .join('; ')
+      .slice(0, 800)
+    const openingPeriods: Array<{
+      open: { day: number; hour: number; minute: number }
+      close?: { day: number; hour: number; minute: number }
+    }> = []
+    for (const row of gp.regularOpeningHours?.periods || []) {
+      const o = row.open
+      if (!o || o.day == null || o.hour == null) continue
+      const open = {
+        day: o.day,
+        hour: o.hour,
+        minute: o.minute ?? 0,
+      }
+      const c = row.close
+      const close =
+        c && c.day != null && c.hour != null
+          ? { day: c.day, hour: c.hour, minute: c.minute ?? 0 }
+          : undefined
+      openingPeriods.push({ open, close })
+    }
+    const editorial = String(gp.editorialSummary?.text || '').trim().slice(0, 500)
+    const generative = String(
+      gp.generativeSummary?.overview?.text ||
+        gp.generativeSummary?.description?.text ||
+        '',
+    )
+      .trim()
+      .slice(0, 500)
+    const summary = editorial || generative
 
     res.status(200).json({
       place: {
@@ -263,6 +311,10 @@ export default async function handler(req: VercelReq, res: VercelRes) {
         photoName,
         googleMapsUri: mapsUri,
         website,
+        openingHours:
+          openingHours || (openingPeriods.length ? 'Hours on file' : ''),
+        openingPeriods: openingPeriods.length ? openingPeriods : undefined,
+        summary,
       },
     })
   } catch (err) {

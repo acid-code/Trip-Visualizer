@@ -47,6 +47,20 @@ export function safeHttpsUrl(raw: string | null | undefined, maxLen = 2048): str
   }
 }
 
+/**
+ * Image/media URLs for trip snapshots: https: or same-origin Places photo proxy.
+ * Relative `/api/places-photo?...` must survive sanitize (safeHttpsUrl would wipe them).
+ */
+export function safeMediaUrl(raw: string | null | undefined, maxLen = 2048): string {
+  const s = String(raw ?? '').trim()
+  if (!s) return ''
+  if (s.startsWith('/api/places-photo?')) {
+    // Cap length; keep query intact (photo resource names are long).
+    return s.slice(0, Math.max(maxLen, 4096))
+  }
+  return safeHttpsUrl(s, maxLen)
+}
+
 /** Safe entity / trip ids for Cesium (no HTML/script payload in descriptions). */
 export function sanitizeEntityId(raw: string, maxLen = 64): string {
   const cleaned = String(raw ?? '')

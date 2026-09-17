@@ -50,7 +50,7 @@ function queryParam(req: VercelReq, key: string): string {
   return typeof raw === 'string' ? raw : ''
 }
 
-const PHOTO_NAME_RE = /^places\/[^/]+\/photos\/[^/]+$/
+const PHOTO_NAME_RE = /^places\/[^/]+\/photos\/.+$/
 
 function resolveApiKey(): string {
   return String(process.env.GOOGLE_MAPS_API_KEY ?? '').trim()
@@ -80,10 +80,12 @@ export default async function handler(req: VercelReq, res: VercelRes) {
   const apiKey = resolveApiKey()
 
   if (!PHOTO_NAME_RE.test(name)) {
+    console.error('[places-photo] invalid name', { len: name.length, prefix: name.slice(0, 48) })
     res.status(400).json({ error: 'Invalid photo name' })
     return
   }
   if (!apiKey.startsWith('AIza')) {
+    console.error('[places-photo] missing GOOGLE_MAPS_API_KEY')
     res.status(400).json({ error: 'Google Maps API key not configured on server' })
     return
   }
@@ -92,7 +94,16 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     const url = `https://places.googleapis.com/v1/${name}/media?maxWidthPx=${maxWidthPx}&key=${encodeURIComponent(apiKey)}`
     const upstream = await fetch(url, { redirect: 'follow' })
     if (!upstream.ok) {
-      res.status(upstream.status).json({ error: 'Photo fetch failed' })
+      const body = await upstream.text().catch(() => '')
+      console.error('[places-photo] upstream failed', {
+        status: upstream.status,
+        nameLen: name.length,
+        truncatedLegacy: name.length >= 250 && name.length <= 256,
+        body: body.slice(0, 200),
+      })
+      res.status(upstream.status).json({
+        error: `Photo fetch failed (${upstream.status})`,
+      })
       return
     }
     const ct = upstream.headers.get('content-type') || 'image/jpeg'
@@ -101,6 +112,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     res.status(200).send(buf)
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Photo proxy failed'
+    console.error('[places-photo]', msg)
     res.status(502).json({ error: msg })
   }
 }

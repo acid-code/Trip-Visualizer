@@ -477,6 +477,10 @@ textarea {
   padding-top: var(--phone-chrome-top);
 }
 
+.plan-map-band {
+  min-height: var(--plan-map-min);
+}
+
 .plan-sheet-band {
   height: var(--sheet-plan);
   flex-shrink: 0;

@@ -5,8 +5,9 @@ import { TYPE_COLORS, TYPE_EMOJI } from '../domain/types'
 import { dayIndex, stepOrderMap } from '../data/analytics'
 import { dayColor } from '../data/dayTheme'
 import { sortItems } from '../data/db'
-import { isPlaceholderBase, itemTouchesDay, listTripDays } from '../data/dayBases'
+import { isPlaceholderBase, itemTouchesDay, listTripDays, formatTripDayLabel, weekdayShort } from '../data/dayBases'
 import { createTapTracker, TOUCH_SCROLL_Y } from './scrollGesture'
+import { StepTimeEditor } from './StepTimeEditor'
 
 type Props = {
   meta: TripMeta
@@ -18,6 +19,8 @@ type Props = {
   onSelect: (id: string) => void
   /** Open the detail sheet — list card tap. Defaults to onSelect when omitted. */
   onOpenDetail?: (id: string) => void
+  /** Patch start/end from the compact time editor. */
+  onPatchTimes?: (id: string, start: string, end: string) => void
   onDayFilter: (day: string | null) => void
   onTypeFilter: (type: string | null) => void
   onInsertBetween: (afterId: string | null, beforeId: string | null) => void
@@ -39,6 +42,7 @@ export function TimelinePanel({
   typeFilter,
   onSelect,
   onOpenDetail,
+  onPatchTimes,
   onDayFilter,
   onTypeFilter,
   onInsertBetween,
@@ -50,6 +54,7 @@ export function TimelinePanel({
 }: Props) {
   const horizontal = layout === 'horizontal'
   const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [timeEditId, setTimeEditId] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const prevDetailOpen = useRef(detailOpen)
   const prevDayFilter = useRef(dayFilter)
@@ -159,14 +164,16 @@ export function TimelinePanel({
       <FilterMenu
         label="Day"
         valueLabel={
-          dayFilter == null ? 'All days' : `Day ${dayIndex(meta, dayFilter)}`
+          dayFilter == null
+            ? 'All days'
+            : formatTripDayLabel(dayFilter, dayIndex(meta, dayFilter))
         }
         valueColor={dayFilter ? dayColor(meta, dayFilter) : undefined}
         options={[
           { id: '', label: 'All days', color: undefined },
           ...days.map((d) => ({
             id: d,
-            label: `Day ${dayIndex(meta, d)} · ${d.slice(5)}`,
+            label: formatTripDayLabel(d, dayIndex(meta, d)),
             color: dayColor(meta, d),
             swatch: true,
           })),
@@ -331,9 +338,27 @@ export function TimelinePanel({
                       ) : null}
                     </div>
                     {!horizontal ? (
-                      <span className="text-xs text-stone-400">
-                        {item.date.slice(5)}
-                        {item.start && !placeholder ? ` · ${item.start}` : ''}
+                      <span className="flex items-center gap-1 text-xs text-stone-400">
+                        <span>
+                          {weekdayShort(item.date)} {item.date.slice(5)}
+                        </span>
+                        {item.start && !placeholder ? (
+                          <button
+                            type="button"
+                            className="rounded-full bg-stone-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-stone-600 hover:bg-orange-50 hover:text-orange-800"
+                            title="Edit times"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setConfirmId(null)
+                              onSelect(item.id)
+                              if (onPatchTimes) setTimeEditId(item.id)
+                              else if (onOpenDetail) onOpenDetail(item.id)
+                            }}
+                          >
+                            {item.start}
+                            {item.end ? `–${item.end}` : ''}
+                          </button>
+                        ) : null}
                       </span>
                     ) : null}
                   </div>
@@ -347,9 +372,27 @@ export function TimelinePanel({
                     {placeholder ? 'Add hotel / airport / station' : item.title}
                   </div>
                   {horizontal ? (
-                    <div className="mt-0.5 text-[10px] text-stone-400">
-                      {item.date.slice(5)}
-                      {item.start && !placeholder ? ` · ${item.start}` : ''}
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-stone-400">
+                      <span>
+                        {weekdayShort(item.date)} {item.date.slice(5)}
+                      </span>
+                      {item.start && !placeholder ? (
+                        <button
+                          type="button"
+                          className="rounded-full bg-stone-100 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-stone-600"
+                          title="Edit times"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setConfirmId(null)
+                            onSelect(item.id)
+                            if (onPatchTimes) setTimeEditId(item.id)
+                            else if (onOpenDetail) onOpenDetail(item.id)
+                          }}
+                        >
+                          {item.start}
+                          {item.end ? `–${item.end}` : ''}
+                        </button>
+                      ) : null}
                     </div>
                   ) : (
                     <div className="pl-1 text-xs text-stone-500">
@@ -445,6 +488,24 @@ export function TimelinePanel({
           <p className="px-2 text-sm text-stone-500">No steps yet — tap + to add one.</p>
         )}
       </div>
+      {(() => {
+        const editItem = timeEditId
+          ? items.find((i) => i.id === timeEditId)
+          : null
+        return (
+          <StepTimeEditor
+            open={Boolean(editItem)}
+            title={editItem?.title || 'Step'}
+            start={editItem?.start || ''}
+            end={editItem?.end || ''}
+            onClose={() => setTimeEditId(null)}
+            onSave={(start, end) => {
+              if (!editItem || !onPatchTimes) return
+              onPatchTimes(editItem.id, start, end)
+            }}
+          />
+        )
+      })()}
     </div>
   )
 }

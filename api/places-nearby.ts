@@ -23,6 +23,8 @@ const FIELD_MASK = [
   'places.websiteUri',
   'places.googleMapsUri',
   'places.regularOpeningHours',
+  'places.editorialSummary',
+  'places.generativeSummary',
 ].join(',')
 
 const INCLUDED_TYPES_ALL = [
@@ -121,6 +123,11 @@ type GooglePlace = {
       open?: { day?: number; hour?: number; minute?: number }
       close?: { day?: number; hour?: number; minute?: number }
     }>
+  }
+  editorialSummary?: { text?: string }
+  generativeSummary?: {
+    overview?: { text?: string }
+    description?: { text?: string }
   }
 }
 
@@ -252,7 +259,7 @@ function parseGoogleHours(raw: GooglePlace['regularOpeningHours']): {
     .map((d) => String(d || '').trim())
     .filter(Boolean)
     .join('; ')
-    .slice(0, 400)
+    .slice(0, 800)
   const openingPeriods = []
   for (const row of raw.periods || []) {
     const o = row.open
@@ -306,6 +313,17 @@ function toPlace(gp: GooglePlace, anchor: { lat: number; lon: number }) {
       ? Math.round(gp.rating * 10) / 10
       : null
   const hours = parseGoogleHours(gp.regularOpeningHours)
+  const editorial = clamp(gp.editorialSummary?.text || '', 500)
+  const generative = clamp(
+    gp.generativeSummary?.overview?.text ||
+      gp.generativeSummary?.description?.text ||
+      '',
+    500,
+  )
+  const reviewBlurb =
+    typeof gp.userRatingCount === 'number' && gp.userRatingCount > 0
+      ? clamp(`${gp.userRatingCount} Google reviews`, 80)
+      : ''
 
   return {
     id: `google:${placeId}`,
@@ -317,10 +335,7 @@ function toPlace(gp: GooglePlace, anchor: { lat: number; lon: number }) {
     osmId: placeId,
     wikidata: '',
     images: [] as string[],
-    summary:
-      typeof gp.userRatingCount === 'number' && gp.userRatingCount > 0
-        ? clamp(`${gp.userRatingCount} Google reviews`, 80)
-        : '',
+    summary: editorial || generative || reviewBlurb,
     distKm: distKm(anchor, { lat: lat!, lon: lon! }),
     rating,
     cuisine: '',

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { safeHttpsUrl, sanitizeEntityId, clampText } from '../data/security'
+import { safeHttpsUrl, safeMediaUrl, sanitizeEntityId, clampText } from '../data/security'
 
 export const ITEM_TYPES = [
   'flight',
@@ -195,6 +195,56 @@ export const PlanPlaceSchema = z.object({
   scheduledDay: optionalIsoDate,
   dayOrder: z.number().int().min(0).max(500).nullable().default(null),
   linkedItemId: boundedStr(64),
+  /** Snapshot from Explore / Places so detail sheets keep photo · hours · blurb. */
+  enrichmentSummary: boundedStr(2000).default(''),
+  enrichmentImage: z
+    .unknown()
+    .transform((v) => safeMediaUrl(String(v ?? '')))
+    .default(''),
+  images: z
+    .array(
+      z
+        .unknown()
+        .transform((v) => safeMediaUrl(String(v ?? '')))
+        .pipe(z.string()),
+    )
+    .max(6)
+    .optional()
+    .default([]),
+  openingHours: boundedStr(800).default(''),
+  openingPeriods: z
+    .array(
+      z.object({
+        open: z.object({
+          day: z.number().int().min(0).max(6),
+          hour: z.number().int().min(0).max(23),
+          minute: z.number().int().min(0).max(59),
+        }),
+        close: z
+          .object({
+            day: z.number().int().min(0).max(6),
+            hour: z.number().int().min(0).max(23),
+            minute: z.number().int().min(0).max(59),
+          })
+          .optional(),
+      }),
+    )
+    .max(28)
+    .optional()
+    .default([]),
+  rating: z
+    .union([z.number(), z.null(), z.undefined(), z.nan()])
+    .transform((v) => {
+      if (v == null || (typeof v === 'number' && !Number.isFinite(v))) return null
+      const n = v as number
+      if (n < 0 || n > 5) return null
+      return Math.round(n * 10) / 10
+    })
+    .catch(null)
+    .default(null),
+  cuisine: boundedStr(120).default(''),
+  /** Google photo resource names are long (~260–400 chars); do not truncate. */
+  googlePhotoName: boundedStr(1024).default(''),
 })
 
 export const TripRecordSchema = z.object({
@@ -222,6 +272,30 @@ export type TripItem = z.infer<typeof TripItemSchema>
 export type PlanSection = z.infer<typeof PlanSectionSchema>
 export type PlanPlace = z.infer<typeof PlanPlaceSchema>
 export type TripRecord = z.infer<typeof TripRecordSchema>
+
+/** Defaults for PlanPlace enrichment snapshot fields (tests + hand-built places). */
+export function blankPlanPlaceEnrichment(): Pick<
+  PlanPlace,
+  | 'enrichmentSummary'
+  | 'enrichmentImage'
+  | 'images'
+  | 'openingHours'
+  | 'openingPeriods'
+  | 'rating'
+  | 'cuisine'
+  | 'googlePhotoName'
+> {
+  return {
+    enrichmentSummary: '',
+    enrichmentImage: '',
+    images: [],
+    openingHours: '',
+    openingPeriods: [],
+    rating: null,
+    cuisine: '',
+    googlePhotoName: '',
+  }
+}
 
 /** Allowlist parse — drops / clamps invalid fields rather than trusting client shapes. */
 export function sanitizeTripRecord(input: unknown): TripRecord {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { TripItem, TripRecord } from '../domain/types'
+import { blankPlanPlaceEnrichment, type TripItem, type TripRecord } from '../domain/types'
 import {
   JOURNEY_SECTION_TITLE,
   ensurePlanScaffold,
@@ -113,6 +113,7 @@ describe('reconcileJourneyAndPlan', () => {
           scheduledDay: '',
           dayOrder: null,
           linkedItemId: '',
+          ...blankPlanPlaceEnrichment(),
         },
       ],
     }

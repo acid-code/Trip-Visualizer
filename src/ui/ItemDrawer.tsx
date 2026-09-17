@@ -97,7 +97,8 @@ export function ItemDrawer({ item, onChange, onClose, onDelete }: Props) {
       next.endDate = sanitizeEndDate(next.date, String(value ?? ''))
     }
     if (key === 'start' || key === 'end') {
-      next[key] = sanitizeTime(String(value ?? '')) as TripItem[typeof key]
+      // Keep raw text while typing — sanitize on blur only (HH:MM rejects mid-edit).
+      next[key] = String(value ?? '') as TripItem[typeof key]
     }
     if (key === 'currency') {
       next.currency = normalizeCurrency(String(value ?? 'EUR'))

@@ -41,6 +41,18 @@ export function sanitizeTime(value: string | null | undefined): string {
   return `${h!.padStart(2, '0')}:${m}`
 }
 
+/** True when value is empty or a valid HH:MM (allows clearing a time). */
+export function isValidTimeOrEmpty(value: string | null | undefined): boolean {
+  const v = String(value ?? '').trim()
+  if (!v) return true
+  return TIME_HM.test(v)
+}
+
+/** True when value is a valid HH:MM. */
+export function isValidTime(value: string | null | undefined): boolean {
+  return TIME_HM.test(String(value ?? '').trim())
+}
+
 export function parseOptionalNumber(value: unknown): number | null {
   if (value === '' || value == null) return null
   const n = typeof value === 'number' ? value : Number(String(value).replace(',', '.'))

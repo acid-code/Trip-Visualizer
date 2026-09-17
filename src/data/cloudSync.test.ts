@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createId, nowIso } from './db'
-import { sanitizeTripRecord, type TripRecord } from '../domain/types'
+import { sanitizeTripRecord, blankPlanPlaceEnrichment, type TripRecord } from '../domain/types'
 import type { CloudUser } from './cloudAuth'
 import type { CloudTripDoc, TripInvite, TripMember } from './shareTypes'
 
@@ -188,6 +188,7 @@ function sampleTrip(overrides: Partial<TripRecord> = {}): TripRecord {
         scheduledDay: '2026-09-18',
         dayOrder: 1,
         linkedItemId: itemId,
+        ...blankPlanPlaceEnrichment(),
       },
     ],
     isExample: false,

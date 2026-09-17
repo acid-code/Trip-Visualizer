@@ -3,7 +3,7 @@ import {
   exploreCategoryLabel,
   type ExplorePlace,
 } from '../data/explore'
-import { compactHoursLabel } from '../data/openingHours'
+import { compactHoursLabel, weeklyHoursLines } from '../data/openingHours'
 import { mapsPlaceSearchUrl, openExternalUrl } from '../data/mapsLinks'
 
 type Props = {
@@ -76,6 +76,7 @@ export function ExplorePlaceDetailSheet({
         <div className="space-y-2.5 px-4 py-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <DetailMedia place={place} />
           {place.images.length !== 1 ? <DetailMeta place={place} /> : null}
+          <PlaceHoursSchedule place={place} />
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -142,7 +143,7 @@ export function ExplorePlaceDetailSheet({
                     {dayIdx >= 0 ? `D${dayIdx + 1}` : 'Day'} ▾
                   </button>
                   {dayMenuOpen ? (
-                    <div className="plan-day-pop plan-day-pop-down" role="menu">
+                    <div className="plan-day-pop" role="menu">
                       {days.map((d, i) => (
                         <button
                           key={d}
@@ -261,9 +262,10 @@ function DetailMeta({
             className={`max-w-full truncate rounded-full px-2 py-0.5 text-[11px] ${
               hours.status === 'open'
                 ? 'bg-emerald-500/15 text-[color-mix(in_srgb,#047857_75%,var(--ink))]'
-                : 'bg-[var(--paper-2)] text-[var(--ink-muted)]'
+                : hours.status === 'closed'
+                  ? 'bg-rose-500/12 text-[color-mix(in_srgb,#be123c_70%,var(--ink))]'
+                  : 'bg-[var(--paper-2)] text-[var(--ink-muted)]'
             }`}
-            title={place.openingHours || undefined}
           >
             {compact
               ? hours.status === 'open'
@@ -294,6 +296,39 @@ function DetailMeta({
           Cuisine: {place.cuisine}
         </p>
       ) : null}
+    </div>
+  )
+}
+
+/** Full week for planning — separate from the open-now chip. */
+function PlaceHoursSchedule({ place }: { place: ExplorePlace }) {
+  const weekLines = weeklyHoursLines({
+    periods: place.openingPeriods,
+    openingHours: place.openingHours,
+  })
+  if (!weekLines.length) return null
+  const todayIdx = new Date().getDay()
+  const todayRow = todayIdx === 0 ? 6 : todayIdx - 1
+
+  return (
+    <div className="rounded-xl border border-[var(--glass-border)] bg-[var(--paper-2)] px-2.5 py-2">
+      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ink-muted)]">
+        Opening hours
+      </p>
+      <ul className="grid gap-y-0.5 text-[11px] leading-relaxed">
+        {weekLines.map((line, i) => (
+          <li
+            key={`${i}-${line}`}
+            className={
+              i === todayRow && weekLines.length >= 7
+                ? 'font-semibold text-[var(--ink)]'
+                : 'text-[var(--ink-muted)]'
+            }
+          >
+            {line}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }

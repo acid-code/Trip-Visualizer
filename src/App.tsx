@@ -2251,10 +2251,11 @@ export default function App() {
    */
   const mapItems = useMemo(() => {
     if (!displayTrip) return []
+    const withoutBases = displayTrip.items.filter((i) => !isPlaceholderBase(i))
     if (dayFilter) {
-      return displayTrip.items.filter((i) => itemTouchesDay(i, dayFilter))
+      return withoutBases.filter((i) => itemTouchesDay(i, dayFilter))
     }
-    return displayTrip.items
+    return withoutBases
   }, [displayTrip, dayFilter])
 
   const visibleConnectors = useMemo(() => {
@@ -2764,6 +2765,23 @@ export default function App() {
                   typeFilter={typeFilter}
                   onSelect={highlightStep}
                   onOpenDetail={selectFromList}
+                  onPatchTimes={(id, start, end) => {
+                    void updateActive((t) => ({
+                      ...t,
+                      items: t.items.map((i) =>
+                        i.id === id
+                          ? {
+                              ...i,
+                              start,
+                              end,
+                              source: i.source === 'example' ? 'example' : 'app',
+                              updatedAt: nowIso(),
+                            }
+                          : i,
+                      ),
+                      updatedAt: nowIso(),
+                    }))
+                  }}
                   onDayFilter={setDayFilter}
                   onTypeFilter={setTypeFilter}
                   onInsertBetween={(after, before) => openInsert(after, before)}

@@ -12,6 +12,8 @@ type Props = {
   hintTone?: 'quiet' | 'pin'
   /** When true, render via portal so Cesium / header cannot steal taps. */
   portal?: boolean
+  /** Extra classes on the wrapper. */
+  className?: string
 }
 
 /** Compact map search that expands on focus / tap. */
@@ -22,6 +24,7 @@ export function MapSearchBar({
   hint,
   hintTone = 'quiet',
   portal = true,
+  className = '',
 }: Props) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
@@ -62,7 +65,7 @@ export function MapSearchBar({
         </button>
       ) : (
         <form
-          className="flex w-[min(11.25rem,calc(100vw-8.75rem))] touch-manipulation items-center gap-0.5 rounded-full border border-white/30 bg-black/65 p-0.5 pl-2 shadow-lg backdrop-blur"
+          className="flex w-[min(14rem,calc(100vw-5rem))] touch-manipulation items-center gap-0.5 rounded-full border border-white/30 bg-black/65 p-0.5 pl-2 shadow-lg backdrop-blur"
           onSubmit={submit}
           onPointerDown={(e) => e.stopPropagation()}
         >
@@ -106,13 +109,15 @@ export function MapSearchBar({
     </div>
   )
 
-  if (!portal || typeof document === 'undefined') return ui
+  if (!portal || typeof document === 'undefined') {
+    return <div className={className}>{ui}</div>
+  }
 
   return createPortal(
     <div
       className={`pointer-events-none fixed left-3 top-[max(0.75rem,env(safe-area-inset-top))] ${
         open ? 'z-[55]' : 'z-[38]'
-      }`}
+      } ${className}`}
       data-coach="map-search"
     >
       <div className="pointer-events-auto">{ui}</div>

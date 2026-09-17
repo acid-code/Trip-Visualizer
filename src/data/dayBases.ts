@@ -9,6 +9,32 @@ export function isPlaceholderBase(item: TripItem): boolean {
   return item.tags?.includes('day-base') === true && item.tags?.includes('placeholder') === true
 }
 
+/** "Day 3 · Thu 9/17" — weekday + short date for Steps / Plan. */
+export function formatTripDayLabel(
+  day: string,
+  dayNum: number,
+  opts?: { includeYear?: boolean },
+): string {
+  if (!isIsoDate(day)) return `Day ${dayNum}`
+  const d = new Date(`${day}T12:00:00`)
+  if (Number.isNaN(d.getTime())) return `Day ${dayNum} · ${day.slice(5)}`
+  const weekday = d.toLocaleDateString(undefined, { weekday: 'short' })
+  const rest = d.toLocaleDateString(undefined, {
+    month: 'numeric',
+    day: 'numeric',
+    ...(opts?.includeYear ? { year: '2-digit' as const } : {}),
+  })
+  return `Day ${dayNum} · ${weekday} ${rest}`
+}
+
+/** Short weekday only (Thu). */
+export function weekdayShort(day: string): string {
+  if (!isIsoDate(day)) return ''
+  const d = new Date(`${day}T12:00:00`)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString(undefined, { weekday: 'short' })
+}
+
 /** True if the step starts on `day`, or a hotel stay covers that calendar day. */
 export function itemTouchesDay(item: TripItem, day: string): boolean {
   if (item.date === day) return true

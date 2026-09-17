@@ -3,6 +3,7 @@ import { PLAN_SECTION_COLORS } from '../domain/types'
 import { createId, nowIso, sortItems } from './db'
 import { isPlaceholderBase } from './dayBases'
 import { isValidCoord } from './validate'
+import type { ExplorePlace } from './explore'
 
 export const DEFAULT_PLAN_SECTIONS: Array<Omit<PlanSection, 'id'>> = [
   { title: 'Must see', color: PLAN_SECTION_COLORS[0], icon: '⭐', order: 0 },
@@ -106,6 +107,19 @@ function placeFromItem(
     // every time Journey reconcile runs.
     dayOrder: existing?.dayOrder != null ? existing.dayOrder : dayOrder,
     linkedItemId: item.id,
+    enrichmentSummary: existing?.enrichmentSummary || item.enrichmentSummary || '',
+    enrichmentImage: existing?.enrichmentImage || item.enrichmentImage || '',
+    images:
+      existing?.images?.length
+        ? existing.images
+        : item.enrichmentImage
+          ? [item.enrichmentImage]
+          : [],
+    openingHours: existing?.openingHours || '',
+    openingPeriods: existing?.openingPeriods || [],
+    rating: item.rating ?? existing?.rating ?? null,
+    cuisine: existing?.cuisine || '',
+    googlePhotoName: existing?.googlePhotoName || '',
   }
 }
 
@@ -340,6 +354,14 @@ export function addPlanPlace(
     url?: string
     googleMapsUri?: string
     osmId?: string
+    enrichmentSummary?: string
+    enrichmentImage?: string
+    images?: string[]
+    openingHours?: string
+    openingPeriods?: PlanPlace['openingPeriods']
+    rating?: number | null
+    cuisine?: string
+    googlePhotoName?: string
   },
 ): TripRecord {
   const place: PlanPlace = {
@@ -357,6 +379,14 @@ export function addPlanPlace(
     scheduledDay: '',
     dayOrder: null,
     linkedItemId: '',
+    enrichmentSummary: input.enrichmentSummary || '',
+    enrichmentImage: input.enrichmentImage || '',
+    images: (input.images || []).filter(Boolean).slice(0, 6),
+    openingHours: input.openingHours || '',
+    openingPeriods: input.openingPeriods || [],
+    rating: input.rating ?? null,
+    cuisine: input.cuisine || '',
+    googlePhotoName: input.googlePhotoName || '',
   }
   return {
     ...trip,
@@ -404,6 +434,14 @@ export function upsertPlanPlaceToSection(
     url?: string
     googleMapsUri?: string
     osmId?: string
+    enrichmentSummary?: string
+    enrichmentImage?: string
+    images?: string[]
+    openingHours?: string
+    openingPeriods?: PlanPlace['openingPeriods']
+    rating?: number | null
+    cuisine?: string
+    googlePhotoName?: string
   },
 ): { trip: TripRecord; moved: boolean; created: boolean; sectionTitle: string } {
   const section = trip.planSections.find((s) => s.id === input.sectionId)
@@ -411,7 +449,41 @@ export function upsertPlanPlaceToSection(
   const existing = findSimilarListPlace(trip, input)
   if (existing) {
     if (existing.sectionId === input.sectionId) {
-      return { trip, moved: false, created: false, sectionTitle }
+      // Refresh snapshot fields when re-saving the same place from Explore.
+      const images = (input.images || []).filter(Boolean).slice(0, 6)
+      return {
+        trip: {
+          ...trip,
+          planPlaces: trip.planPlaces.map((p) =>
+            p.id === existing.id
+              ? {
+                  ...p,
+                  place: input.place || p.place,
+                  notes: input.notes ?? p.notes,
+                  url: input.url || p.url,
+                  googleMapsUri: input.googleMapsUri || p.googleMapsUri,
+                  osmId: input.osmId || p.osmId,
+                  lat: input.lat ?? p.lat,
+                  lon: input.lon ?? p.lon,
+                  enrichmentSummary: input.enrichmentSummary || p.enrichmentSummary,
+                  enrichmentImage: input.enrichmentImage || p.enrichmentImage,
+                  images: images.length ? images : p.images,
+                  openingHours: input.openingHours || p.openingHours,
+                  openingPeriods: input.openingPeriods?.length
+                    ? input.openingPeriods
+                    : p.openingPeriods,
+                  rating: input.rating ?? p.rating,
+                  cuisine: input.cuisine || p.cuisine,
+                  googlePhotoName: input.googlePhotoName || p.googlePhotoName,
+                }
+              : p,
+          ),
+          updatedAt: nowIso(),
+        },
+        moved: false,
+        created: false,
+        sectionTitle,
+      }
     }
     return {
       trip: {
@@ -427,6 +499,18 @@ export function upsertPlanPlaceToSection(
                 osmId: input.osmId || p.osmId,
                 lat: input.lat ?? p.lat,
                 lon: input.lon ?? p.lon,
+                enrichmentSummary: input.enrichmentSummary || p.enrichmentSummary,
+                enrichmentImage: input.enrichmentImage || p.enrichmentImage,
+                images: (input.images || []).filter(Boolean).slice(0, 6).length
+                  ? (input.images || []).filter(Boolean).slice(0, 6)
+                  : p.images,
+                openingHours: input.openingHours || p.openingHours,
+                openingPeriods: input.openingPeriods?.length
+                  ? input.openingPeriods
+                  : p.openingPeriods,
+                rating: input.rating ?? p.rating,
+                cuisine: input.cuisine || p.cuisine,
+                googlePhotoName: input.googlePhotoName || p.googlePhotoName,
               }
             : p,
         ),
@@ -581,4 +665,73 @@ export function dayTravelLegs(
     })
   }
   return legs
+}
+
+/** True when a saved Plan place is missing photo / hours / blurb snapshot. */
+export function planPlaceNeedsEnrichment(p: PlanPlace): boolean {
+  const photoName = p.googlePhotoName || ''
+  // Old schema capped names at 256 and truncated Google photo resource ids.
+  const truncatedLegacyPhoto =
+    photoName.startsWith('places/') &&
+    photoName.length >= 250 &&
+    photoName.length <= 256
+  const hasPhoto = Boolean(
+    (p.images && p.images.length > 0) ||
+      p.enrichmentImage ||
+      (photoName && !truncatedLegacyPhoto),
+  )
+  const hasHours = Boolean(
+    (p.openingHours && p.openingHours.trim()) ||
+      (p.openingPeriods && p.openingPeriods.length > 0),
+  )
+  const hasSummary = Boolean(p.enrichmentSummary && p.enrichmentSummary.trim())
+  return truncatedLegacyPhoto || !hasPhoto || !hasHours || !hasSummary
+}
+
+/** Merge Explore/Places snapshot onto a saved Plan place (keeps existing fields). */
+export function applyExploreEnrichmentToPlanPlace(
+  p: PlanPlace,
+  place: ExplorePlace,
+): PlanPlace {
+  // Prefer storing the Google photo resource name; rebuild proxy URLs on read.
+  // Drop legacy truncated names (old 256-char schema) when a fuller name arrives.
+  const legacyTruncated =
+    Boolean(p.googlePhotoName) &&
+    p.googlePhotoName.startsWith('places/') &&
+    p.googlePhotoName.length >= 250 &&
+    p.googlePhotoName.length <= 256
+  const resolvedPhotoName =
+    place.tags.googlePhotoName ||
+    (legacyTruncated ? '' : p.googlePhotoName) ||
+    ''
+  const images = resolvedPhotoName
+    ? []
+    : place.images.filter(Boolean).slice(0, 6)
+  const incomingSummary = (place.summary || '').trim()
+  const existingSummary = (p.enrichmentSummary || '').trim()
+  const isReviewOnly = (s: string) => /^\d+\s+Google reviews$/i.test(s)
+  const ratingBlurb =
+    place.rating != null
+      ? `${place.rating}★${place.tags.source === 'google' ? ' Google' : ''}`
+      : ''
+  const enrichmentSummary =
+    incomingSummary && !isReviewOnly(incomingSummary)
+      ? incomingSummary
+      : existingSummary || incomingSummary || ratingBlurb
+  return {
+    ...p,
+    place: place.address || p.place,
+    url: place.website || p.url,
+    googleMapsUri: place.tags.googleMapsUri || p.googleMapsUri,
+    enrichmentSummary,
+    enrichmentImage: resolvedPhotoName ? '' : images[0] || p.enrichmentImage,
+    images,
+    openingHours: place.openingHours || p.openingHours,
+    openingPeriods: place.openingPeriods?.length
+      ? place.openingPeriods
+      : p.openingPeriods,
+    rating: place.rating ?? p.rating,
+    cuisine: place.cuisine || p.cuisine,
+    googlePhotoName: resolvedPhotoName,
+  }
 }

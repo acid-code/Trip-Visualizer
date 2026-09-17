@@ -35,6 +35,8 @@ const FIELD_MASK = [
   'places.websiteUri',
   'places.googleMapsUri',
   'places.regularOpeningHours',
+  'places.editorialSummary',
+  'places.generativeSummary',
 ].join(',')
 
 /** Broad mix — Journey Explore (client filters by chip). */
@@ -142,6 +144,11 @@ type GooglePlace = {
   websiteUri?: string
   googleMapsUri?: string
   regularOpeningHours?: unknown
+  editorialSummary?: { text?: string }
+  generativeSummary?: {
+    overview?: { text?: string }
+    description?: { text?: string }
+  }
 }
 
 function categoryFromTypes(primary: string, types: string[]): ExploreCategory {
@@ -301,6 +308,17 @@ function googlePlaceToExplore(
   const openingHours =
     weekdayTextFromGoogle(gp.regularOpeningHours) ||
     (openingPeriods.length ? 'Hours on file' : '')
+  const editorial = clampText(gp.editorialSummary?.text || '', 500)
+  const generative = clampText(
+    gp.generativeSummary?.overview?.text ||
+      gp.generativeSummary?.description?.text ||
+      '',
+    500,
+  )
+  const reviewBlurb =
+    typeof gp.userRatingCount === 'number' && gp.userRatingCount > 0
+      ? clampText(`${gp.userRatingCount} Google reviews`, 80)
+      : ''
 
   return {
     id: `google:${placeId}`,
@@ -312,10 +330,7 @@ function googlePlaceToExplore(
     osmId: placeId,
     wikidata: '',
     images: [],
-    summary:
-      typeof gp.userRatingCount === 'number' && gp.userRatingCount > 0
-        ? clampText(`${gp.userRatingCount} Google reviews`, 80)
-        : '',
+    summary: editorial || generative || reviewBlurb,
     distKm: distKm(anchor, { lat: lat!, lon: lon! }),
     rating,
     cuisine: '',
@@ -461,6 +476,10 @@ export type GoogleTextHit = {
   photoName?: string
   googleMapsUri?: string
   website?: string
+  openingHours?: string
+  openingPeriods?: import('./openingHours').OpeningPeriod[]
+  /** Maps-style editorial / AI overview when Places returns it. */
+  summary?: string
 }
 
 const TEXT_FIELD_MASK = [
@@ -475,6 +494,9 @@ const TEXT_FIELD_MASK = [
   'places.photos',
   'places.websiteUri',
   'places.googleMapsUri',
+  'places.regularOpeningHours',
+  'places.editorialSummary',
+  'places.generativeSummary',
 ].join(',')
 
 /**
@@ -537,6 +559,17 @@ export async function searchTextPlaceGoogle(opts: {
     typeof gp.rating === 'number' && Number.isFinite(gp.rating)
       ? Math.round(gp.rating * 10) / 10
       : null
+  const openingPeriods = periodsFromGoogleRegularHours(gp.regularOpeningHours)
+  const openingHours =
+    weekdayTextFromGoogle(gp.regularOpeningHours) ||
+    (openingPeriods.length ? 'Hours on file' : '')
+  const editorial = clampText(gp.editorialSummary?.text || '', 500)
+  const generative = clampText(
+    gp.generativeSummary?.overview?.text ||
+      gp.generativeSummary?.description?.text ||
+      '',
+    500,
+  )
   return {
     lat: lat!,
     lon: lon!,
@@ -552,6 +585,9 @@ export async function searchTextPlaceGoogle(opts: {
     photoName,
     googleMapsUri: safeHttpsUrl(gp.googleMapsUri || ''),
     website: safeHttpsUrl(gp.websiteUri || ''),
+    openingHours,
+    openingPeriods: openingPeriods.length ? openingPeriods : undefined,
+    summary: editorial || generative,
   }
 }
 
@@ -574,9 +610,10 @@ export function explorePlaceFromTextHit(
     wikidata: '',
     images: [],
     summary:
-      hit.userRatingCount && hit.userRatingCount > 0
+      hit.summary ||
+      (hit.userRatingCount && hit.userRatingCount > 0
         ? clampText(`${hit.userRatingCount} Google reviews`, 80)
-        : '',
+        : ''),
     distKm: anchor
       ? distKm(anchor, { lat: hit.lat, lon: hit.lon })
       : 0,
@@ -584,7 +621,8 @@ export function explorePlaceFromTextHit(
     cuisine: '',
     website: hit.website || '',
     menuUrl: '',
-    openingHours: '',
+    openingHours: hit.openingHours || '',
+    openingPeriods: hit.openingPeriods,
     address: hit.address || '',
     tags: {
       source: hit.placeId ? 'google' : 'search',

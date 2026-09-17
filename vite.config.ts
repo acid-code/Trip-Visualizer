@@ -82,13 +82,20 @@ function placesDevProxy(): Plugin {
               1600,
             )
             const apiKey = resolveKey()
-            if (!/^places\/[^/]+\/photos\/[^/]+$/.test(name)) {
+            if (!/^places\/[^/]+\/photos\/.+$/.test(name)) {
+              console.error('[places-photo] invalid name', {
+                len: name.length,
+                prefix: name.slice(0, 64),
+              })
               res.statusCode = 400
+              res.setHeader('Content-Type', 'application/json')
               res.end(JSON.stringify({ error: 'Invalid photo name' }))
               return
             }
             if (!apiKey.startsWith('AIza')) {
+              console.error('[places-photo] missing GOOGLE_MAPS_API_KEY')
               res.statusCode = 400
+              res.setHeader('Content-Type', 'application/json')
               res.end(JSON.stringify({ error: 'Google Maps API key required' }))
               return
             }
@@ -97,8 +104,20 @@ function placesDevProxy(): Plugin {
               { redirect: 'follow' },
             )
             if (!upstream.ok) {
+              const body = await upstream.text().catch(() => '')
+              console.error('[places-photo] upstream failed', {
+                status: upstream.status,
+                nameLen: name.length,
+                truncatedLegacy: name.length >= 250 && name.length <= 256,
+                body: body.slice(0, 200),
+              })
               res.statusCode = upstream.status
-              res.end(JSON.stringify({ error: 'Photo fetch failed' }))
+              res.setHeader('Content-Type', 'application/json')
+              res.end(
+                JSON.stringify({
+                  error: `Photo fetch failed (${upstream.status})`,
+                }),
+              )
               return
             }
             const ct = upstream.headers.get('content-type') || 'image/jpeg'
@@ -108,6 +127,7 @@ function placesDevProxy(): Plugin {
             res.setHeader('Cache-Control', 'public, max-age=86400')
             res.end(buf)
           } catch (err) {
+            console.error('[places-photo] proxy error', err)
             res.statusCode = 502
             res.setHeader('Content-Type', 'application/json')
             res.end(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { remapPlanPlaceLinks } from './db'
-import type { PlanPlace } from '../domain/types'
+import { blankPlanPlaceEnrichment, type PlanPlace } from '../domain/types'
 
 describe('remapPlanPlaceLinks', () => {
   it('remaps section and linked Journey item ids', () => {
@@ -20,6 +20,7 @@ describe('remapPlanPlaceLinks', () => {
         scheduledDay: '2026-09-18',
         dayOrder: 1,
         linkedItemId: 'S_OLD',
+        ...blankPlanPlaceEnrichment(),
       },
       {
         id: 'PP_ORPHAN',
@@ -36,6 +37,7 @@ describe('remapPlanPlaceLinks', () => {
         scheduledDay: '',
         dayOrder: null,
         linkedItemId: '',
+        ...blankPlanPlaceEnrichment(),
       },
     ]
     const sectionIdMap = new Map([['SEC_OLD', 'SEC_NEW']])
@@ -74,6 +76,7 @@ describe('remapPlanPlaceLinks', () => {
         scheduledDay: '',
         dayOrder: null,
         linkedItemId: 'MISSING',
+        ...blankPlanPlaceEnrichment(),
       },
     ]
     const next = remapPlanPlaceLinks(places, new Map(), new Map(), () => 'PP_NEW')

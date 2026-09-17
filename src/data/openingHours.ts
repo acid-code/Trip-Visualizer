@@ -79,7 +79,7 @@ export function weekdayTextFromGoogle(raw: unknown): string {
     .map((d) => String(d || '').trim())
     .filter(Boolean)
     .join('; ')
-    .slice(0, 400)
+    .slice(0, 800)
 }
 
 function parseHm(hm: string): number | null {
@@ -294,6 +294,76 @@ const WEEKDAY_LONG = [
   'saturday',
 ] as const
 
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+function formatClock(c: OpeningClock): string {
+  return `${pad2(c.hour)}:${pad2(c.minute)}`
+}
+
+/** Build Mon→Sun lines from structured periods (when weekday text is missing). */
+export function weeklyHoursFromPeriods(
+  periods: OpeningPeriod[] | null | undefined,
+): string[] {
+  if (!periods?.length) return []
+  const byDay: string[][] = Array.from({ length: 7 }, () => [])
+  for (const p of periods) {
+    const open = formatClock(p.open)
+    const close = p.close ? formatClock(p.close) : '24h'
+    const label =
+      p.close &&
+      p.close.day === p.open.day &&
+      p.close.hour === 23 &&
+      p.close.minute >= 59 &&
+      p.open.hour === 0 &&
+      p.open.minute === 0
+        ? 'Open 24 hours'
+        : `${open}–${close}`
+    byDay[p.open.day]!.push(label)
+  }
+  // Present Mon→Sun (planning order), not Sun→Sat.
+  const order = [1, 2, 3, 4, 5, 6, 0]
+  return order.map((day) => {
+    const slots = byDay[day]!
+    const hours = slots.length ? [...new Set(slots)].join(', ') : 'Closed'
+    return `${WEEKDAY_SHORT[day]}: ${hours}`
+  })
+}
+
+/**
+ * Split stored weekday text (“Monday: 9–5; Tuesday: Closed; …”) into display lines.
+ * Falls back to periods when the blob is empty or “Hours on file”.
+ */
+export function weeklyHoursLines(args: {
+  periods?: OpeningPeriod[] | null
+  openingHours?: string | null
+}): string[] {
+  const raw = String(args.openingHours || '').trim()
+  if (raw && raw !== 'Hours on file') {
+    const parts = raw
+      .split(/[;\n|]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (parts.length >= 2) {
+      return parts.map((p) => {
+        // “Monday: 9:00 AM – 6:00 PM” → “Mon: 9:00 AM – 6:00 PM”
+        const m = /^(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s*:\s*(.*)$/i.exec(
+          p,
+        )
+        if (!m) return p
+        const idx = WEEKDAY_LONG.indexOf(m[1]!.toLowerCase() as (typeof WEEKDAY_LONG)[number])
+        if (idx < 0) return p
+        return `${WEEKDAY_SHORT[idx]}: ${m[2]!.trim()}`
+      })
+    }
+    if (parts.length === 1 && parts[0]!.length <= 60) return parts
+  }
+  return weeklyHoursFromPeriods(args.periods)
+}
+
 /** Pull just today’s line from Google/OSM weekday text (“Monday: 9–5; …” → “9–5”). */
 export function todayHoursSnippet(
   openingHours: string | undefined | null,
@@ -313,7 +383,7 @@ export function todayHoursSnippet(
   return ''
 }
 
-/** Quiet label for detail sheets — never dump the full week. */
+/** Quiet label for detail sheets — open/closed now; pair with weeklyHoursLines for planning. */
 export function compactHoursLabel(args: {
   periods?: OpeningPeriod[] | null
   openingHours?: string | null
@@ -342,7 +412,7 @@ export function compactHoursLabel(args: {
   if (status === 'closed') {
     return {
       status,
-      label: today && !/^closed\b/i.test(today) ? `Closed · ${today}` : 'Closed',
+      label: today && !/^closed\b/i.test(today) ? `Closed · ${today}` : 'Closed now',
     }
   }
   if (today) return { status: 'unknown', label: today }
