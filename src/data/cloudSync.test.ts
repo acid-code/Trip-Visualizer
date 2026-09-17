@@ -22,13 +22,14 @@ const partner: CloudUser = {
 
 let currentUser: CloudUser = owner
 
-const setDocMock = vi.fn(async () => undefined)
-const getDocMock = vi.fn()
-const getDocsMock = vi.fn()
-const updateDocMock = vi.fn(async () => undefined)
-const onSnapshotMock = vi.fn()
-const batchSetMock = vi.fn()
-const batchCommitMock = vi.fn(async () => undefined)
+type MockFn = (...args: unknown[]) => unknown
+const setDocMock = vi.fn<MockFn>(async () => undefined)
+const getDocMock = vi.fn<MockFn>()
+const getDocsMock = vi.fn<MockFn>()
+const updateDocMock = vi.fn<MockFn>(async () => undefined)
+const onSnapshotMock = vi.fn<MockFn>()
+const batchSetMock = vi.fn<MockFn>()
+const batchCommitMock = vi.fn<MockFn>(async () => undefined)
 
 vi.mock('firebase/firestore', () => ({
   doc: (_db: unknown, ...segments: string[]) => ({
@@ -424,19 +425,21 @@ describe('pullSharedTrip / watchSharedTrip', () => {
   it('watchSharedTrip forwards decoded trips and errors', () => {
     const onTrip = vi.fn()
     const onError = vi.fn()
-    let nextCb: ((snap: { exists: () => boolean; data: () => unknown }) => void) | null =
-      null
-    let errCb: ((err: Error) => void) | null = null
-    onSnapshotMock.mockImplementation((_ref, next, err) => {
-      nextCb = next
-      errCb = err
+    type Snap = { exists: () => boolean; data: () => unknown }
+    const handlers: {
+      next: ((snap: Snap) => void) | undefined
+      err: ((err: Error) => void) | undefined
+    } = { next: undefined, err: undefined }
+    onSnapshotMock.mockImplementation((...args: unknown[]) => {
+      handlers.next = args[1] as (snap: Snap) => void
+      handlers.err = args[2] as (err: Error) => void
       return vi.fn()
     })
     const unsub = watchSharedTrip('T1', onTrip, onError)
     expect(typeof unsub).toBe('function')
 
     const trip = sampleTrip({ cloudTripId: 'T1', shareEnabled: true })
-    nextCb?.(
+    handlers.next?.(
       snapExists({
         ownerUid: owner.uid,
         ownerEmail: owner.email,
@@ -447,12 +450,13 @@ describe('pullSharedTrip / watchSharedTrip', () => {
       } satisfies CloudTripDoc),
     )
     expect(onTrip).toHaveBeenCalled()
-    expect(onTrip.mock.calls[0]![0].planPlaces[0].name).toBe('Louvre')
+    const firstTrip = onTrip.mock.calls[0]![0] as TripRecord
+    expect(firstTrip.planPlaces[0]?.name).toBe('Louvre')
 
-    nextCb?.(snapMissing())
+    handlers.next?.(snapMissing())
     expect(onTrip).toHaveBeenCalledTimes(1)
 
-    nextCb?.(
+    handlers.next?.(
       snapExists({
         ownerUid: owner.uid,
         ownerEmail: owner.email,
@@ -464,7 +468,7 @@ describe('pullSharedTrip / watchSharedTrip', () => {
     )
     expect(onError).toHaveBeenCalled()
 
-    errCb?.(new Error('network'))
+    handlers.err?.(new Error('network'))
     expect(onError).toHaveBeenCalledWith(expect.any(Error))
   })
 })
