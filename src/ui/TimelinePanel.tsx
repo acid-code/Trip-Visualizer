@@ -296,10 +296,17 @@ export function TimelinePanel({
                       }`
                 }`}
               >
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   onClick={() => openCard(item.id)}
-                  className={`w-full text-left ${horizontal ? 'px-2.5 py-2.5' : 'px-3 py-3'} hover:border-orange-200`}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      openCard(item.id)
+                    }
+                  }}
+                  className={`w-full cursor-pointer text-left ${horizontal ? 'px-2.5 py-2.5' : 'px-3 py-3'} hover:border-orange-200`}
                 >
                   {!horizontal ? <span className="step-dot" style={{ color }} /> : null}
                   <div
@@ -410,7 +417,7 @@ export function TimelinePanel({
                   {!horizontal && !placeholder && item.notes ? (
                     <p className="mt-1 line-clamp-2 pl-1 text-xs text-stone-500">{item.notes}</p>
                   ) : null}
-                </button>
+                </div>
 
                 {onDeleteStep && !lockMode ? (
                   <div
