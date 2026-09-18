@@ -90,9 +90,22 @@ describe('scroll surface source contracts', () => {
     expect(css).toContain('clamp(15px')
     expect(css).toContain('--sheet-plan')
     expect(css).toContain('100dvh')
+    expect(css).toContain('--tongue-pad')
+    expect(css).toContain('safe-area-inset-bottom')
     expect(css).toContain('.plan-sheet-band')
     expect(readSrc('src/ui/PlanBoard.tsx')).toContain('plan-sheet-band')
     expect(readSrc('src/ui/PlanBoard.tsx')).toContain('plan-map-band')
+  })
+
+  it('marks installed PWA for bottom safe-area floor', () => {
+    const src = readSrc('src/main.tsx')
+    expect(src).toContain('is-pwa')
+    expect(src).toContain('display-mode: standalone')
+    expect(src).toContain('isStandaloneDisplay')
+    expect(src).toContain('visualViewport')
+    expect(src).toContain('--app-vh')
+    // Chrome tabs must not sync visualViewport height (URL bar causes gaps).
+    expect(src).toMatch(/if\s*\(\s*!isStandaloneDisplay\(\)\s*\)\s*return/)
   })
 
   it('Modern map look uses esri-dark stack', () => {

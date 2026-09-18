@@ -2,16 +2,23 @@ import * as XLSX from 'xlsx'
 import {
   ITEM_STATUSES,
   ITEM_TYPES,
+  PLAN_SECTION_COLORS,
+  PlanPlaceSchema,
+  blankPlanPlaceEnrichment,
   type ItemStatus,
   type ItemType,
+  type PlanPlace,
+  type PlanSection,
   type TripItem,
   type TripMeta,
 } from '../domain/types'
 import { createId, sortItems } from './db'
 import { normalizeCurrency } from './fx'
+import { DEFAULT_PLAN_SECTIONS, JOURNEY_SECTION_TITLE } from './planBoard'
 import { MAX_SCHEDULE_ROWS } from './security'
-import { parseLat, parseLon, sanitizeEndDate } from './validate'
+import { isValidCoord, parseLat, parseLon, sanitizeEndDate } from './validate'
 import { sanitizeTripItem, sanitizeTripMeta } from '../domain/types'
+import { isPlaceholderBase } from './dayBases'
 
 const HEADER_ALIASES: Record<string, string> = {
   id: 'id',
@@ -449,9 +456,264 @@ function parseV2Sheets(
   return items
 }
 
+const PLAN_HEADER_ALIASES: Record<string, string> = {
+  section: 'section',
+  list: 'section',
+  bucket: 'section',
+  name: 'name',
+  title: 'name',
+  place: 'place',
+  address: 'place',
+  city: 'city',
+  day: 'day',
+  scheduled_day: 'day',
+  scheduled: 'day',
+  date: 'day',
+  notes: 'notes',
+  note: 'notes',
+  lat: 'lat',
+  lon: 'lon',
+  lng: 'lon',
+  longitude: 'lon',
+  latitude: 'lat',
+  url: 'url',
+  link: 'url',
+  maps_url: 'url',
+  osm_id: 'osm_id',
+  osmid: 'osm_id',
+  day_order: 'day_order',
+  order: 'day_order',
+}
+
+function isJourneyPlanSectionTitle(title: string): boolean {
+  const t = title.trim().toLowerCase()
+  return (
+    t === JOURNEY_SECTION_TITLE.toLowerCase() ||
+    t === 'on the trip' ||
+    t === 'journey'
+  )
+}
+
+function findPlanHeaderRowIndex(aoa: unknown[][]): number {
+  for (let i = 0; i < Math.min(aoa.length, 30); i++) {
+    const row = aoa[i] ?? []
+    const mapped = new Set(
+      row
+        .map((c) => PLAN_HEADER_ALIASES[normalizeHeader(c)])
+        .filter((k): k is string => Boolean(k)),
+    )
+    if (mapped.has('section') && (mapped.has('name') || mapped.has('place'))) return i
+    if (mapped.has('name') && mapped.has('lat') && mapped.has('lon')) return i
+  }
+  return 0
+}
+
+function mapPlanRawRow(raw: Record<string, unknown>): Record<string, unknown> {
+  const row: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    const nk = PLAN_HEADER_ALIASES[normalizeHeader(k)]
+    if (nk) row[nk] = v
+  }
+  return row
+}
+
+function parseDayOrder(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const n = typeof value === 'number' ? value : Number(String(value).trim())
+  if (!Number.isFinite(n) || n < 0 || n > 500) return null
+  return Math.round(n)
+}
+
+function normPlanKey(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function coordsNear(
+  a: { lat: number | null; lon: number | null },
+  b: { lat: number | null; lon: number | null },
+  eps = 0.0008,
+): boolean {
+  if (!isValidCoord(a.lat, a.lon) || !isValidCoord(b.lat, b.lon)) return false
+  return Math.abs(a.lat! - b.lat!) < eps && Math.abs(a.lon! - b.lon!) < eps
+}
+
+/**
+ * Re-link scheduled Plan ideas to Journey steps after Excel import (ids change).
+ * Avoids reconcile creating duplicate steps when Steps already has the same stop.
+ */
+export function linkImportedPlanPlacesToItems(
+  places: PlanPlace[],
+  items: TripItem[],
+): PlanPlace[] {
+  const candidates = items.filter((i) => !isPlaceholderBase(i) && Boolean(i.date))
+  const used = new Set<string>()
+
+  return places.map((p) => {
+    if (!p.scheduledDay) return { ...p, linkedItemId: '' }
+
+    const dayItems = candidates.filter((i) => i.date === p.scheduledDay && !used.has(i.id))
+    const nameKey = normPlanKey(p.name)
+    let match =
+      dayItems.find((i) => normPlanKey(i.title) === nameKey) ||
+      dayItems.find((i) => coordsNear(i, p)) ||
+      dayItems.find((i) => {
+        const t = normPlanKey(i.title)
+        const pl = normPlanKey(i.place || '')
+        return (
+          (nameKey.length >= 4 && (t.includes(nameKey) || nameKey.includes(t))) ||
+          (pl && pl === nameKey)
+        )
+      })
+
+    if (match) {
+      used.add(match.id)
+      return { ...p, linkedItemId: match.id, scheduledDay: match.date }
+    }
+    return { ...p, linkedItemId: '' }
+  })
+}
+
+/**
+ * Decide whether Excel Plan wins or an existing local Plan is kept (merge/replace).
+ * - Non-empty Plan rows in the workbook always win (backup restore).
+ * - Empty / missing Plan keeps local Plan when replacing a trip (avoid wiping ideas).
+ */
+export function resolvePlanImport(args: {
+  hasPlanSheet: boolean
+  planSections: PlanSection[]
+  planPlaces: PlanPlace[]
+  existing?: { planSections?: PlanSection[]; planPlaces?: PlanPlace[] } | null
+}): { planSections: PlanSection[]; planPlaces: PlanPlace[]; fromExcel: boolean } {
+  if (args.planPlaces.length > 0) {
+    return {
+      planSections: args.planSections,
+      planPlaces: args.planPlaces,
+      fromExcel: true,
+    }
+  }
+  const existingPlaces = args.existing?.planPlaces ?? []
+  const existingSections = args.existing?.planSections ?? []
+  if (existingPlaces.length > 0 || existingSections.length > 0) {
+    return {
+      planSections: existingSections,
+      planPlaces: existingPlaces,
+      fromExcel: false,
+    }
+  }
+  return {
+    planSections: args.planSections,
+    planPlaces: [],
+    fromExcel: args.hasPlanSheet,
+  }
+}
+
+function parsePlanSheet(sheet: XLSX.WorkSheet | undefined): {
+  hasPlanSheet: boolean
+  planSections: PlanSection[]
+  planPlaces: PlanPlace[]
+} {
+  if (!sheet) {
+    return { hasPlanSheet: false, planSections: [], planPlaces: [] }
+  }
+
+  const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
+    defval: '',
+    raw: true,
+  })
+  if (!aoa.length) {
+    return { hasPlanSheet: true, planSections: [], planPlaces: [] }
+  }
+
+  const headerIdx = findPlanHeaderRowIndex(aoa)
+  const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+    range: headerIdx,
+    defval: '',
+    raw: true,
+  })
+
+  const sectionByKey = new Map<string, PlanSection>()
+  const places: PlanPlace[] = []
+  let customOrder = DEFAULT_PLAN_SECTIONS.length + 2
+
+  const ensureSection = (titleRaw: string): PlanSection | null => {
+    const title = titleRaw.trim() || 'Maybe'
+    if (isJourneyPlanSectionTitle(title)) return null
+    const key = title.toLowerCase()
+    const existing = sectionByKey.get(key)
+    if (existing) return existing
+    const def = DEFAULT_PLAN_SECTIONS.find((s) => s.title.toLowerCase() === key)
+    const section: PlanSection = {
+      id: createId('SEC'),
+      title: def?.title || title.slice(0, 80) || 'Ideas',
+      color: def?.color || PLAN_SECTION_COLORS[sectionByKey.size % PLAN_SECTION_COLORS.length]!,
+      icon: def?.icon || '📍',
+      order: def?.order ?? customOrder++,
+    }
+    sectionByKey.set(key, section)
+    return section
+  }
+
+  for (const raw of rawRows) {
+    if (places.length >= MAX_SCHEDULE_ROWS) break
+    const row = mapPlanRawRow(raw)
+    const sectionTitle = String(row.section ?? '').trim()
+    const name = String(row.name ?? '').trim()
+    const placeText = String(row.place ?? '').trim()
+    const city = String(row.city ?? '').trim()
+    const notes = String(row.notes ?? '').trim()
+    const blob = `${sectionTitle} ${name} ${placeText}`.toLowerCase()
+    if (!sectionTitle && !name && !placeText && !city && !notes) continue
+    if (blob.includes('no plan ideas')) continue
+    if (!name && !placeText) continue
+    if (isJourneyPlanSectionTitle(sectionTitle)) continue
+
+    const section = ensureSection(sectionTitle || 'Maybe')
+    if (!section) continue
+
+    const lat = parseLat(row.lat)
+    const lon = parseLon(row.lon)
+    const day = excelDateToIso(row.day)
+    const dayOrder = parseDayOrder(row.day_order)
+
+    const parsed = PlanPlaceSchema.safeParse({
+      id: createId('PP'),
+      sectionId: section.id,
+      name: name || placeText || 'Place',
+      place: placeText || name,
+      city,
+      notes,
+      lat,
+      lon,
+      url: String(row.url ?? ''),
+      googleMapsUri: '',
+      osmId: String(row.osm_id ?? ''),
+      scheduledDay: day,
+      dayOrder,
+      linkedItemId: '',
+      ...blankPlanPlaceEnrichment(),
+    })
+    if (parsed.success) places.push(parsed.data)
+  }
+
+  return {
+    hasPlanSheet: true,
+    planSections: [...sectionByKey.values()].sort((a, b) => a.order - b.order),
+    planPlaces: places,
+  }
+}
+
 export function parseTripWorkbook(data: ArrayBuffer): {
   meta: TripMeta
   items: TripItem[]
+  hasPlanSheet: boolean
+  planSections: PlanSection[]
+  planPlaces: PlanPlace[]
 } {
   const bytes =
     data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data as ArrayBuffer)
@@ -482,9 +744,14 @@ export function parseTripWorkbook(data: ArrayBuffer): {
     throw new Error(`Missing Steps or Schedule sheet (found: ${names})`)
   }
 
+  const plan = parsePlanSheet(findSheet(wb, 'Plan'))
+
   return {
     meta,
     items: sortItems(items),
+    hasPlanSheet: plan.hasPlanSheet,
+    planSections: plan.planSections,
+    planPlaces: plan.planPlaces,
   }
 }
 

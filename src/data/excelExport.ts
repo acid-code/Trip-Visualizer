@@ -655,34 +655,69 @@ function buildCashSheet(wb: ExcelJS.Workbook, trip: TripRecord, items: TripItem[
   }
 }
 
+/** Plan list columns — re-imported on Excel restore (Journey mirrors stay on Steps). */
+export const PLAN_COLS = [
+  'Section',
+  'Name',
+  'Place',
+  'City',
+  'Day',
+  'Notes',
+  'Lat',
+  'Lon',
+  'URL',
+  'OsmId',
+  'DayOrder',
+] as const
+
+function isJourneyPlanSectionTitle(title: string): boolean {
+  const t = title.trim().toLowerCase()
+  return t === 'on the trip' || t === 'journey'
+}
+
 function buildPlanSheet(wb: ExcelJS.Workbook, trip: TripRecord) {
   const sheet = wb.addWorksheet('Plan', {
     views: [{ state: 'frozen', ySplit: 1 }],
   })
-  sheet.getCell('A1').value = 'Section'
-  sheet.getCell('B1').value = 'Name'
-  sheet.getCell('C1').value = 'City'
-  sheet.getCell('D1').value = 'Day'
-  sheet.getCell('E1').value = 'Notes'
-  sheet.getCell('F1').value = 'Lat'
-  sheet.getCell('G1').value = 'Lon'
-  styleHeaderRow(sheet.getRow(1), 7)
-  const sections = new Map(trip.planSections.map((s) => [s.id, s.title]))
+  for (let c = 0; c < PLAN_COLS.length; c++) {
+    sheet.getCell(1, c + 1).value = PLAN_COLS[c]
+  }
+  styleHeaderRow(sheet.getRow(1), PLAN_COLS.length)
+  const sections = new Map(trip.planSections.map((s) => [s.id, s]))
   let r = 2
   for (const p of trip.planPlaces) {
-    sheet.getCell(r, 1).value = sections.get(p.sectionId) || p.sectionId
+    const section = sections.get(p.sectionId)
+    const sectionTitle = section?.title || p.sectionId
+    // Journey mirrors are rebuilt from Steps on import — skip to avoid duplicates.
+    if (isJourneyPlanSectionTitle(sectionTitle)) continue
+    const sectionHex = section?.color || '#94a3b8'
+    const sectionFill = mixHex(sectionHex, 0.55)
+    const rowTint = mixHex(sectionHex, 0.88)
+    sheet.getCell(r, 1).value = sectionTitle
     sheet.getCell(r, 2).value = p.name
-    sheet.getCell(r, 3).value = p.city
-    sheet.getCell(r, 4).value = p.scheduledDay || ''
-    sheet.getCell(r, 5).value = p.notes
-    sheet.getCell(r, 6).value = p.lat
-    sheet.getCell(r, 7).value = p.lon
+    sheet.getCell(r, 3).value = p.place
+    sheet.getCell(r, 4).value = p.city
+    sheet.getCell(r, 5).value = p.scheduledDay || ''
+    sheet.getCell(r, 6).value = p.notes
+    sheet.getCell(r, 7).value = p.lat
+    sheet.getCell(r, 8).value = p.lon
+    sheet.getCell(r, 9).value = p.url || p.googleMapsUri || ''
+    sheet.getCell(r, 10).value = p.osmId || ''
+    sheet.getCell(r, 11).value = p.dayOrder ?? ''
+    const excelRow = sheet.getRow(r)
+    for (let c = 1; c <= PLAN_COLS.length; c++) {
+      excelRow.getCell(c).fill = solid(c === 1 ? sectionFill : rowTint)
+      excelRow.getCell(c).border = thinBorder()
+    }
+    if (p.scheduledDay) {
+      excelRow.getCell(5).fill = solid(mixHex(dayColor(trip.meta, p.scheduledDay), 0.75))
+    }
     r += 1
   }
   if (r === 2) {
     sheet.getCell(2, 1).value = '(no plan ideas yet)'
   }
-  setColWidths(sheet, [14, 28, 14, 12, 32, 10, 10])
+  setColWidths(sheet, [14, 28, 22, 14, 12, 32, 10, 10, 22, 12, 10])
 }
 
 export function buildTripWorkbook(trip: TripRecord): ExcelJS.Workbook {

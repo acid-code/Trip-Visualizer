@@ -1,4 +1,4 @@
-import type { TripItem } from '../domain/types'
+import type { PlanPlace, TripItem } from '../domain/types'
 import { lookupAirport } from './airports'
 import { nowIso } from './db'
 import { fetchGoogleTextViaProxy } from './placesGoogle'
@@ -456,6 +456,53 @@ export async function pinTripItemsOnMap(
     onProgress?.(done, needIdx.length)
     // Extra pause when falling back to Nominatim (Google is already paced by proxy)
     if (!opts?.useGooglePlaces && done < needIdx.length) await sleep(200)
+  }
+  return out
+}
+
+/**
+ * Geocode Plan list pins missing coordinates (Excel restore without Lat/Lon).
+ * Cap work so large boards don't stall import.
+ */
+export async function pinPlanPlacesOnMap(
+  places: PlanPlace[],
+  onProgress?: (done: number, total: number) => void,
+  opts?: { max?: number },
+): Promise<PlanPlace[]> {
+  const max = opts?.max ?? 60
+  const needIdx = places
+    .map((p, i) => {
+      if (isValidCoord(p.lat, p.lon)) return -1
+      const q = [p.place, p.name, p.city].filter(Boolean).join(', ').trim()
+      return q ? i : -1
+    })
+    .filter((i) => i >= 0)
+    .slice(0, max)
+
+  if (!needIdx.length) {
+    onProgress?.(places.length, places.length)
+    return places
+  }
+
+  const out = [...places]
+  let done = 0
+  for (const i of needIdx) {
+    const p = out[i]!
+    const q = [p.place, p.name, p.city].filter(Boolean).join(', ')
+    const hit = await lookupPlace(q)
+    if (hit && isValidCoord(hit.lat, hit.lon)) {
+      out[i] = {
+        ...p,
+        lat: hit.lat,
+        lon: hit.lon,
+        place: p.place || hit.address || p.place,
+        city: p.city || hit.city || p.city,
+        osmId: p.osmId || hit.osmId || '',
+      }
+    }
+    done += 1
+    onProgress?.(done, needIdx.length)
+    if (done < needIdx.length) await sleep(200)
   }
   return out
 }

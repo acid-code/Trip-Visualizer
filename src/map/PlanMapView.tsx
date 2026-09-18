@@ -56,6 +56,8 @@ type Props = {
   hideScheduled?: boolean
   suggestions?: PlanSuggestionPin[]
   focusPlaceId?: string | null
+  /** Also highlight Journey-mirrored pins that share this linked step id. */
+  focusLinkedItemId?: string | null
   focusSuggestionId?: string | null
   onPlaceClick?: (placeId: string) => void
   onSuggestionClick?: (suggestionId: string) => void
@@ -164,6 +166,7 @@ export function PlanMapView({
   hideScheduled = false,
   suggestions = [],
   focusPlaceId,
+  focusLinkedItemId = null,
   focusSuggestionId,
   onPlaceClick,
   onSuggestionClick,
@@ -284,7 +287,11 @@ export function PlanMapView({
     const visible = places.filter((p) => {
       if (!isValidCoord(p.lat, p.lon)) return false
       if (hideScheduled && p.scheduledDay) return false
-      const isFocus = focusPlaceId != null && focusPlaceId === p.id
+      const isFocus =
+        (focusPlaceId != null && focusPlaceId === p.id) ||
+        (focusLinkedItemId != null &&
+          Boolean(p.linkedItemId) &&
+          p.linkedItemId === focusLinkedItemId)
       // Focused pin always stays on the map (e.g. Days list pick while a day is filtered).
       if (isFocus) return true
       if (!visibleSectionIds.has(p.sectionId)) return false
@@ -306,12 +313,17 @@ export function PlanMapView({
       const emoji = linkedType
         ? TYPE_EMOJI[linkedType] ?? '📍'
         : sectionEmoji(section)
+      const isSelected =
+        focusPlaceId === p.id ||
+        (focusLinkedItemId != null &&
+          Boolean(p.linkedItemId) &&
+          p.linkedItemId === focusLinkedItemId)
       const el = makePinEl({
         fill,
         emoji,
         title: day ? `${p.name} · day ${dayNum}` : p.name,
         dimmed: false,
-        selected: focusPlaceId === p.id,
+        selected: isSelected,
       })
       el.addEventListener('click', (e) => {
         e.stopPropagation()
@@ -467,6 +479,7 @@ export function PlanMapView({
     hideScheduled,
     suggestions,
     focusPlaceId,
+    focusLinkedItemId,
     focusSuggestionId,
     linkedItemTypes,
   ])

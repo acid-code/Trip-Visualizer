@@ -16,7 +16,9 @@ import {
 import {
   buildTripWorkbook,
   downloadWorkbook,
+  linkImportedPlanPlacesToItems,
   parseTripWorkbook,
+  resolvePlanImport,
   workbookToArrayBuffer,
 } from './data/excel'
 import {
@@ -50,6 +52,7 @@ import {
   locationQueryFromInput,
   lookupPlace,
   pinItemOnMap,
+  pinPlanPlacesOnMap,
   pinTripItemsOnMap,
   reverseGeocode,
   type PlaceLookup,
@@ -848,7 +851,8 @@ export default function App() {
       setStatus('Import failed — file is too large (max 5 MB)')
       return null
     }
-    const { meta, items } = parseTripWorkbook(buf)
+    const parsed = parseTripWorkbook(buf)
+    const { meta, items } = parsed
     const dates = sanitizeMetaDates(meta.startDate, meta.endDate)
     const safeMeta = {
       ...meta,
@@ -858,13 +862,13 @@ export default function App() {
     const withBases = ensureDayStartBases(safeMeta, items)
     setStatus(
       opts?.replaceTrip
-        ? `Updating â€œ${safeMeta.name}â€ from Driveâ€¦`
-        : `Imported â€œ${safeMeta.name}â€ Â· looking up places on the mapâ€¦`,
+        ? `Updating “${safeMeta.name}” from Drive…`
+        : `Imported “${safeMeta.name}” · looking up places on the map…`,
     )
     const pinned = await pinTripItemsOnMap(
       withBases,
       (done, total) => {
-        setStatus(`Pinning places ${done}/${total}â€¦`)
+        setStatus(`Pinning places ${done}/${total}…`)
       },
       {
         useGooglePlaces: placesEnabled,
@@ -878,23 +882,56 @@ export default function App() {
         (isValidCoord(item.latTo, item.lonTo) &&
           !isValidCoord(withBases[i]?.latTo, withBases[i]?.lonTo)),
     ).length
+
     const existing = opts?.replaceTrip
-    const trip = sanitizeTripRecord({
-      id: existing?.id ?? createId('TRIP'),
-      meta: safeMeta,
-      items: pinned,
-      isExample: existing?.isExample ?? false,
-      createdAt: existing?.createdAt ?? new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+    const planResolved = resolvePlanImport({
+      hasPlanSheet: parsed.hasPlanSheet,
+      planSections: parsed.planSections,
+      planPlaces: parsed.planPlaces,
+      existing,
     })
+    let planPlaces = planResolved.fromExcel
+      ? linkImportedPlanPlacesToItems(planResolved.planPlaces, pinned)
+      : planResolved.planPlaces
+    let planPinned = 0
+    if (planResolved.fromExcel && planPlaces.length) {
+      const before = planPlaces
+      setStatus(`Pinning plan ideas…`)
+      planPlaces = await pinPlanPlacesOnMap(planPlaces, (done, total) => {
+        setStatus(`Pinning plan ideas ${done}/${total}…`)
+      })
+      planPinned = planPlaces.filter(
+        (p, i) =>
+          isValidCoord(p.lat, p.lon) && !isValidCoord(before[i]?.lat, before[i]?.lon),
+      ).length
+    }
+
+    const trip = ensurePlanScaffold(
+      sanitizeTripRecord({
+        id: existing?.id ?? createId('TRIP'),
+        meta: safeMeta,
+        items: pinned,
+        planSections: planResolved.planSections,
+        planPlaces,
+        isExample: existing?.isExample ?? false,
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    )
     await saveTrip(trip)
     if (!existing) await retireExampleTrip()
     await refresh()
     setActiveId(trip.id)
+    const planNote =
+      planResolved.fromExcel && planResolved.planPlaces.length
+        ? ` · ${planResolved.planPlaces.length} plan idea${planResolved.planPlaces.length === 1 ? '' : 's'}`
+        : ''
+    const pinNote =
+      pinnedCount + planPinned > 0
+        ? ` · ${pinnedCount + planPinned} place${pinnedCount + planPinned === 1 ? '' : 's'} pinned on the map`
+        : ''
     setStatus(
-      pinnedCount > 0
-        ? `${existing ? 'Updated' : 'Imported'} â€œ${safeMeta.name}â€ Â· ${pinnedCount} place${pinnedCount === 1 ? '' : 's'} pinned on the map`
-        : `${existing ? 'Updated' : 'Imported'} â€œ${safeMeta.name}â€`,
+      `${existing ? 'Updated' : 'Imported'} “${safeMeta.name}”${planNote}${pinNote}`,
     )
     return trip
   }
@@ -1325,6 +1362,18 @@ export default function App() {
     setAddContext(null)
     setLowerMode('none')
     setDetailExpanded(false)
+  }
+
+  /** Quiet Plan→Journey pin sync — keeps selection without opening Journey sheets. */
+  function syncJourneyHighlightFromPlan(itemId: string | null) {
+    if (!itemId) return
+    const item = stepById(itemId)
+    if (!item || isPlaceholderBase(item)) return
+    clearTempPin()
+    setMapFocusEndpoint(null)
+    setRouteWalk(routeWalkForTransportItem(item))
+    setSelectedId(itemId)
+    setStepDraft(null)
   }
 
   function clearTempPin() {
@@ -2467,6 +2516,7 @@ export default function App() {
               void persist(next)
               setStatus(message)
             }}
+            onJourneyHighlight={syncJourneyHighlightFromPlan}
           />
         </div>
       ) : null}

@@ -36,7 +36,10 @@
   --note: #94a3b8;
   /* Phone layout — authored for ~430×932; rem scales on narrower phones. */
   --app-vh: 100vh;
-  --tongue-h: 50px;
+  /* Browser tabs: only real safe-area (usually 0) — no forced floor (avoids a gap in Chrome). */
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --tongue-pad: var(--safe-bottom);
+  --tongue-h: calc(50px + var(--tongue-pad));
   --plan-map-min: 11rem;
   --plan-sheet-radius: 1.75rem;
   /* Shared top inset for Journey|Plan and Discover|Days */
@@ -74,6 +77,23 @@
     --sheet-steps-soft: min(38dvh, 100%);
     --sheet-explore-overlay: min(72dvh, 30rem);
     --layers-panel-max: min(22rem, 55dvh);
+  }
+}
+
+/*
+ * Installed PWA / fullscreen only — Android often reports safe-area-inset-bottom as 0
+ * even with a gesture bar. Do NOT apply this floor in normal Chrome tabs.
+ */
+html.is-pwa,
+html.is-standalone {
+  --tongue-pad: max(0.75rem, env(safe-area-inset-bottom, 0px));
+}
+
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  :root,
+  [data-theme="dark"],
+  [data-theme="light"] {
+    --tongue-pad: max(0.75rem, env(safe-area-inset-bottom, 0px));
   }
 }
 
@@ -218,8 +238,9 @@ textarea {
   width: 100%;
   /* Small air gap so the sheet clears the tallest tongue */
   gap: 0.4rem;
-  /* Plant tongues on the screen bottom (no extra float pad) */
-  padding-bottom: 0;
+  /* Lift above home indicator / Android gesture bar (critical in installed PWA) */
+  padding-bottom: var(--tongue-pad);
+  bottom: 0;
 }
 
 .book-dock > * {
@@ -1155,7 +1176,13 @@ textarea {
   gap: 0.4rem;
   border-radius: 0.85rem;
   border: 1px solid var(--glass-border);
-  background: var(--paper);
+  border-left-width: 3px;
+  border-left-color: var(--plan-row-accent, var(--glass-border));
+  background: color-mix(
+    in srgb,
+    var(--plan-row-accent, transparent) 12%,
+    var(--paper)
+  );
   padding: 0.45rem 0.55rem;
 }
 
@@ -1228,8 +1255,13 @@ textarea {
 
 .plan-list-row-on {
   border-radius: 0.75rem;
-  background: color-mix(in srgb, var(--coral) 14%, var(--paper));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--coral) 35%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--plan-row-accent, var(--coral)) 22%,
+    var(--paper)
+  );
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--plan-row-accent, var(--coral)) 45%, transparent);
 }
 
 .plan-detail-days {
@@ -1293,16 +1325,27 @@ textarea {
   width: 100%;
   border-radius: 0.75rem;
   border: 1px solid var(--glass-border);
-  background: var(--paper);
+  border-left-width: 3px;
+  border-left-color: var(--plan-row-accent, var(--glass-border));
+  background: color-mix(
+    in srgb,
+    var(--plan-row-accent, transparent) 12%,
+    var(--paper)
+  );
   padding: 0.45rem 0.5rem;
   text-align: left;
   transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
 
 .plan-unscheduled-chip-on {
-  border-color: color-mix(in srgb, var(--coral) 55%, var(--glass-border));
-  background: color-mix(in srgb, var(--coral) 14%, var(--paper));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--coral) 25%, transparent);
+  border-color: color-mix(in srgb, var(--plan-row-accent, var(--coral)) 55%, var(--glass-border));
+  background: color-mix(
+    in srgb,
+    var(--plan-row-accent, var(--coral)) 18%,
+    var(--paper)
+  );
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--plan-row-accent, var(--coral)) 28%, transparent);
 }
 
 .plan-day-bucket {
@@ -1340,14 +1383,25 @@ textarea {
   gap: 0.25rem;
   border-radius: 0.65rem;
   border: 1px solid transparent;
-  background: var(--paper-2);
+  border-left-width: 3px;
+  border-left-color: var(--plan-row-accent, transparent);
+  background: color-mix(
+    in srgb,
+    var(--plan-row-accent, transparent) 10%,
+    var(--paper-2)
+  );
   padding: 0.28rem 0.35rem;
 }
 
 .plan-bucket-stop-on {
-  border-color: color-mix(in srgb, var(--coral) 45%, var(--glass-border));
-  background: color-mix(in srgb, var(--coral) 16%, var(--paper));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--coral) 22%, transparent);
+  border-color: color-mix(in srgb, var(--plan-row-accent, var(--coral)) 45%, var(--glass-border));
+  background: color-mix(
+    in srgb,
+    var(--plan-row-accent, var(--coral)) 18%,
+    var(--paper)
+  );
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--plan-row-accent, var(--coral)) 25%, transparent);
 }
 
 .plan-bucket-num {

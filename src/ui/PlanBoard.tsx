@@ -64,6 +64,11 @@ type Props = {
   >
   /** Fired once when Plan MapLibre has loaded (boot splash). */
   onMapBootReady?: () => void
+  /**
+   * When a Plan place assigned to a day is focused, sync that Journey step
+   * highlight (quiet — does not open Journey sheets).
+   */
+  onJourneyHighlight?: (itemId: string | null) => void
 }
 
 type PlanMode = 'discover' | 'days'
@@ -131,6 +136,7 @@ export function PlanBoard({
   initialMapFocus = null,
   mapFocusApiRef,
   onMapBootReady,
+  onJourneyHighlight,
 }: Props) {
   const days = listTripDays(trip.meta)
   const [mode, setMode] = useState<PlanMode>('discover')
@@ -599,6 +605,22 @@ export function PlanBoard({
     SUGGEST_CATS.find((c) => c.id === suggestCat) ?? SUGGEST_CATS[1]!
   const activeDayIdx = daySafe ? Math.max(0, days.indexOf(daySafe)) : 0
 
+  function journeyItemIdForPlace(p: PlanPlace): string | null {
+    if (!p.scheduledDay && !p.linkedItemId) return null
+    if (p.linkedItemId && trip.items.some((i) => i.id === p.linkedItemId)) {
+      return p.linkedItemId
+    }
+    if (!p.scheduledDay) return null
+    const name = p.name.trim().toLowerCase()
+    const match = trip.items.find(
+      (i) =>
+        i.date === p.scheduledDay &&
+        (i.title.trim().toLowerCase() === name ||
+          (i.place && i.place.trim().toLowerCase() === name)),
+    )
+    return match?.id ?? null
+  }
+
   function openSuggestionDetail(place: ExplorePlace) {
     const existing = findMatchingListPlace(trip, place)
     if (existing) {
@@ -610,6 +632,7 @@ export function PlanBoard({
     setFocusPlaceId(null)
     setDetailSavedId(null)
     setDetailPlace(place)
+    onJourneyHighlight?.(null)
   }
 
   function openSavedPlaceDetail(placeId: string) {
@@ -624,6 +647,7 @@ export function PlanBoard({
     setActiveSectionId(p.sectionId)
     setDetailSavedId(p.id)
     setDetailPlace(planPlaceToExplorePlace(p, section, days, anchor))
+    onJourneyHighlight?.(journeyItemIdForPlace(p))
     if (planPlaceNeedsEnrichment(p)) {
       void refillPlanPlaceEnrichment(placeId)
     }
@@ -756,6 +780,10 @@ export function PlanBoard({
   const detailSavedPlace = detailSavedId
     ? trip.planPlaces.find((p) => p.id === detailSavedId) ?? null
     : null
+  const focusPlace = focusPlaceId
+    ? trip.planPlaces.find((p) => p.id === focusPlaceId) ?? null
+    : null
+  const focusLinkedItemId = focusPlace ? journeyItemIdForPlace(focusPlace) : null
   const detailSheetPlace =
     detailSavedPlace && detailPlace
       ? planPlaceToExplorePlace(
@@ -782,6 +810,7 @@ export function PlanBoard({
           hideScheduled={false}
           suggestions={suggestionPins}
           focusPlaceId={focusPlaceId}
+          focusLinkedItemId={focusLinkedItemId}
           focusSuggestionId={focusSuggestionId}
           linkedItemTypes={linkedItemTypes}
           initialFocus={initialMapFocus}
@@ -1273,10 +1302,13 @@ export function PlanBoard({
                                 key={p.id}
                                 type="button"
                                 className={`plan-unscheduled-chip ${on ? 'plan-unscheduled-chip-on' : ''}`}
+                                style={{ ['--plan-row-accent' as string]: section.color }}
                                 onClick={() => {
-                                  setSelectedUnscheduledId(on ? null : p.id)
-                                  setFocusPlaceId(on ? null : p.id)
+                                  const next = on ? null : p.id
+                                  setSelectedUnscheduledId(next)
+                                  setFocusPlaceId(next)
                                   setFocusSuggestionId(null)
+                                  onJourneyHighlight?.(null)
                                 }}
                               >
                                 <span className="line-clamp-2 text-left text-[12px] font-semibold leading-snug text-[var(--ink)]">
@@ -1356,10 +1388,16 @@ export function PlanBoard({
                         </div>
 
                         <div className="space-y-1">
-                          {places.map((p, i) => (
+                          {places.map((p, i) => {
+                            const section = trip.planSections.find((s) => s.id === p.sectionId)
+                            return (
                             <div
                               key={p.id}
                               className={`plan-bucket-stop ${focusPlaceId === p.id ? 'plan-bucket-stop-on' : ''}`}
+                              style={{
+                                ['--plan-row-accent' as string]:
+                                  section?.color || 'var(--coral)',
+                              }}
                             >
                               <button
                                 type="button"
@@ -1367,9 +1405,8 @@ export function PlanBoard({
                                 onClick={() => {
                                   setDaysAll(false)
                                   setActiveDay(day)
-                                  setFocusPlaceId(p.id)
-                                  setFocusSuggestionId(null)
                                   setSelectedUnscheduledId(null)
+                                  openSavedPlaceDetail(p.id)
                                 }}
                               >
                                 <span className="plan-bucket-num">{i + 1}</span>
@@ -1414,7 +1451,8 @@ export function PlanBoard({
                                 </button>
                               </div>
                             </div>
-                          ))}
+                            )
+                          })}
                         </div>
 
                         {selectedUnscheduledId ? (
@@ -1504,6 +1542,7 @@ function ListSection({
               key={p.id}
               data-plan-place-id={p.id}
               className={`plan-list-row ${focused ? 'plan-list-row-on' : ''}`}
+              style={{ ['--plan-row-accent' as string]: section.color }}
             >
               <button
                 type="button"
