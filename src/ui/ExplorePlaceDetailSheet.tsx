@@ -23,6 +23,11 @@ type Props = {
   onPickDay?: (day: string) => void
   /** Tap the active day again to clear it from the day. */
   onClearDay?: () => void
+  /**
+   * When set (e.g. Plan day filter YYYY-MM-DD), highlight that weekday in
+   * Opening hours instead of “today”.
+   */
+  highlightDayISO?: string | null
 }
 
 /** Shared place detail sheet — Journey Explore + Plan Discover. */
@@ -39,6 +44,7 @@ export function ExplorePlaceDetailSheet({
   scheduledDay = null,
   onPickDay,
   onClearDay,
+  highlightDayISO = null,
 }: Props) {
   const [dayMenuOpen, setDayMenuOpen] = useState(false)
   const dayIdx = scheduledDay && days ? days.indexOf(scheduledDay) : -1
@@ -76,7 +82,7 @@ export function ExplorePlaceDetailSheet({
         <div className="space-y-2.5 px-4 py-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <DetailMedia place={place} />
           {place.images.length !== 1 ? <DetailMeta place={place} /> : null}
-          <PlaceHoursSchedule place={place} />
+          <PlaceHoursSchedule place={place} highlightDayISO={highlightDayISO} />
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -300,8 +306,24 @@ function DetailMeta({
   )
 }
 
+/** Mon→Sun row index (0=Mon … 6=Sun) for an ISO date, or null if invalid. */
+function weekRowFromIso(dateISO: string | null | undefined): number | null {
+  if (!dateISO || !/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) return null
+  const [y, mo, d] = dateISO.split('-').map(Number)
+  const dt = new Date(Date.UTC(y!, mo! - 1, d!))
+  if (Number.isNaN(dt.getTime())) return null
+  const dow = dt.getUTCDay() // 0=Sun
+  return dow === 0 ? 6 : dow - 1
+}
+
 /** Full week for planning — separate from the open-now chip. */
-function PlaceHoursSchedule({ place }: { place: ExplorePlace }) {
+function PlaceHoursSchedule({
+  place,
+  highlightDayISO = null,
+}: {
+  place: ExplorePlace
+  highlightDayISO?: string | null
+}) {
   const weekLines = weeklyHoursLines({
     periods: place.openingPeriods,
     openingHours: place.openingHours,
@@ -309,6 +331,7 @@ function PlaceHoursSchedule({ place }: { place: ExplorePlace }) {
   if (!weekLines.length) return null
   const todayIdx = new Date().getDay()
   const todayRow = todayIdx === 0 ? 6 : todayIdx - 1
+  const highlightRow = weekRowFromIso(highlightDayISO) ?? todayRow
 
   return (
     <div className="rounded-xl border border-[var(--glass-border)] bg-[var(--paper-2)] px-2.5 py-2">
@@ -320,7 +343,7 @@ function PlaceHoursSchedule({ place }: { place: ExplorePlace }) {
           <li
             key={`${i}-${line}`}
             className={
-              i === todayRow && weekLines.length >= 7
+              i === highlightRow && weekLines.length >= 7
                 ? 'font-semibold text-[var(--ink)]'
                 : 'text-[var(--ink-muted)]'
             }

@@ -50,31 +50,40 @@ export async function fetchOsrmRoute(
   to: [number, number],
   profile: 'driving' | 'foot',
 ): Promise<[number, number][]> {
+  return (await fetchOsrmRouteDetailed(from, to, profile)).coords
+}
+
+/** Same as fetchOsrmRoute, but reports cache hits so callers can skip rate-limit delays. */
+export async function fetchOsrmRouteDetailed(
+  from: [number, number],
+  to: [number, number],
+  profile: 'driving' | 'foot',
+): Promise<{ coords: [number, number][]; fromCache: boolean }> {
   const key = routeCacheKey(profile, from, to)
   const cached = await getCachedRoute(key)
-  if (cached && cached.length >= 2) return cached
+  if (cached && cached.length >= 2) return { coords: cached, fromCache: true }
 
   const base = profile === 'foot' ? OSRM_FOOT : OSRM_DRIVE
   const url = `${base}/${from[1]},${from[0]};${to[1]},${to[0]}?overview=full&geometries=geojson`
   try {
     const res = await fetch(url)
-    if (!res.ok) return [from, to]
+    if (!res.ok) return { coords: [from, to], fromCache: false }
     const json = (await res.json()) as {
       code?: string
       routes?: Array<{ geometry?: { coordinates?: [number, number][] } }>
     }
-    if (json.code && json.code !== 'Ok') return [from, to]
+    if (json.code && json.code !== 'Ok') return { coords: [from, to], fromCache: false }
     const coords = json.routes?.[0]?.geometry?.coordinates
-    if (!coords?.length) return [from, to]
+    if (!coords?.length) return { coords: [from, to], fromCache: false }
     const latLon = coords.map(([lon, lat]) => [lat, lon] as [number, number])
     void setCachedRoute(key, profile, latLon)
-    return latLon
+    return { coords: latLon, fromCache: false }
   } catch {
-    return [from, to]
+    return { coords: [from, to], fromCache: false }
   }
 }
 
-/** Fill missing (or stale) drive polylines via OSRM. */
+/** Fill missing (or stale) drive polylines via OSRM (IndexedDB cache first). */
 export async function hydrateDriveRoutes(
   items: TripItem[],
   onProgress?: (done: number, total: number) => void,
@@ -93,7 +102,7 @@ export async function hydrateDriveRoutes(
   const map = new Map(cleared.map((i) => [i.id, i]))
   let done = 0
   for (const drive of drives) {
-    const coords = await fetchOsrmRoute(
+    const { coords, fromCache } = await fetchOsrmRouteDetailed(
       [drive.lat!, drive.lon!],
       [drive.latTo!, drive.lonTo!],
       'driving',
@@ -101,7 +110,10 @@ export async function hydrateDriveRoutes(
     map.set(drive.id, { ...drive, routeCoords: coords })
     done += 1
     onProgress?.(done, drives.length)
-    await new Promise((r) => setTimeout(r, 120))
+    // Only pace live OSRM calls — cached polylines can stream in immediately.
+    if (!fromCache && done < drives.length) {
+      await new Promise((r) => setTimeout(r, 120))
+    }
   }
   return cleared.map((i) => map.get(i.id) ?? i)
 }
@@ -317,7 +329,7 @@ export async function buildWalkingConnectors(
   const connectors: RouteConnector[] = []
   let done = 0
   for (const pair of pairs) {
-    const coords = await fetchOsrmRoute(
+    const { coords, fromCache } = await fetchOsrmRouteDetailed(
       [pair.a.lat, pair.a.lon],
       [pair.b.lat, pair.b.lon],
       pair.mode === 'drive' ? 'driving' : 'foot',
@@ -332,7 +344,9 @@ export async function buildWalkingConnectors(
     })
     done += 1
     onProgress?.(done, pairs.length)
-    await new Promise((r) => setTimeout(r, 120))
+    if (!fromCache && done < pairs.length) {
+      await new Promise((r) => setTimeout(r, 120))
+    }
   }
   return connectors
 }

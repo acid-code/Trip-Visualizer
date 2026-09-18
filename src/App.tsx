@@ -156,7 +156,7 @@ import {
   logClientInfo,
   subscribeClientLogs,
 } from './data/clientLogs'
-import { forceAppRefresh } from './updateCheck'
+import { forceAppRefresh, checkForAppUpdate, fetchServerVersion, formatBuildLabel, getClientBuildId, isLocalAppEnv } from './updateCheck'
 import { sanitizeTripRecord } from './domain/types'
 import { useIsNarrow } from './ui/useIsNarrow'
 import {
@@ -169,6 +169,7 @@ import { TripSwitcher } from './ui/TripSwitcher'
 import { TripStartCoach } from './ui/TripStartCoach'
 import { PlanStartCoach } from './ui/PlanStartCoach'
 import { SettingsShell } from './ui/SettingsShell'
+import { BootSplash } from './ui/BootSplash'
 import {
   completeGoogleRedirectSignIn,
   isCloudAuthConfigured,
@@ -294,6 +295,10 @@ export default function App() {
   const [mapLook, setMapLook] = useState<MapLook>(DEFAULT_MAP_LOOK)
   const [colorMode, setColorMode] = useState<ColorMode>(DEFAULT_COLOR_MODE)
   const [appMode, setAppMode] = useState<'journey' | 'plan'>('journey')
+  const [bootDataReady, setBootDataReady] = useState(false)
+  const [bootGlobeReady, setBootGlobeReady] = useState(false)
+  const [bootPlanMapReady, setBootPlanMapReady] = useState(false)
+  const [bootRoutesReady, setBootRoutesReady] = useState(false)
   const journeyMapFocusApiRef = useRef<MapFocusApi | null>(null)
   const planMapFocusApiRef = useRef<MapFocusApi | null>(null)
   const sharedMapFocusRef = useRef<MapFocus | null>(null)
@@ -508,56 +513,60 @@ export default function App() {
 
   useEffect(() => {
     void (async () => {
-      await refresh()
-      setGoogleKey((await getSetting('googleMapsKey')) ?? '')
-      setIonToken((await getSetting('cesiumIonToken')) ?? '')
-      const savedStack = (await getSetting('mapStack')) as MapStack | undefined
-      setMapStack(
-        savedStack === 'osm' || savedStack === 'esri' || savedStack === 'google3d'
-          ? savedStack
-          : DEFAULT_MAP_STACK,
-      )
-      const savedLook = (await getSetting('mapLook')) as MapLook | undefined
-      setMapLook(savedLook === 'modern' ? 'modern' : DEFAULT_MAP_LOOK)
-      const savedColor = await getSetting('colorMode')
-      const mode = isColorMode(savedColor) ? savedColor : DEFAULT_COLOR_MODE
-      setColorMode(mode)
-      applyColorMode(mode)
-      const savedMode = await getSetting('appMode')
-      const bootMode = savedMode === 'plan' ? 'plan' : 'journey'
-      setAppMode(bootMode)
-      const walkPref = await getSetting('walkApp')
-      setWalkApp(isWalkAppPref(walkPref) ? walkPref : 'maps')
-      const seen = parseSeenTipIds(await getSetting('featureGuideSeen'))
-      setSeenTipIds(seen)
-      seenTipIdsRef.current = seen
-      const awaitingSetup = (await getSetting('awaitingFirstTripSetup')) === '1'
-      if (awaitingSetup) {
-        // Name/dates first — arrows show after setup submit (no tip deck on boot).
-        const all = await listTrips()
-        const trip =
-          all.find((t) => !t.isExample && t.id !== EXAMPLE_TRIP_ID) ?? all[0] ?? null
-        if (trip) {
-          setTripDialog({
-            mode: 'edit',
-            firstRun: true,
-            draft: {
-              name: '',
-              startDate: trip.meta.startDate,
-              endDate: trip.meta.endDate,
-            },
-          })
-        } else {
-          await setSetting('awaitingFirstTripSetup', '')
+      try {
+        await refresh()
+        setGoogleKey((await getSetting('googleMapsKey')) ?? '')
+        setIonToken((await getSetting('cesiumIonToken')) ?? '')
+        const savedStack = (await getSetting('mapStack')) as MapStack | undefined
+        setMapStack(
+          savedStack === 'osm' || savedStack === 'esri' || savedStack === 'google3d'
+            ? savedStack
+            : DEFAULT_MAP_STACK,
+        )
+        const savedLook = (await getSetting('mapLook')) as MapLook | undefined
+        setMapLook(savedLook === 'modern' ? 'modern' : DEFAULT_MAP_LOOK)
+        const savedColor = await getSetting('colorMode')
+        const mode = isColorMode(savedColor) ? savedColor : DEFAULT_COLOR_MODE
+        setColorMode(mode)
+        applyColorMode(mode)
+        const savedMode = await getSetting('appMode')
+        const bootMode = savedMode === 'plan' ? 'plan' : 'journey'
+        setAppMode(bootMode)
+        const walkPref = await getSetting('walkApp')
+        setWalkApp(isWalkAppPref(walkPref) ? walkPref : 'maps')
+        const seen = parseSeenTipIds(await getSetting('featureGuideSeen'))
+        setSeenTipIds(seen)
+        seenTipIdsRef.current = seen
+        const awaitingSetup = (await getSetting('awaitingFirstTripSetup')) === '1'
+        if (awaitingSetup) {
+          // Name/dates first — arrows show after setup submit (no tip deck on boot).
+          const all = await listTrips()
+          const trip =
+            all.find((t) => !t.isExample && t.id !== EXAMPLE_TRIP_ID) ?? all[0] ?? null
+          if (trip) {
+            setTripDialog({
+              mode: 'edit',
+              firstRun: true,
+              draft: {
+                name: '',
+                startDate: trip.meta.startDate,
+                endDate: trip.meta.endDate,
+              },
+            })
+          } else {
+            await setSetting('awaitingFirstTripSetup', '')
+          }
+        } else if (
+          bootMode === 'plan' &&
+          !seen.has(PLAN_START_COACH_ID) &&
+          !planCoachShownRef.current
+        ) {
+          // Only default onboarding: Plan arrow coach when landing in Plan.
+          planCoachShownRef.current = true
+          window.setTimeout(() => setPlanStartCoachOpen(true), 420)
         }
-      } else if (
-        bootMode === 'plan' &&
-        !seen.has(PLAN_START_COACH_ID) &&
-        !planCoachShownRef.current
-      ) {
-        // Only default onboarding: Plan arrow coach when landing in Plan.
-        planCoachShownRef.current = true
-        window.setTimeout(() => setPlanStartCoachOpen(true), 420)
+      } finally {
+        setBootDataReady(true)
       }
     })()
   }, [refresh])
@@ -1179,6 +1188,7 @@ export default function App() {
     } finally {
       routesBuildingRef.current = false
       setRoutesStatus(null)
+      setBootRoutesReady(true)
       const pending = routesPendingRef.current
       routesPendingRef.current = null
       if (pending && routesFingerprint(pending) !== routesForTripRef.current) {
@@ -1188,12 +1198,22 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!active) return
+    if (!active) {
+      // No trip yet — don't block splash on map/routes.
+      setBootRoutesReady(true)
+      return
+    }
     const items = ensureDayStartBases(active.meta, active.items)
     if (items.length !== active.items.length) {
       void persist({ ...active, items })
       return
     }
+    // Already hydrated for this fingerprint (e.g. revisit) — don't hold splash.
+    if (routesForTripRef.current === routesFingerprint(active)) {
+      setBootRoutesReady(true)
+      return
+    }
+    setBootRoutesReady(false)
     void buildRoutes(active)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -2330,6 +2350,13 @@ export default function App() {
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[var(--bg)] text-[var(--ink)]">
+      <BootSplash
+        dataReady={bootDataReady}
+        mapReady={
+          !active || (appMode === 'plan' ? bootPlanMapReady : bootGlobeReady)
+        }
+        routesReady={!active || bootRoutesReady}
+      />
       {active ? (
         <div
           className={`absolute inset-0 ${appMode === 'plan' ? 'invisible pointer-events-none' : ''}`}
@@ -2352,6 +2379,7 @@ export default function App() {
           phoneFraming={isPhone}
           renderActive={appMode === 'journey'}
           mapFocusApiRef={journeyMapFocusApiRef}
+          onBootReady={() => setBootGlobeReady(true)}
           tempPin={tempPin}
           nearbyLinks={nearbyLinks}
           tempFlyToken={tempFlyToken}
@@ -2426,6 +2454,7 @@ export default function App() {
             onDayFilter={setDayFilter}
             initialMapFocus={planBootFocus}
             mapFocusApiRef={planMapFocusApiRef}
+            onMapBootReady={() => setBootPlanMapReady(true)}
             onChange={(next) => void persist(next)}
             onStatus={setStatus}
             onAskAi={(prompt) => {
@@ -3395,14 +3424,82 @@ function ClientLogsBlob() {
     () => [] as ReturnType<typeof getClientLogsSnapshot>,
   )
   const text = formatClientLogsText(logs)
+  const clientId = getClientBuildId()
+  const [serverLabel, setServerLabel] = useState<string>('…')
+  const [versionStatus, setVersionStatus] = useState<string>('')
+  const [checking, setChecking] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      if (isLocalAppEnv()) {
+        if (!cancelled) {
+          setServerLabel('(local — auto-update off)')
+          setVersionStatus('Dev / localhost')
+        }
+        return
+      }
+      try {
+        const remote = await fetchServerVersion()
+        if (cancelled) return
+        if (!remote) {
+          setServerLabel('unavailable')
+          setVersionStatus('Could not reach version.json')
+          return
+        }
+        setServerLabel(formatBuildLabel(remote.buildId))
+        setVersionStatus(
+          remote.buildId === clientId ? 'Up to date' : 'Update available',
+        )
+      } catch {
+        if (!cancelled) {
+          setServerLabel('offline')
+          setVersionStatus('Offline')
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [clientId])
 
   return (
     <div className="settings-card">
       <div className="flex items-center justify-between gap-2">
-        <div className="settings-card-title mb-0">
-          Client logs
-        </div>
+        <div className="settings-card-title mb-0">App version</div>
         <div className="flex gap-1">
+          <button
+            type="button"
+            className={btn}
+            disabled={checking || isLocalAppEnv()}
+            title={
+              isLocalAppEnv()
+                ? 'Auto-update is disabled on localhost'
+                : 'Compare with the server and reload if a newer deploy exists'
+            }
+            onClick={() => {
+              setChecking(true)
+              void (async () => {
+                try {
+                  const result = await checkForAppUpdate({ manual: true })
+                  if (result === 'current') {
+                    const remote = await fetchServerVersion()
+                    if (remote) setServerLabel(formatBuildLabel(remote.buildId))
+                    setVersionStatus('Up to date')
+                  } else if (result === 'offline') {
+                    setVersionStatus('Offline')
+                  } else if (result === 'skipped') {
+                    setVersionStatus('Local — skipped')
+                  }
+                  // 'updated' navigates away
+                } finally {
+                  setChecking(false)
+                }
+              })()
+            }}
+          >
+            {checking ? 'Checking…' : 'Check update'}
+          </button>
           <button
             type="button"
             className={btn}
@@ -3410,6 +3507,38 @@ function ClientLogsBlob() {
           >
             Force refresh
           </button>
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] leading-snug text-[var(--ink-muted)]">
+        Client <span className="font-mono text-[var(--ink)]">{formatBuildLabel(clientId)}</span>
+        {' · '}
+        Server <span className="font-mono text-[var(--ink)]">{serverLabel}</span>
+        {versionStatus ? (
+          <>
+            {' · '}
+            <span
+              className={
+                versionStatus === 'Up to date'
+                  ? 'text-emerald-600'
+                  : versionStatus === 'Update available'
+                    ? 'text-amber-600'
+                    : undefined
+              }
+            >
+              {versionStatus}
+            </span>
+          </>
+        ) : null}
+      </p>
+      <p className="mt-1 text-[10px] text-[var(--ink-muted)]">
+        Production uses the Vercel git commit as the build id. On wake the app
+        compares this device to <code className="rounded bg-[var(--paper-2)] px-1">/version.json</code>{' '}
+        and reloads when they differ.
+      </p>
+
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--glass-border)] pt-3">
+        <div className="settings-card-title mb-0">Client logs</div>
+        <div className="flex gap-1">
           <button
             type="button"
             className={btn}

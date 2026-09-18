@@ -62,6 +62,8 @@ type Props = {
   mapFocusApiRef?: MutableRefObject<
     import('../data/mapFocus').MapFocusApi | null
   >
+  /** Fired once when Plan MapLibre has loaded (boot splash). */
+  onMapBootReady?: () => void
 }
 
 type PlanMode = 'discover' | 'days'
@@ -128,6 +130,7 @@ export function PlanBoard({
   onDayFilter,
   initialMapFocus = null,
   mapFocusApiRef,
+  onMapBootReady,
 }: Props) {
   const days = listTripDays(trip.meta)
   const [mode, setMode] = useState<PlanMode>('discover')
@@ -783,6 +786,7 @@ export function PlanBoard({
           linkedItemTypes={linkedItemTypes}
           initialFocus={initialMapFocus}
           mapFocusApiRef={mapFocusApiRef}
+          onBootReady={onMapBootReady}
           onPlaceClick={(id) => {
             openSavedPlaceDetail(id)
           }}
@@ -1063,6 +1067,7 @@ export function PlanBoard({
                 }
               : undefined
           }
+          highlightDayISO={dayFilter}
         />
       ) : null}
 

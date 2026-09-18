@@ -68,6 +68,8 @@ type Props = {
   mapFocusApiRef?: MutableRefObject<
     import('../data/mapFocus').MapFocusApi | null
   >
+  /** Fired once when the MapLibre style has loaded. */
+  onBootReady?: () => void
   className?: string
 }
 
@@ -134,6 +136,24 @@ function sectionEmoji(section: PlanSection | undefined): string {
   return TYPE_EMOJI.sight
 }
 
+/**
+ * Padding so easeTo centers the pin in the clear map band above Discover/Days,
+ * not under the bottom sheet (map is full-bleed).
+ */
+function planFocusPadding(map: maplibregl.Map): maplibregl.PaddingOptions {
+  const h = map.getContainer().clientHeight || 0
+  const sheetEl =
+    typeof document !== 'undefined'
+      ? document.querySelector('.plan-sheet-band')
+      : null
+  const sheetH = sheetEl?.getBoundingClientRect().height ?? 0
+  const bottom = Math.max(
+    Math.round(h * 0.28),
+    Math.round(sheetH || h * 0.42),
+  )
+  return { top: 64, bottom, left: 40, right: 40 }
+}
+
 export function PlanMapView({
   meta,
   sections,
@@ -151,6 +171,7 @@ export function PlanMapView({
   linkedItemTypes,
   initialFocus = null,
   mapFocusApiRef,
+  onBootReady,
   className = '',
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -163,9 +184,11 @@ export function PlanMapView({
   const onPlaceClickRef = useRef(onPlaceClick)
   const onSuggestionClickRef = useRef(onSuggestionClick)
   const onViewportIdleRef = useRef(onViewportIdle)
+  const onBootReadyRef = useRef(onBootReady)
   onPlaceClickRef.current = onPlaceClick
   onSuggestionClickRef.current = onSuggestionClick
   onViewportIdleRef.current = onViewportIdle
+  onBootReadyRef.current = onBootReady
 
   useEffect(() => {
     if (!rootRef.current || mapRef.current) return
@@ -199,7 +222,10 @@ export function PlanMapView({
       if (idleTimer) clearTimeout(idleTimer)
       idleTimer = setTimeout(emitIdle, 450)
     }
-    map.on('load', emitIdle)
+    map.on('load', () => {
+      emitIdle()
+      onBootReadyRef.current?.()
+    })
     map.on('moveend', onMoveEnd)
     map.on('resize', onMoveEnd)
     mapRef.current = map
@@ -391,7 +417,7 @@ export function PlanMapView({
         map.easeTo({
           center: [focus.lon, focus.lat],
           zoom: Math.max(map.getZoom(), 12),
-          padding: 40,
+          padding: planFocusPadding(map),
           duration: 450,
         })
         return
@@ -403,7 +429,7 @@ export function PlanMapView({
         map.easeTo({
           center: [focus.lon!, focus.lat!],
           zoom: Math.max(map.getZoom(), 11),
-          padding: 40,
+          padding: planFocusPadding(map),
           duration: 450,
         })
         return

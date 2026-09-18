@@ -91,6 +91,8 @@ type Props = {
   renderActive?: boolean
   /** Parent registers capture/apply so Journey↔Plan can keep the same map focus. */
   mapFocusApiRef?: MutableRefObject<import('../data/mapFocus').MapFocusApi | null>
+  /** Fired once when the Cesium viewer is up and the globe has a first tile settle (or timeout). */
+  onBootReady?: () => void
   tempPin?: TempPinDraw | null
   nearbyLinks?: NearbyStepLink[]
   tempFlyToken?: number
@@ -150,6 +152,7 @@ export function GlobeView({
   phoneFraming = false,
   renderActive = true,
   mapFocusApiRef,
+  onBootReady,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const walkOverlayRef = useRef<HTMLDivElement>(null)
@@ -180,6 +183,8 @@ export function GlobeView({
   openingOriginOnlyRef.current = openingOriginOnly
   const phoneFramingRef = useRef(phoneFraming)
   phoneFramingRef.current = phoneFraming
+  const onBootReadyRef = useRef(onBootReady)
+  onBootReadyRef.current = onBootReady
 
   const mapStackRef = useRef(mapStack)
   mapStackRef.current = mapStack
@@ -296,6 +301,9 @@ export function GlobeView({
       })
     }
 
+    let bootTileCleanup: (() => void) | undefined
+    let bootTimer: ReturnType<typeof setTimeout> | null = null
+
     ;(async () => {
       viewer = await createTripViewer(container, {
         ionToken,
@@ -307,6 +315,29 @@ export function GlobeView({
       }
       viewerRef.current = viewer
       void applyMapStack(viewer, mapStackRef.current || DEFAULT_MAP_STACK, googleKeyRef.current)
+
+      // Signal boot splash once tiles settle (or after a short cap).
+      let bootNotified = false
+      const notifyBoot = () => {
+        if (bootNotified || cancelled) return
+        bootNotified = true
+        if (bootTimer) {
+          clearTimeout(bootTimer)
+          bootTimer = null
+        }
+        bootTileCleanup?.()
+        bootTileCleanup = undefined
+        onBootReadyRef.current?.()
+      }
+      const removeTileProgress = viewer.scene.globe.tileLoadProgressEvent.addEventListener(
+        (queued: number) => {
+          if (queued === 0) notifyBoot()
+        },
+      )
+      bootTileCleanup =
+        typeof removeTileProgress === 'function' ? removeTileProgress : undefined
+      bootTimer = setTimeout(notifyBoot, 2800)
+      viewer.scene.requestRender()
 
       ro = new ResizeObserver(() => {
         try {
@@ -569,6 +600,8 @@ export function GlobeView({
     return () => {
       cancelled = true
       clearPressTimer()
+      if (bootTimer) clearTimeout(bootTimer)
+      bootTileCleanup?.()
       if (syncWalkRaf != null) cancelAnimationFrame(syncWalkRaf)
       ro?.disconnect()
       try {

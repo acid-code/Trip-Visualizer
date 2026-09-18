@@ -18,6 +18,9 @@ const appBuildId =
   process.env.VITE_APP_BUILD_ID ||
   `local-${Date.now()}`
 
+const vercelDeploymentId = process.env.VERCEL_DEPLOYMENT_ID || ''
+const vercelEnv = process.env.VERCEL_ENV || ''
+
 /** Emit `/version.json` so clients can detect a new deployment without hard refresh. */
 function emitBuildVersion(): Plugin {
   return {
@@ -30,6 +33,9 @@ function emitBuildVersion(): Plugin {
         source: JSON.stringify({
           buildId: appBuildId,
           builtAt: new Date().toISOString(),
+          // Vercel injects these at build time — useful in Settings / support.
+          ...(vercelDeploymentId ? { deploymentId: vercelDeploymentId } : {}),
+          ...(vercelEnv ? { vercelEnv } : {}),
         }),
       })
     },
@@ -389,7 +395,14 @@ export default defineConfig(({ mode }) => {
         // Keep version.json out of the precache so clients always hit the network.
         globPatterns: ['**/*.{js,css,html,ico,svg,woff2}'],
         globIgnores: ['**/version.json'],
-        navigateFallbackDenylist: [/^\/api\//],
+        navigateFallbackDenylist: [/^\/api\//, /^\/version\.json$/],
+        runtimeCaching: [
+          {
+            // Never serve a stale deploy id from the SW cache.
+            urlPattern: /\/version\.json$/i,
+            handler: 'NetworkOnly',
+          },
+        ],
       },
     }),
   ],
