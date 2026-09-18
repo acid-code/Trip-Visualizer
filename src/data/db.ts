@@ -197,6 +197,7 @@ export async function createBlankTrip(opts?: {
       timezoneNote: 'All times are local',
       travelers: '',
       notes: '',
+      vibe: '',
     },
     [],
     { isExample: false },

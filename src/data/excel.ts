@@ -398,6 +398,7 @@ function parseMetaFromTripSheet(tripSheet: XLSX.WorkSheet | undefined): TripMeta
     homeCurrency: normalizeCurrencyLoose(metaMap.home_currency || 'EUR', 'EUR'),
     timezoneNote: metaMap.timezone_note || 'All times are local',
     travelers: metaMap.travelers || '',
+    vibe: metaMap.vibe || '',
     notes: metaMap.notes || '',
   })
 }

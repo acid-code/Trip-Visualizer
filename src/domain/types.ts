@@ -58,6 +58,8 @@ export const TripMetaSchema = z.object({
   timezoneNote: boundedStr(200, 'All times are local'),
   travelers: boundedStr(200),
   notes: boundedStr(5000),
+  /** Free-text trip mood / what they're looking for — fed to Day Coach & future AI. */
+  vibe: boundedStr(2000),
 })
 
 export const TripItemSchema = z.object({

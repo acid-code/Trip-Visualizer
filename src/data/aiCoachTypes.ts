@@ -107,6 +107,8 @@ export type AiCoachRequestBody = {
   tripName: string
   travelers: string
   notes: string
+  /** Overall trip mood / preferences — weigh this for the whole coach reply. */
+  vibe: string
   thinDay: boolean
   /** How packed the coached day already is. */
   dayFillLevel?: 'empty' | 'partial' | 'full'

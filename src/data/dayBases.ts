@@ -310,7 +310,7 @@ export type RangeReconcileMode = 'keep-outside' | 'drop-outside'
 export function applyTripMetaRange(
   meta: TripMeta,
   items: TripItem[],
-  next: { name: string; startDate: string; endDate: string },
+  next: { name: string; startDate: string; endDate: string; vibe?: string },
   mode: RangeReconcileMode = 'keep-outside',
 ): { meta: TripMeta; items: TripItem[]; widened: boolean; removedCount: number } {
   let dates = sanitizeMetaDates(next.startDate, next.endDate)
@@ -362,6 +362,7 @@ export function applyTripMetaRange(
     name,
     startDate: dates.startDate,
     endDate: dates.endDate,
+    ...(typeof next.vibe === 'string' ? { vibe: next.vibe.trim().slice(0, 2000) } : {}),
   }
 
   return {

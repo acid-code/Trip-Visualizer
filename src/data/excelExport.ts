@@ -212,6 +212,7 @@ function buildTripSheet(wb: ExcelJS.Workbook, trip: TripRecord) {
     ['home_currency', trip.meta.homeCurrency],
     ['timezone_note', trip.meta.timezoneNote],
     ['travelers', trip.meta.travelers],
+    ['vibe', trip.meta.vibe],
     ['notes', trip.meta.notes],
   ]
 
@@ -740,6 +741,7 @@ export function tripToBlankTemplate(): ExcelJS.Workbook {
       timezoneNote: 'All times are local',
       travelers: '',
       notes: 'Fill Steps + Hotels. Cash is filled automatically on export.',
+      vibe: '',
     },
     planSections: [],
     planPlaces: [],

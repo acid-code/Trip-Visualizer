@@ -12,6 +12,8 @@ export type TripMetaDraft = {
   name: string
   startDate: string
   endDate: string
+  /** Overall trip vibe / what they're looking for (AI context). */
+  vibe: string
 }
 
 type Props = {
@@ -42,7 +44,7 @@ function addDaysIso(iso: string, days: number): string {
 
 export function defaultCreateDraft(): TripMetaDraft {
   const start = todayIso()
-  return { name: '', startDate: start, endDate: addDaysIso(start, 6) }
+  return { name: '', startDate: start, endDate: addDaysIso(start, 6), vibe: '' }
 }
 
 export function draftFromMeta(meta: TripMeta): TripMetaDraft {
@@ -50,6 +52,7 @@ export function draftFromMeta(meta: TripMeta): TripMetaDraft {
     name: meta.name || '',
     startDate: isIsoDate(meta.startDate) ? meta.startDate : todayIso(),
     endDate: isIsoDate(meta.endDate) ? meta.endDate : todayIso(),
+    vibe: meta.vibe || '',
   }
 }
 
@@ -66,6 +69,7 @@ export function TripMetaDialog({
   const [name, setName] = useState(initial.name)
   const [startDate, setStartDate] = useState(initial.startDate)
   const [endDate, setEndDate] = useState(initial.endDate)
+  const [vibe, setVibe] = useState(initial.vibe)
   const [rangeMode, setRangeMode] = useState<RangeReconcileMode>('keep-outside')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -76,10 +80,11 @@ export function TripMetaDialog({
     setName(initial.name)
     setStartDate(initial.startDate)
     setEndDate(initial.endDate)
+    setVibe(initial.vibe || '')
     setRangeMode('keep-outside')
     setBusy(false)
     setError(null)
-  }, [open, initial.name, initial.startDate, initial.endDate])
+  }, [open, initial.name, initial.startDate, initial.endDate, initial.vibe])
 
   useEffect(() => {
     if (!open || requiredSetup) return
@@ -131,6 +136,7 @@ export function TripMetaDialog({
             (mode === 'create' || requiredSetup ? 'New trip' : 'Untitled trip'),
           startDate: dates.startDate,
           endDate: dates.endDate,
+          vibe: vibe.trim().slice(0, 2000),
         },
         outside.length && rangeMode === 'drop-outside' ? 'drop-outside' : 'keep-outside',
       )
@@ -229,6 +235,23 @@ export function TripMetaDialog({
               />
             </label>
           </div>
+
+          <label className="block text-xs font-medium text-[var(--ink-muted)]">
+            Trip vibe
+            <span className="ml-1 font-normal text-stone-400">(optional)</span>
+            <textarea
+              className="mt-1 min-h-[4.5rem] w-full resize-y rounded-2xl border border-[#e7e0d5] bg-white px-3 py-2.5 text-sm text-[var(--ink)] outline-none ring-[var(--coral)]/30 placeholder:text-stone-400 focus:ring-2"
+              value={vibe}
+              onChange={(e) => setVibe(e.target.value)}
+              placeholder="e.g. Slow Provence — villages, wine, markets; not rushed; good food over museums"
+              maxLength={2000}
+              disabled={busy}
+              rows={3}
+            />
+            <span className="mt-1 block text-[10px] text-stone-400">
+              Day Coach and other AI use this for the whole trip.
+            </span>
+          </label>
 
           {dayCount > 0 ? (
             <div className="rounded-2xl border border-teal-200/80 bg-teal-50/70 px-3 py-2 text-xs text-teal-900">

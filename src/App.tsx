@@ -500,6 +500,7 @@ export default function App() {
             name: '',
             startDate: seeded.meta.startDate,
             endDate: seeded.meta.endDate,
+            vibe: seeded.meta.vibe || '',
           },
         })
       }
@@ -551,6 +552,7 @@ export default function App() {
                 name: '',
                 startDate: trip.meta.startDate,
                 endDate: trip.meta.endDate,
+                vibe: trip.meta.vibe || '',
               },
             })
           } else {

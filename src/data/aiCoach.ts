@@ -1502,6 +1502,7 @@ export function buildCoachRequestBody(args: {
     tripName: trip.meta.name,
     travelers: trip.meta.travelers,
     notes: trip.meta.notes.slice(0, 1500),
+    vibe: (trip.meta.vibe || '').slice(0, 1500),
     thinDay: diagnosis.fillLevel === 'empty',
     dayFillLevel: diagnosis.fillLevel,
     anchor,

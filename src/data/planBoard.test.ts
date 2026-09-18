@@ -20,6 +20,7 @@ function baseTrip(items: TripItem[]): TripRecord {
       timezoneNote: '',
       travelers: '',
       notes: '',
+      vibe: '',
     },
     items,
     planSections: [],

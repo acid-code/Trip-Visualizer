@@ -128,6 +128,7 @@ function sampleTrip(overrides: Partial<TripRecord> = {}): TripRecord {
       timezoneNote: 'All times are local',
       travelers: '2',
       notes: 'secret notes',
+      vibe: '',
     },
     items: [
       {

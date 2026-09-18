@@ -88,6 +88,8 @@ const SYSTEM = `You are Day Coach for a trip journal app. You ONLY improve ONE c
 You never invent places. You may ONLY reference candidate ids from the provided candidates list.
 You never change other days.
 
+Honor the trip-level "vibe" field when present — it describes what the traveler wants from the trip overall (pace, food, scenery, energy). Prefer options that match vibe; do not ignore it for generic filler.
+
 Use planningHints and dayFillLevel as the day diagnosis.
 
 Match effort to dayFillLevel:
@@ -203,6 +205,7 @@ export default async function handler(req: VercelReq, res: VercelRes) {
     tripName: clamp(String(body.tripName ?? ''), 200),
     travelers: clamp(String(body.travelers ?? ''), 200),
     notes: clamp(String(body.notes ?? ''), 1500),
+    vibe: clamp(String(body.vibe ?? ''), 1500),
     thinDay: Boolean(body.thinDay),
     dayFillLevel: ['empty', 'partial', 'full'].includes(String(body.dayFillLevel))
       ? String(body.dayFillLevel)

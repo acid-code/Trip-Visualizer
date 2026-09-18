@@ -18,6 +18,7 @@ function sampleTrip(over: Partial<TripRecord> = {}): TripRecord {
       timezoneNote: '',
       notes: '',
       travelers: '',
+      vibe: '',
     },
     items: [
       {
