@@ -7,7 +7,7 @@ import {
   type Entity,
   type Viewer,
 } from 'cesium'
-import type { TripItem } from '../domain/types'
+import type { TripItem, TripMeta } from '../domain/types'
 import type { NearbyStepLink, RouteConnector } from '../data/routes'
 import { estimateDriveMinutes, estimateWalkMinutes } from '../data/routes'
 import type { WalkLinkTarget } from '../data/mapsLinks'
@@ -116,6 +116,32 @@ const TAP_PAN_PX = 52
 /** Second tap within this window clears a temp pin. */
 const DOUBLE_TAP_MS = 420
 const DOUBLE_TAP_PX = 56
+
+/** Stable key so we don't clear/redraw paths when only array identity changed. */
+function tripEntitiesSyncKey(
+  items: TripItem[],
+  connectors: RouteConnector[],
+  selectedId: string | null | undefined,
+  meta: TripMeta | null | undefined,
+): string {
+  const itemPart = items
+    .map((i) => {
+      const n = i.routeCoords?.length ?? 0
+      const a = n > 0 ? i.routeCoords![0] : null
+      const b = n > 1 ? i.routeCoords![n - 1] : null
+      return `${i.id}|${i.type}|${i.status}|${i.date}|${i.lat}|${i.lon}|${i.latTo}|${i.lonTo}|${n}|${a?.[0]}|${a?.[1]}|${b?.[0]}|${b?.[1]}`
+    })
+    .join(';')
+  const connPart = connectors
+    .map((c) => {
+      const n = c.coords.length
+      const a = n > 0 ? c.coords[0] : null
+      const b = n > 1 ? c.coords[n - 1] : null
+      return `${c.id}|${c.mode}|${c.date}|${n}|${a?.[0]}|${a?.[1]}|${b?.[0]}|${b?.[1]}`
+    })
+    .join(';')
+  return `${meta?.startDate}|${meta?.endDate}|${selectedId ?? ''}|${itemPart}|${connPart}`
+}
 
 /**
  * Cesium host stays an empty div. Walk button is a sibling overlay updated
@@ -346,8 +372,16 @@ export function GlobeView({
         typeof removeTileProgress === 'function' ? removeTileProgress : undefined
       viewer.scene.requestRender()
 
-      ro = new ResizeObserver(() => {
+      ro = new ResizeObserver((entries) => {
         try {
+          const entry = entries[0]
+          const box = entry?.contentRect
+          if (box && box.width > 0 && box.height > 0) {
+            const prev = (ro as ResizeObserver & { __last?: string }).__last
+            const next = `${Math.round(box.width)}x${Math.round(box.height)}`
+            if (prev === next) return
+            ;(ro as ResizeObserver & { __last?: string }).__last = next
+          }
           viewerRef.current?.resize()
           syncWalkButton()
         } catch {
@@ -652,15 +686,20 @@ export function GlobeView({
     }
   }, [mapFocusApiRef])
 
+  const lastTripSyncKeyRef = useRef('')
+
   useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return
+    const key = tripEntitiesSyncKey(items, connectors, selectedId, meta)
+    if (key === lastTripSyncKeyRef.current) return
+    lastTripSyncKeyRef.current = key
     try {
       syncTripEntities(viewer, items, selectedId, connectors, meta)
     } catch (err) {
       console.warn('[globe] syncTripEntities failed', err)
     }
-  }, [items, connectors, meta])
+  }, [items, connectors, meta, selectedId])
 
   useEffect(() => {
     const viewer = viewerRef.current

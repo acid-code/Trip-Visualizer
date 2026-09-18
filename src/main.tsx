@@ -19,24 +19,30 @@ function isStandaloneDisplay(): boolean {
 
 /**
  * PWA-only: size the shell to window.innerHeight.
- * On Samsung standalone, 100dvh often under-reports so absolute bottom chrome floats
- * above a gap. Use innerHeight (not visualViewport) — Chrome tabs stay on CSS dvh.
+ * Debounced + threshold so Samsung gesture/chrome resize chatter does not
+ * thrash layout (that made drive/walk paths look like they were redrawing).
  */
 function syncStandaloneAppHeight() {
   if (!isStandaloneDisplay()) return
   try {
+    let lastH = 0
+    let timer = 0
     const apply = () => {
       if (!isStandaloneDisplay()) return
       const h = Math.round(window.innerHeight)
-      if (h > 0) {
-        document.documentElement.style.setProperty('--app-vh', `${h}px`)
-      }
+      if (h <= 0 || Math.abs(h - lastH) < 3) return
+      lastH = h
+      document.documentElement.style.setProperty('--app-vh', `${h}px`)
+    }
+    const schedule = () => {
+      if (timer) window.clearTimeout(timer)
+      timer = window.setTimeout(apply, 120)
     }
     apply()
-    window.addEventListener('resize', apply)
+    window.addEventListener('resize', schedule)
     window.addEventListener('orientationchange', () => {
       window.setTimeout(apply, 50)
-      window.setTimeout(apply, 250)
+      window.setTimeout(apply, 300)
     })
   } catch {
     /* CSS 100dvh remains */

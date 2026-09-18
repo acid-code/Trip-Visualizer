@@ -1183,6 +1183,17 @@ export default function App() {
       .join(';')
   }
 
+  function connectorsSignature(list: RouteConnector[]): string {
+    return list
+      .map((c) => {
+        const n = c.coords.length
+        const a = n > 0 ? c.coords[0] : null
+        const b = n > 1 ? c.coords[n - 1] : null
+        return `${c.id}|${c.mode}|${c.date ?? ''}|${n}|${a?.[0] ?? ''}|${a?.[1] ?? ''}|${b?.[0] ?? ''}|${b?.[1] ?? ''}`
+      })
+      .join(';')
+  }
+
   async function buildRoutes(trip: TripRecord) {
     const fp = routesFingerprint(trip)
     if (routesForTripRef.current === fp) return
@@ -1201,7 +1212,7 @@ export default function App() {
       const walks = await buildWalkingConnectors(withDrives, (done, total) => {
         setRoutesStatus(`Walk paths ${done}/${total}`)
       })
-      setConnectors(walks)
+      setConnectors((prev) => (connectorsSignature(prev) === connectorsSignature(walks) ? prev : walks))
       const driveChanged = withDrives.some((item) => {
         const prev = trip.items.find((p) => p.id === item.id)
         const prevCoords = prev?.routeCoords ?? []
@@ -1214,10 +1225,11 @@ export default function App() {
         const d = nextCoords[nextCoords.length - 1]!
         return a[0] !== b[0] || a[1] !== b[1] || c[0] !== d[0] || c[1] !== d[1]
       })
-      // Always write hydrated geometry back into trip state when it changed so
-      // the globeâ€™s item.routeCoords stay in sync with â€œRoutes readyâ€.
+      // Route geometry only — skip ensurePlanScaffold (avoids reconcile churn / redraw loops).
       if (driveChanged) {
-        await persist({ ...trip, items: withDrives })
+        const next = { ...trip, items: withDrives, updatedAt: nowIso() }
+        await saveTrip(next)
+        setTrips(await listTrips())
       }
       routesForTripRef.current = routesFingerprint({
         ...trip,
