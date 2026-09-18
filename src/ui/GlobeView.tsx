@@ -303,12 +303,32 @@ export function GlobeView({
 
     let bootTileCleanup: (() => void) | undefined
     let bootTimer: ReturnType<typeof setTimeout> | null = null
+    let bootNotified = false
+    const notifyBoot = () => {
+      if (bootNotified || cancelled) return
+      bootNotified = true
+      if (bootTimer) {
+        clearTimeout(bootTimer)
+        bootTimer = null
+      }
+      bootTileCleanup?.()
+      bootTileCleanup = undefined
+      onBootReadyRef.current?.()
+    }
+    // Cap even if createTripViewer hangs (stale Cesium after SW update).
+    bootTimer = setTimeout(notifyBoot, 3200)
 
     ;(async () => {
-      viewer = await createTripViewer(container, {
-        ionToken,
-        phone: phoneFramingRef.current,
-      })
+      try {
+        viewer = await createTripViewer(container, {
+          ionToken,
+          phone: phoneFramingRef.current,
+        })
+      } catch (err) {
+        console.error('[globe] createTripViewer failed', err)
+        notifyBoot()
+        return
+      }
       if (cancelled) {
         viewer.destroy()
         return
@@ -316,19 +336,7 @@ export function GlobeView({
       viewerRef.current = viewer
       void applyMapStack(viewer, mapStackRef.current || DEFAULT_MAP_STACK, googleKeyRef.current)
 
-      // Signal boot splash once tiles settle (or after a short cap).
-      let bootNotified = false
-      const notifyBoot = () => {
-        if (bootNotified || cancelled) return
-        bootNotified = true
-        if (bootTimer) {
-          clearTimeout(bootTimer)
-          bootTimer = null
-        }
-        bootTileCleanup?.()
-        bootTileCleanup = undefined
-        onBootReadyRef.current?.()
-      }
+      // Signal boot splash once tiles settle (or keep the cap above).
       const removeTileProgress = viewer.scene.globe.tileLoadProgressEvent.addEventListener(
         (queued: number) => {
           if (queued === 0) notifyBoot()
@@ -336,7 +344,6 @@ export function GlobeView({
       )
       bootTileCleanup =
         typeof removeTileProgress === 'function' ? removeTileProgress : undefined
-      bootTimer = setTimeout(notifyBoot, 2800)
       viewer.scene.requestRender()
 
       ro = new ResizeObserver(() => {

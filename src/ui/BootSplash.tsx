@@ -14,7 +14,8 @@ type Props = {
 const ORBIT_MS = 1800
 const ORBIT_REDUCED_MS = 280
 const ESCAPE_MS = 780
-const MAX_SHOW_MS = 10_000
+/** Hard cap — must not reset when map/routes readiness flaps during boot. */
+const MAX_SHOW_MS = 8_000
 const FADE_MS = 420
 
 type Phase = 'orbit' | 'escape' | 'out' | 'gone'
@@ -32,27 +33,20 @@ export function BootSplash({ dataReady, mapReady, routesReady }: Props) {
 
   const shellReady = dataReady && mapReady && routesReady
 
+  // Uncancellable wall clock — routes/map toggling must not extend the splash forever.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setPhase((p) => (p === 'orbit' ? 'escape' : p))
+    }, MAX_SHOW_MS)
+    return () => window.clearTimeout(t)
+  }, [])
+
   useEffect(() => {
     if (phase !== 'orbit') return
+    if (!shellReady) return
     const minOrbit = reducedMotion ? ORBIT_REDUCED_MS : ORBIT_MS
-    const elapsed = () => performance.now() - mountedAt
-
-    const tryEscape = () => {
-      if (elapsed() >= MAX_SHOW_MS || (shellReady && elapsed() >= minOrbit)) {
-        setPhase('escape')
-        return true
-      }
-      return false
-    }
-
-    if (tryEscape()) return
-
-    const wait = shellReady
-      ? Math.max(0, minOrbit - elapsed())
-      : Math.max(0, MAX_SHOW_MS - elapsed())
-    const t = window.setTimeout(() => {
-      tryEscape()
-    }, wait)
+    const wait = Math.max(0, minOrbit - (performance.now() - mountedAt))
+    const t = window.setTimeout(() => setPhase('escape'), wait)
     return () => window.clearTimeout(t)
   }, [shellReady, phase, mountedAt, reducedMotion])
 
@@ -92,6 +86,7 @@ export function BootSplash({ dataReady, mapReady, routesReady }: Props) {
       role="status"
       aria-live="polite"
       aria-label="Loading Trip Tracker"
+      data-boot-splash=""
     >
       <div className="boot-splash-mark" aria-hidden>
         <svg className="boot-splash-mountain" viewBox="0 0 64 64">

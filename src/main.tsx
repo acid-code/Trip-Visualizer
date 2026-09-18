@@ -17,51 +17,32 @@ function isStandaloneDisplay(): boolean {
   return false
 }
 
-/** Mark installed PWA so CSS can floor bottom safe-area (Android often reports 0). */
-function markStandaloneShell() {
-  try {
-    const mq = window.matchMedia('(display-mode: standalone), (display-mode: fullscreen)')
-    const apply = () => {
-      const on = isStandaloneDisplay()
-      document.documentElement.classList.toggle('is-pwa', on)
-      document.documentElement.classList.toggle('is-standalone', on)
-    }
-    apply()
-    mq.addEventListener?.('change', apply)
-  } catch {
-    /* ignore */
-  }
-}
-markStandaloneShell()
-
 /**
- * PWA-only: keep --app-vh tied to the visible viewport.
- * Skipped in Chrome tabs — URL-bar show/hide + visualViewport there causes jumpy gaps.
+ * PWA-only: size the shell to window.innerHeight.
+ * On Samsung standalone, 100dvh often under-reports so absolute bottom chrome floats
+ * above a gap. Use innerHeight (not visualViewport) — Chrome tabs stay on CSS dvh.
  */
-function syncAppViewportHeight() {
+function syncStandaloneAppHeight() {
   if (!isStandaloneDisplay()) return
   try {
     const apply = () => {
       if (!isStandaloneDisplay()) return
-      const vv = window.visualViewport
-      const h = Math.round(vv?.height ?? window.innerHeight)
+      const h = Math.round(window.innerHeight)
       if (h > 0) {
         document.documentElement.style.setProperty('--app-vh', `${h}px`)
       }
     }
     apply()
-    window.visualViewport?.addEventListener('resize', apply)
-    window.visualViewport?.addEventListener('scroll', apply)
     window.addEventListener('resize', apply)
     window.addEventListener('orientationchange', () => {
       window.setTimeout(apply, 50)
-      window.setTimeout(apply, 300)
+      window.setTimeout(apply, 250)
     })
   } catch {
-    /* ignore — CSS 100dvh fallback remains */
+    /* CSS 100dvh remains */
   }
 }
-syncAppViewportHeight()
+syncStandaloneAppHeight()
 
 // Never let update/SW bootstrap kill the app (phone black-screen after hard reset).
 try {

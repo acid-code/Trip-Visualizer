@@ -229,6 +229,10 @@ export function PlanMapView({
       emitIdle()
       onBootReadyRef.current?.()
     })
+    // Stale MapLibre style after SW update can miss `load` — don't block splash.
+    const bootCap = window.setTimeout(() => {
+      onBootReadyRef.current?.()
+    }, 3200)
     map.on('moveend', onMoveEnd)
     map.on('resize', onMoveEnd)
     mapRef.current = map
@@ -241,6 +245,7 @@ export function PlanMapView({
         : null
     if (rootRef.current && ro) ro.observe(rootRef.current)
     return () => {
+      window.clearTimeout(bootCap)
       if (idleTimer) clearTimeout(idleTimer)
       ro?.disconnect()
       map.off('moveend', onMoveEnd)

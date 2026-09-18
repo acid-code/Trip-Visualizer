@@ -2403,9 +2403,7 @@ export default function App() {
     <div className="relative h-full w-full overflow-hidden bg-[var(--bg)] text-[var(--ink)]">
       <BootSplash
         dataReady={bootDataReady}
-        mapReady={
-          !active || (appMode === 'plan' ? bootPlanMapReady : bootGlobeReady)
-        }
+        mapReady={!active || bootGlobeReady || bootPlanMapReady}
         routesReady={!active || bootRoutesReady}
       />
       {active ? (

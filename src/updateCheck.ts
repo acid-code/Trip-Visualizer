@@ -188,6 +188,7 @@ export async function checkForAppUpdate(opts?: {
  * - Poll `/version.json` (NetworkOnly via SW) on wake + every few minutes
  * - On mismatch, unregister SW + clear caches (capped retries per session)
  * - Disabled on localhost / Vite so local work is never yanked
+ * - Never force-reload while the cold boot splash is still up
  */
 export function startUpdateChecks() {
   if (isLocalAppEnv()) {
@@ -217,12 +218,15 @@ export function startUpdateChecks() {
     )
   }
 
+  const bootSplashUp = () => Boolean(document.querySelector('[data-boot-splash]'))
+
   const run = () => {
+    if (bootSplashUp()) return
     void checkForAppUpdate()
   }
 
-  // Soon after first paint (boot splash may still be up — that's fine).
-  window.setTimeout(run, 1_500)
+  // After splash hard-cap (8s) + fade — never yank mid-orbit.
+  window.setTimeout(run, 10_000)
   window.setInterval(run, POLL_MS)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') run()

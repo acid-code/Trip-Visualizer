@@ -40,8 +40,8 @@ export function JourneyBookDock({
 }: Props) {
   return (
     <div
-      className={`book-dock absolute bottom-0 z-50 ${
-        wide ? 'book-dock-wide left-3 right-auto' : 'inset-x-0 mx-auto'
+      className={`book-dock z-50 ${
+        wide ? 'book-dock-wide' : ''
       }`}
     >
       <div className={`book-volume ${open ? 'book-volume-open' : ''}`}>
