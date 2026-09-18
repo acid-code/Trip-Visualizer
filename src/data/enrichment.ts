@@ -2,6 +2,7 @@ import type { PlanPlace, TripItem } from '../domain/types'
 import { lookupAirport } from './airports'
 import { nowIso } from './db'
 import { fetchGoogleTextViaProxy } from './placesGoogle'
+import { fetchOsrmRoute } from './routes'
 import { MAX_GEOCODE_QUERY_LEN, safeHttpsUrl } from './security'
 import { isValidCoord, parseLat, parseLon } from './validate'
 
@@ -556,7 +557,6 @@ export async function fetchDrivingRoute(
   from: [number, number],
   to: [number, number],
 ): Promise<[number, number][]> {
-  const { fetchOsrmRoute } = await import('./routes')
   return fetchOsrmRoute(from, to, 'driving')
 }
 

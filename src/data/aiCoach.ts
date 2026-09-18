@@ -7,6 +7,8 @@ import {
   fetchNearbyExplore,
   type ExplorePlace,
 } from './explore'
+import { geocodePlace } from './enrichment'
+import { fetchGoogleTextViaProxy } from './placesGoogle'
 import { isValidCoord } from './validate'
 import { logClientError } from './security'
 import {
@@ -832,7 +834,6 @@ async function resolveRegionAnchors(
     if (opts?.signal?.aborted) break
     if (opts?.useGooglePlaces) {
       try {
-        const { fetchGoogleTextViaProxy } = await import('./placesGoogle')
         const hit = await fetchGoogleTextViaProxy({
           query: q,
           apiKey: opts.googleApiKey,
@@ -848,7 +849,6 @@ async function resolveRegionAnchors(
       }
     }
     try {
-      const { geocodePlace } = await import('./enrichment')
       const g = await geocodePlace(q)
       if (g) out.push({ lat: g.lat, lon: g.lon, label: q })
     } catch (err) {
@@ -876,7 +876,6 @@ async function resolveRegionAnchors(
             : null
     if (fallback) {
       try {
-        const { geocodePlace } = await import('./enrichment')
         const g = await geocodePlace(fallback)
         if (g) out.push({ lat: g.lat, lon: g.lon, label: fallback })
       } catch (err) {
@@ -931,32 +930,27 @@ async function resolveAreaRecommendationAnchors(
 
   const out: Array<{ lat: number; lon: number; label: string }> = []
   const seen = new Set<string>()
-  try {
-    const { fetchGoogleTextViaProxy } = await import('./placesGoogle')
-    for (const q of queries.slice(0, intent.water ? 5 : 4)) {
-      if (opts.signal?.aborted) break
-      try {
-        const hit = await fetchGoogleTextViaProxy({
-          query: q,
-          apiKey: opts.googleApiKey,
-          bias: { lat: anchor.lat, lon: anchor.lon, radiusM: 40_000 },
-          signal: opts.signal,
-        })
-        if (!hit || !isValidCoord(hit.lat, hit.lon)) continue
-        const key = `${hit.lat.toFixed(3)},${hit.lon.toFixed(3)}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        out.push({
-          lat: hit.lat,
-          lon: hit.lon,
-          label: hit.name || q,
-        })
-      } catch (err) {
-        logClientError('ai-coach-area-text', err)
-      }
+  for (const q of queries.slice(0, intent.water ? 5 : 4)) {
+    if (opts.signal?.aborted) break
+    try {
+      const hit = await fetchGoogleTextViaProxy({
+        query: q,
+        apiKey: opts.googleApiKey,
+        bias: { lat: anchor.lat, lon: anchor.lon, radiusM: 40_000 },
+        signal: opts.signal,
+      })
+      if (!hit || !isValidCoord(hit.lat, hit.lon)) continue
+      const key = `${hit.lat.toFixed(3)},${hit.lon.toFixed(3)}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({
+        lat: hit.lat,
+        lon: hit.lon,
+        label: hit.name || q,
+      })
+    } catch (err) {
+      logClientError('ai-coach-area-text', err)
     }
-  } catch (err) {
-    logClientError('ai-coach-area-import', err)
   }
   return out
 }
