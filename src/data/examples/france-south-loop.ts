@@ -13,6 +13,7 @@ export const exampleMeta: TripMeta = {
     'Sample: TLV→Paris (2n) → TGV Marseille → Provence car loop east→west (Cassis→Aix→Avignon→Arles) → MRS→Napoli. Duplicate to make it yours.',
   vibe:
     'Relaxed Provence road trip — villages, markets, wine, coastline; good food; not museum-heavy.',
+  plannerPrefs: {},
 }
 
 /** Shared empty fields so the schedule stays readable. */

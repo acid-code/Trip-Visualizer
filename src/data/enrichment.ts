@@ -13,11 +13,10 @@ function asCoord(lat: unknown, lon: unknown): { lat: number; lon: number } | nul
   return { lat: la!, lon: lo! }
 }
 
-const NOMINATIM = 'https://nominatim.openstreetmap.org/search'
-const NOMINATIM_REVERSE = 'https://nominatim.openstreetmap.org/reverse'
-const WIKIDATA = 'https://www.wikidata.org/w/api.php'
-/** Identify this app — required by Nominatim usage policy (Node); browsers send their own UA. */
+const NOMINATIM_PROXY = '/api/nominatim'
+/** Identify this app — sent from the Node proxy (browsers cannot set User-Agent). */
 const NOMINATIM_UA = 'trip-worker/0.1 (trip planner; local geocode)'
+const WIKIDATA = 'https://www.wikidata.org/w/api.php'
 
 let lastNominatimAt = 0
 
@@ -30,7 +29,8 @@ async function nominatimRateLimit() {
 function nominatimHeaders(): HeadersInit {
   return {
     Accept: 'application/json',
-    'User-Agent': NOMINATIM_UA,
+    // Hint for proxies; real UA is set server-side on /api/nominatim
+    'X-Trip-Worker-Client': NOMINATIM_UA,
   }
 }
 
@@ -44,6 +44,22 @@ export type PlaceLookup = {
   city: string
   osmId: string
   query: string
+}
+
+const geocodeCache = new Map<string, PlaceLookup | null>()
+const GEOCODE_CACHE_MAX = 80
+
+function cacheGet(key: string): PlaceLookup | null | undefined {
+  if (!geocodeCache.has(key)) return undefined
+  return geocodeCache.get(key) ?? null
+}
+
+function cacheSet(key: string, value: PlaceLookup | null) {
+  geocodeCache.set(key, value)
+  if (geocodeCache.size > GEOCODE_CACHE_MAX) {
+    const first = geocodeCache.keys().next().value
+    if (first !== undefined) geocodeCache.delete(first)
+  }
 }
 
 type NominatimAddress = {
@@ -165,13 +181,37 @@ export async function lookupPlace(
     preferGoogleText?: boolean
   },
 ): Promise<PlaceLookup | null> {
-  const q = query.trim().slice(0, MAX_GEOCODE_QUERY_LEN)
-  if (!q) return null
+  const qRaw = query.trim().slice(0, MAX_GEOCODE_QUERY_LEN)
+  if (!qRaw) return null
+
+  // Fast path: known IATA / airport labels
+  const airport = lookupAirport(qRaw)
+  if (airport) {
+    return {
+      lat: airport.lat,
+      lon: airport.lon,
+      name: airport.name,
+      address: `${airport.name}, ${airport.city}`,
+      city: airport.city,
+      osmId: '',
+      query: qRaw,
+    }
+  }
+
+  const cacheKey = [
+    qRaw.toLowerCase(),
+    opts?.bias
+      ? `${opts.bias.lat.toFixed(2)},${opts.bias.lon.toFixed(2)}`
+      : '',
+    opts?.useGooglePlaces ? 'g' : '',
+  ].join('|')
+  const cached = cacheGet(cacheKey)
+  if (cached !== undefined) return cached
 
   const googleKey = opts?.googleApiKey?.trim()
   const googleAllowed = Boolean(opts?.useGooglePlaces || googleKey)
 
-  async function tryGoogle(): Promise<PlaceLookup | null> {
+  async function tryGoogle(q: string): Promise<PlaceLookup | null> {
     if (!googleAllowed) return null
     try {
       const hit = await fetchGoogleTextViaProxy({
@@ -194,37 +234,64 @@ export async function lookupPlace(
     }
   }
 
-  async function tryNominatim(): Promise<PlaceLookup | null> {
-    const url = new URL(NOMINATIM)
-    url.searchParams.set('q', q)
-    url.searchParams.set('format', 'json')
-    url.searchParams.set('addressdetails', '1')
-    url.searchParams.set('limit', '1')
-    if (opts?.bias && isValidCoord(opts.bias.lat, opts.bias.lon)) {
-      // Soft viewbox ~bias — improves “near trip” without hard filter.
-      const d = Math.min(Math.max((opts.bias.radiusM ?? 50_000) / 111_000, 0.05), 1.5)
-      url.searchParams.set(
+  async function nominatimSearch(
+    q: string,
+    withBias: boolean,
+  ): Promise<PlaceLookup | null> {
+    const params = new URLSearchParams()
+    params.set('q', q)
+    params.set('limit', '3')
+    if (
+      withBias &&
+      opts?.bias &&
+      isValidCoord(opts.bias.lat, opts.bias.lon)
+    ) {
+      const d = Math.min(
+        Math.max((opts.bias.radiusM ?? 80_000) / 111_000, 0.08),
+        2,
+      )
+      params.set(
         'viewbox',
         `${opts.bias.lon - d},${opts.bias.lat + d},${opts.bias.lon + d},${opts.bias.lat - d}`,
       )
     }
     await nominatimRateLimit()
-    const res = await fetch(url.toString(), {
+    const res = await fetch(`${NOMINATIM_PROXY}?${params.toString()}`, {
       headers: nominatimHeaders(),
     })
     if (!res.ok) return null
-    const data = (await res.json()) as NominatimHit[]
-    if (!data[0]) return null
+    const data = (await res.json()) as NominatimHit[] | { error?: string }
+    if (!Array.isArray(data) || !data[0]) return null
     return placeFromHit(data[0], q)
   }
 
-  if (opts?.preferGoogleText) {
-    return (await tryGoogle()) || (await tryNominatim())
+  async function tryNominatimVariants(): Promise<PlaceLookup | null> {
+    const variants = geocodeQueryVariants(qRaw)
+    // First pass: with soft viewbox bias when available
+    for (const v of variants) {
+      const hit = await nominatimSearch(v, true)
+      if (hit) return hit
+    }
+    // Second pass: no viewbox (bias sometimes excludes the right hit)
+    if (opts?.bias) {
+      for (const v of variants.slice(0, 3)) {
+        const hit = await nominatimSearch(v, false)
+        if (hit) return hit
+      }
+    }
+    return null
   }
 
-  const free = await tryNominatim()
-  if (free) return free
-  return tryGoogle()
+  let result: PlaceLookup | null = null
+  if (opts?.preferGoogleText) {
+    result =
+      (await tryGoogle(normalizeGeocodeQuery(qRaw) || qRaw)) ||
+      (await tryNominatimVariants())
+  } else {
+    result = (await tryNominatimVariants()) || (await tryGoogle(normalizeGeocodeQuery(qRaw) || qRaw))
+  }
+  cacheSet(cacheKey, result)
+  return result
 }
 
 /** Reverse geocode a map pin into name + address. */
@@ -233,19 +300,18 @@ export async function reverseGeocode(
   lon: number,
 ): Promise<PlaceLookup | null> {
   if (!isValidCoord(lat, lon)) return null
-  const url = new URL(NOMINATIM_REVERSE)
-  url.searchParams.set('lat', String(lat))
-  url.searchParams.set('lon', String(lon))
-  url.searchParams.set('format', 'json')
-  url.searchParams.set('addressdetails', '1')
-  url.searchParams.set('zoom', '18')
+  const params = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+    zoom: '18',
+  })
   await nominatimRateLimit()
-  const res = await fetch(url.toString(), {
+  const res = await fetch(`${NOMINATIM_PROXY}?${params.toString()}`, {
     headers: nominatimHeaders(),
   })
   if (!res.ok) return null
   const hit = (await res.json()) as NominatimHit & { error?: string }
-  if (hit.error) return null
+  if (hit.error || !hit.lat) return null
   return placeFromHit(hit, `${lat.toFixed(5)},${lon.toFixed(5)}`)
 }
 
@@ -298,16 +364,51 @@ export function locationQueryFromInput(input: string): string {
   return s
 }
 
-/** Soften vague spreadsheet labels so geocoders hit a real place. */
-function normalizeGeocodeQuery(input: string): string {
-  const s = input.trim()
+/** Soften vague labels so geocoders hit a real place. */
+export function normalizeGeocodeQuery(input: string): string {
+  let s = input.trim()
   if (!s) return ''
+  // AI day-base titles: "Avignon base", "Nice stay-zone"
+  s = s
+    .replace(/\s+(base|stay-?zone|area)\s*$/i, '')
+    .replace(/\s+base\b/gi, '')
+    .trim()
   if (/^paris\s*(center|centre|city\s*center|city\s*centre)?$/i.test(s)) {
     return 'Paris, France'
   }
   if (/^mrs(\s+airport)?$/i.test(s)) return 'Marseille Provence Airport, France'
-  if (/^cdg(\s+airport)?$/i.test(s)) return 'Charles de Gaulle Airport, Paris'
+  if (/^cdg(\s+airport)?$/i.test(s)) return 'Charles de Gaulle Airport, Paris, France'
+  if (/^ory(\s+airport)?$/i.test(s)) return 'Orly Airport, Paris, France'
+  if (/^lhr(\s+airport)?$/i.test(s)) return 'Heathrow Airport, London, UK'
+  if (/^nce(\s+airport)?$/i.test(s)) return 'Nice Côte d’Azur Airport, France'
+  if (/^tlv(\s+airport)?$/i.test(s)) return 'Ben Gurion Airport, Tel Aviv, Israel'
+  if (/^jfk(\s+airport)?$/i.test(s)) return 'John F Kennedy Airport, New York, USA'
   return s
+}
+
+/** Ordered query variants to retry when Nominatim returns []. */
+export function geocodeQueryVariants(input: string): string[] {
+  const primary = normalizeGeocodeQuery(input)
+  if (!primary) return []
+  const out: string[] = []
+  const push = (q: string) => {
+    const t = q.trim()
+    if (t && !out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t)
+  }
+  push(primary)
+  // Drop parenthetical noise
+  push(primary.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim())
+  // City before comma only
+  const beforeComma = primary.split(',')[0]?.trim()
+  if (beforeComma && beforeComma.length >= 2) push(beforeComma)
+  // Common European trip context when query is a bare city/region
+  if (beforeComma && !/,/.test(primary) && beforeComma.split(/\s+/).length <= 3) {
+    push(`${beforeComma}, France`)
+    push(`${beforeComma}, Italy`)
+    push(`${beforeComma}, Spain`)
+    push(`${beforeComma}, UK`)
+  }
+  return out.slice(0, 6)
 }
 
 function normalizeMatchKey(s: string): string {

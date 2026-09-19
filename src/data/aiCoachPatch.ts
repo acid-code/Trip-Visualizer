@@ -1042,6 +1042,12 @@ export function describePatch(
   if (option.patch.addNote) {
     lines.push(`Note: ${option.patch.addNote.title}`)
   }
+  for (const s of option.patch.addPlanPlaces ?? []) {
+    const p = byId.get(s.candidateId)
+    lines.push(
+      `Plan list (${s.section}): ${p?.name ?? s.candidateId} — not scheduled yet`,
+    )
+  }
   return lines
 }
 

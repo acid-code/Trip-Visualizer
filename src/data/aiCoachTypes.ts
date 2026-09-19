@@ -37,12 +37,20 @@ export type AiCoachPatchAddDrive = {
   end?: string
 }
 
+export type AiCoachPatchAddPlanPlace = {
+  candidateId: string
+  /** must → Must see, food → Food, maybe → Maybe. Never stay/hotel from Day Helper. */
+  section: 'must' | 'food' | 'maybe'
+}
+
 export type AiCoachPatch = {
   addSteps?: AiCoachPatchAddStep[]
   addDrives?: AiCoachPatchAddDrive[]
   setTimes?: AiCoachPatchSetTime[]
   removeSteps?: AiCoachPatchRemoveStep[]
   addNote?: { title: string; notes: string; start?: string }
+  /** Seed Plan Discover lists without scheduling Journey steps. */
+  addPlanPlaces?: AiCoachPatchAddPlanPlace[]
 }
 
 export type AiCoachOption = {

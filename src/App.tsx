@@ -91,6 +91,14 @@ import {
 import { AiReviewChrome } from './ui/AiReviewChrome'
 import { SegmentedControl } from './ui/primitives'
 import { PlanBoard, applyLocalPlanAi } from './ui/PlanBoard'
+import { TripPlannerSheet } from './ui/TripPlannerSheet'
+import { applyCoachPlanSeeds, suggestDiscoverForAnchor } from './agent'
+import {
+  diffTripItems,
+  isAiReviewRemoved,
+  mergeReviewDisplayItems,
+  summarizeMergeDiff,
+} from './agent/tripMergeDiff'
 import { MapLayersControl } from './ui/MapLayersControl'
 import { JOURNEY_TONGUES, JourneyBookDock } from './ui/JourneyBookDock'
 import { ensurePlanScaffold } from './data/planBoard'
@@ -271,13 +279,21 @@ function routeWalkForTransportItem(item: TripItem):
 }
 
 type AiReviewState = {
+  scope: 'day' | 'trip'
   beforeItems: TripItem[]
   draftItems: TripItem[]
+  /** Whole-trip merge: full candidate trip (meta, planPlaces, prefs). */
+  draftTrip?: TripRecord
+  /** Snapshot to restore on Discard (trip scope). */
+  beforeTrip?: TripRecord
   optionId: string
   day: string
-  session: AiCoachSessionRestore
+  session: AiCoachSessionRestore | null
   addedIds: string[]
+  changedIds: string[]
+  removedIds: string[]
   error: string | null
+  label?: string
 }
 
 export default function App() {
@@ -375,6 +391,8 @@ export default function App() {
   const [exploreFlyToken, setExploreFlyToken] = useState(0)
   const [exploreReturnToken, setExploreReturnToken] = useState(0)
   const [aiOpen, setAiOpen] = useState(false)
+  const [tripPlannerOpen, setTripPlannerOpen] = useState(false)
+  const [tripPlannerResume, setTripPlannerResume] = useState<string | null>(null)
   const [aiRestore, setAiRestore] = useState<AiCoachSessionRestore | null>(null)
   const [aiReview, setAiReview] = useState<AiReviewState | null>(null)
   const [aiReviewBusy, setAiReviewBusy] = useState(false)
@@ -411,17 +429,36 @@ export default function App() {
   const enrichAttemptedRef = useRef<Set<string>>(new Set())
   const tempPinGenRef = useRef(0)
   const exploreAbortRef = useRef<AbortController | null>(null)
+  /** Serialize trip writes so rapid deletes don't restore stale snapshots. */
+  const persistChainRef = useRef(Promise.resolve())
+  const activeTripRef = useRef<TripRecord | null>(null)
+  const persistEpochRef = useRef(0)
 
   const active = useMemo(
     () => trips.find((t) => t.id === activeId) ?? null,
     [trips, activeId],
   )
 
-  /** Live trip view — draft items while AI review is open. */
+  useEffect(() => {
+    activeTripRef.current = active
+  }, [active])
+
+  /** Live trip view — draft items (+ grey removed ghosts) while AI review is open. */
   const displayTrip = useMemo(() => {
     if (!active) return null
     if (!aiReview) return active
-    return { ...active, items: aiReview.draftItems }
+    const base =
+      aiReview.scope === 'trip' && aiReview.draftTrip
+        ? aiReview.draftTrip
+        : active
+    return {
+      ...base,
+      items: mergeReviewDisplayItems(
+        aiReview.draftItems,
+        aiReview.beforeItems,
+        aiReview.removedIds,
+      ),
+    }
   }, [active, aiReview])
 
   const selected = useMemo(
@@ -674,15 +711,19 @@ export default function App() {
   useEffect(() => {
     void (async () => {
       try {
+        const { resolvePlaceProvider, setPlaceProvider } = await import('./agent')
         const res = await fetch('/api/maps-status', { cache: 'no-store' })
         if (!res.ok) {
           logClientError('maps-status', `HTTP ${res.status}`)
           setServerPlacesConfigured(false)
+          setPlaceProvider('osm')
           return
         }
         const data = (await res.json()) as { placesConfigured?: boolean }
         const ok = Boolean(data.placesConfigured)
         setServerPlacesConfigured(ok)
+        setPlaceProvider(ok ? 'google' : 'osm')
+        void resolvePlaceProvider()
         logClientInfo(
           'maps-status',
           ok
@@ -691,6 +732,8 @@ export default function App() {
         )
       } catch (err) {
         setServerPlacesConfigured(false)
+        const { setPlaceProvider } = await import('./agent')
+        setPlaceProvider('osm')
         logClientError('maps-status', err)
       }
     })()
@@ -785,12 +828,30 @@ export default function App() {
   }, [activeId])
 
   async function persist(next: TripRecord) {
+    // Always queue — concurrent Plan/Journey edits must not clobber each other.
+    await enqueueTripMutation(() => next)
+  }
+
+  function normalizeTripRecord(next: TripRecord): TripRecord {
     const withPlan = ensurePlanScaffold(next)
     const meta = widenMetaToItems(withPlan.meta, withPlan.items)
     const items = ensureDayStartBases(meta, withPlan.items)
-    const local: TripRecord = { ...withPlan, meta, items, updatedAt: nowIso() }
+    return { ...withPlan, meta, items, updatedAt: nowIso() }
+  }
+
+  /** Write trip to IDB + React state. Call only from the persist queue. */
+  async function writeTrip(local: TripRecord): Promise<TripRecord> {
+    const epoch = ++persistEpochRef.current
+    activeTripRef.current = local
+    setTrips((prev) => {
+      const idx = prev.findIndex((t) => t.id === local.id)
+      if (idx < 0) return prev
+      const copy = prev.slice()
+      copy[idx] = local
+      return copy
+    })
     await saveTrip(local)
-    setTrips(await listTrips())
+    // Do not reload all trips here — a slower listTrips can overwrite a newer queued write.
 
     if (!cloudApplyingRemoteRef.current && isTripShared(local) && cloudUser) {
       if (cloudPushTimerRef.current) window.clearTimeout(cloudPushTimerRef.current)
@@ -803,7 +864,16 @@ export default function App() {
             lastPushedRevisionRef.current = pushed.revision ?? 0
             cloudApplyingRemoteRef.current = true
             await saveTrip(pushed)
-            setTrips(await listTrips())
+            if (epoch === persistEpochRef.current) {
+              activeTripRef.current = pushed
+              setTrips((prev) => {
+                const idx = prev.findIndex((t) => t.id === pushed.id)
+                if (idx < 0) return prev
+                const copy = prev.slice()
+                copy[idx] = pushed
+                return copy
+              })
+            }
           } catch (err) {
             const e = err as Error & { remote?: TripRecord }
             if (e.message === 'PARTNER_UPDATED' && e.remote) {
@@ -815,7 +885,14 @@ export default function App() {
                 shareEnabled: true,
               }
               await saveTrip(merged)
-              setTrips(await listTrips())
+              activeTripRef.current = merged
+              setTrips((prev) => {
+                const idx = prev.findIndex((t) => t.id === merged.id)
+                if (idx < 0) return prev
+                const copy = prev.slice()
+                copy[idx] = merged
+                return copy
+              })
               lastPushedRevisionRef.current = merged.revision ?? 0
               setStatus('Someone else updated — reloaded cloud version (your last edit was not pushed)')
               routesForTripRef.current = null
@@ -830,12 +907,29 @@ export default function App() {
         })()
       }, 500)
     }
+    return local
+  }
+
+  /** Queue a mutation against the latest trip snapshot (avoids stale-active races). */
+  function enqueueTripMutation(
+    mutator: (trip: TripRecord) => TripRecord,
+  ): Promise<TripRecord | null> {
+    const run = async (): Promise<TripRecord | null> => {
+      const base = activeTripRef.current
+      if (!base) return null
+      const local = normalizeTripRecord(mutator(base))
+      return writeTrip(local)
+    }
+    const chained = persistChainRef.current.then(run, run)
+    persistChainRef.current = chained.then(
+      () => undefined,
+      () => undefined,
+    )
+    return chained
   }
 
   async function updateActive(mutator: (trip: TripRecord) => TripRecord) {
-    if (!active) return
-    const next = mutator(active)
-    await persist(next)
+    await enqueueTripMutation(mutator)
   }
 
   async function importWorkbookBuffer(
@@ -1194,7 +1288,11 @@ export default function App() {
       .join(';')
   }
 
-  async function buildRoutes(trip: TripRecord) {
+  async function buildRoutes(
+    trip: TripRecord,
+    opts?: { persistCoords?: boolean },
+  ) {
+    const persistCoords = opts?.persistCoords !== false
     const fp = routesFingerprint(trip)
     if (routesForTripRef.current === fp) return
     if (routesBuildingRef.current) {
@@ -1203,12 +1301,12 @@ export default function App() {
       return
     }
     routesBuildingRef.current = true
-    setRoutesStatus('Drawing drive pathsâ€¦')
+    setRoutesStatus('Drawing drive paths…')
     try {
       const withDrives = await hydrateDriveRoutes(trip.items, (done, total) => {
         setRoutesStatus(`Drive paths ${done}/${total}`)
       })
-      setRoutesStatus('Linking same-day walks & returns to hotelâ€¦')
+      setRoutesStatus('Linking same-day walks & returns to hotel…')
       const walks = await buildWalkingConnectors(withDrives, (done, total) => {
         setRoutesStatus(`Walk paths ${done}/${total}`)
       })
@@ -1225,17 +1323,55 @@ export default function App() {
         const d = nextCoords[nextCoords.length - 1]!
         return a[0] !== b[0] || a[1] !== b[1] || c[0] !== d[0] || c[1] !== d[1]
       })
-      // Route geometry only — skip ensurePlanScaffold (avoids reconcile churn / redraw loops).
-      if (driveChanged) {
-        const next = { ...trip, items: withDrives, updatedAt: nowIso() }
-        await saveTrip(next)
-        setTrips(await listTrips())
+      // Route geometry only — merge onto *current* trip so deletes during
+      // hydrate are not resurrected by a stale snapshot + listTrips.
+      // Skip persist during AI merge preview so Discard can restore cleanly.
+      if (driveChanged && persistCoords) {
+        const coordsById = new Map(
+          withDrives.map((i) => [i.id, i.routeCoords] as const),
+        )
+        await enqueueTripMutation((current) => {
+          if (current.id !== trip.id) return current
+          let changed = false
+          const items = current.items.map((i) => {
+            const coords = coordsById.get(i.id)
+            if (!coords) return i
+            const prev = i.routeCoords ?? []
+            if (
+              prev.length === coords.length &&
+              prev.every((p, idx) => p[0] === coords[idx]![0] && p[1] === coords[idx]![1])
+            ) {
+              return i
+            }
+            changed = true
+            return { ...i, routeCoords: coords }
+          })
+          return changed
+            ? { ...current, items, updatedAt: nowIso() }
+            : current
+        })
+      } else if (driveChanged && !persistCoords) {
+        setAiReview((prev) => {
+          if (!prev || prev.scope !== 'trip' || prev.draftTrip?.id !== trip.id) {
+            return prev
+          }
+          return {
+            ...prev,
+            draftItems: withDrives,
+            draftTrip: { ...prev.draftTrip, items: withDrives },
+          }
+        })
       }
-      routesForTripRef.current = routesFingerprint({
-        ...trip,
-        items: driveChanged ? withDrives : trip.items,
-      })
-      setStatus(`Routes ready Â· ${walks.length} walk links`)
+      const latest = activeTripRef.current
+      routesForTripRef.current = routesFingerprint(
+        latest && latest.id === trip.id && persistCoords
+          ? latest
+          : {
+              ...trip,
+              items: driveChanged ? withDrives : trip.items,
+            },
+      )
+      setStatus(`Routes ready · ${walks.length} walk links`)
     } finally {
       routesBuildingRef.current = false
       setRoutesStatus(null)
@@ -1256,7 +1392,11 @@ export default function App() {
     }
     const items = ensureDayStartBases(active.meta, active.items)
     if (items.length !== active.items.length) {
-      void persist({ ...active, items })
+      void enqueueTripMutation((trip) => {
+        const nextItems = ensureDayStartBases(trip.meta, trip.items)
+        if (nextItems.length === trip.items.length) return trip
+        return { ...trip, items: nextItems }
+      })
       return
     }
     // Already hydrated for this fingerprint (e.g. revisit) — don't hold splash.
@@ -1284,17 +1424,30 @@ export default function App() {
     if (keys.every((k) => enrichAttemptedRef.current.has(k))) return
     enrichBusyRef.current = true
     for (const k of keys) enrichAttemptedRef.current.add(k)
+    const tripId = active.id
+    const enrichIds = new Set(needy.map((i) => i.id))
     void (async () => {
       try {
         setEnrichProgress('0%')
-        const items = await enrichNeedyTripItems(active.items, (done, total) => {
+        const enriched = await enrichNeedyTripItems(active.items, (done, total) => {
           setEnrichProgress(`${Math.round((done / total) * 100)}%`)
         })
-        const next = { ...active, items }
-        await persist(next)
-        setStatus('Map pins updated — building routesâ€¦')
-        routesForTripRef.current = null
-        await buildRoutes(next)
+        const byId = new Map(
+          enriched.filter((i) => enrichIds.has(i.id)).map((i) => [i.id, i]),
+        )
+        await enqueueTripMutation((trip) => {
+          if (trip.id !== tripId) return trip
+          return {
+            ...trip,
+            items: trip.items.map((i) => byId.get(i.id) ?? i),
+          }
+        })
+        const latest = activeTripRef.current
+        if (latest && latest.id === tripId) {
+          setStatus('Map pins updated — building routes…')
+          routesForTripRef.current = null
+          await buildRoutes(latest)
+        }
       } finally {
         enrichBusyRef.current = false
         setEnrichProgress(null)
@@ -1701,37 +1854,50 @@ export default function App() {
   }
 
   async function deleteStep(id: string) {
-    if (!active) return
+    if (!activeTripRef.current) return
     clearTypeSwitchMemory(id)
-    const { meta, items } = deleteStepAndPrune(active.meta, active.items, id)
-    const next = { ...active, meta, items }
-    await persist(next)
+    const wasPlaceholder = activeTripRef.current.items.some(
+      (i) => i.id === id && isPlaceholderBase(i),
+    )
+    const next = await enqueueTripMutation((trip) => {
+      const { meta, items } = deleteStepAndPrune(trip.meta, trip.items, id)
+      return { ...trip, meta, items }
+    })
     if (selectedId === id) {
       setSelectedId(null)
       setLowerMode('none')
       setDetailExpanded(false)
     }
-    if (dayFilter && dayFilter > meta.endDate) setDayFilter(null)
-    setStatus('Step deleted')
-    await buildRoutes(next)
+    if (next && dayFilter && dayFilter > next.meta.endDate) setDayFilter(null)
+    setStatus(
+      wasPlaceholder
+        ? 'Day shell removed — a blank one may return until the day is filled or dropped'
+        : 'Step deleted',
+    )
+    if (next) await buildRoutes(next)
   }
 
   function createStep(item: TripItem) {
     void (async () => {
       if (!active) return
       const replaceId = addContext?.replaceId
-      setStatus(`Pinning â€œ${item.title}â€ on the mapâ€¦`)
+      setStatus(`Pinning “${item.title}” on the map…`)
+      const snap = activeTripRef.current ?? active
       const pinned = await pinItemOnMap(item, {
         useGooglePlaces: placesEnabled,
         googleApiKey: effectiveGoogleKey || undefined,
-        hotels: active.items.filter((i) => i.type === 'hotel'),
+        hotels: snap.items.filter((i) => i.type === 'hotel'),
       })
-      const withoutPlaceholder = replaceId
-        ? active.items.filter((i) => i.id !== replaceId)
-        : active.items
-      const nextItems = sortItems([...withoutPlaceholder, pinned])
-      const next = { ...active, items: ensureDayStartBases(active.meta, nextItems) }
-      await persist(next)
+      const next = await enqueueTripMutation((trip) => {
+        const withoutPlaceholder = replaceId
+          ? trip.items.filter((i) => i.id !== replaceId)
+          : trip.items
+        return {
+          ...trip,
+          items: sortItems([...withoutPlaceholder, pinned]),
+        }
+      })
+      if (!next) return
       clearTempPin()
       setRouteWalk(null)
       setSelectedId(pinned.id)
@@ -1747,7 +1913,7 @@ export default function App() {
       const hasTo = isValidCoord(pinned.latTo, pinned.lonTo)
 
       if (isLeg && hasFrom && hasTo) {
-        // Light up the full Aâ†’B path so flights/drives arenâ€™t mistaken for a single pin
+        // Light up the full A→B path so flights/drives aren’t mistaken for a single pin
         const coords: [number, number][] =
           pinned.routeCoords && pinned.routeCoords.length > 1
             ? pinned.routeCoords
@@ -1775,20 +1941,20 @@ export default function App() {
           })
         }
         setMapFocusEndpoint(null)
-        setStatus(`Added â€œ${pinned.title}â€ Â· path on the map`)
+        setStatus(`Added “${pinned.title}” · path on the map`)
       } else if (isLeg && hasFrom && !hasTo) {
         setStatus(
-          `Added â€œ${pinned.title}â€ Â· departure pinned — add a destination (To) for the path`,
+          `Added “${pinned.title}” · departure pinned — add a destination (To) for the path`,
         )
       } else if (isLeg && !hasFrom && hasTo) {
         setStatus(
-          `Added â€œ${pinned.title}â€ Â· arrival pinned — add an origin (From) for the path`,
+          `Added “${pinned.title}” · arrival pinned — add an origin (From) for the path`,
         )
       } else {
         const onMap = hasFrom
-          ? ' Â· on the map'
-          : ' Â· no pin yet (check the address)'
-        setStatus(`Added â€œ${pinned.title}â€${onMap}`)
+          ? ' · on the map'
+          : ' · no pin yet (check the address)'
+        setStatus(`Added “${pinned.title}”${onMap}`)
       }
       await buildRoutes(next)
     })()
@@ -2089,6 +2255,18 @@ export default function App() {
     session: AiCoachSessionRestore
   }) {
     if (!active) return
+    const journeyish =
+      (args.option.patch.addSteps?.length ?? 0) ||
+      (args.option.patch.addDrives?.length ?? 0) ||
+      (args.option.patch.setTimes?.length ?? 0) ||
+      (args.option.patch.removeSteps?.length ?? 0) ||
+      args.option.patch.addNote
+    if (!journeyish && args.option.patch.addPlanPlaces?.length) {
+      const next = applyCoachPlanSeeds(active, args.option.patch, args.candidates)
+      void persist(next)
+      setStatus('Added ideas to Plan lists (not scheduled on Journey)')
+      return
+    }
     const result = applyCoachPatch({
       trip: active,
       day: args.day,
@@ -2104,9 +2282,15 @@ export default function App() {
       setStatus(intact)
       return
     }
+    // Keep plan seeds for after Save — stash on session via status for now apply immediately
+    let withSeeds = active
+    if (args.option.patch.addPlanPlaces?.length) {
+      withSeeds = applyCoachPlanSeeds(active, args.option.patch, args.candidates)
+    }
     setAiOpen(false)
     setAiReview({
-      beforeItems: active.items.map((i) => ({
+      scope: 'day',
+      beforeItems: withSeeds.items.map((i) => ({
         ...i,
         tags: [...(i.tags ?? [])],
         routeCoords: i.routeCoords
@@ -2118,8 +2302,14 @@ export default function App() {
       day: args.day,
       session: args.session,
       addedIds: result.addedIds,
+      changedIds: result.changedIds,
+      removedIds: result.removedIds,
       error: null,
     })
+    if (withSeeds !== active) {
+      // Persist plan seeds immediately; journey draft still in review
+      void persist({ ...withSeeds, items: active.items })
+    }
     setDayFilter(args.day)
     setTypeFilter(null)
     setNavTab('timeline')
@@ -2135,19 +2325,18 @@ export default function App() {
       )
     } else if (removedN) {
       setStatus(
-        `Updated day (+${addedN} / âˆ’${removedN}). Review, then Save or Discard.`,
+        `Updated day (+${addedN} / −${removedN}). Review, then Save or Discard.`,
       )
+    } else {
+      setStatus('Review AI draft on the map, then Save or Discard.')
     }
 
     const newSpots = newSpotsForOverview(result.items, result.addedIds)
     if (newSpots.length === 0) {
       setSubsetFitItems([])
-      // Pure trim: clear selection so timeline shows the day without a stuck highlight
       setSelectedId(
         result.changedIds[0] ??
-          (removedN
-            ? null
-            : result.addedIds[0] ?? null),
+          (removedN ? null : result.addedIds[0] ?? null),
       )
       if (removedN) {
         setOverviewToken((n) => n + 1)
@@ -2167,11 +2356,9 @@ export default function App() {
     void (async () => {
       const draftTrip = { ...active, items: result.items }
       const reviewDay = args.day
-      setRoutesStatus('Drawing AI day pathsâ€¦')
+      setRoutesStatus('Drawing AI day paths…')
       try {
         const withDrives = await hydrateDriveRoutes(draftTrip.items)
-        // Only rebuild walks for the coached day (merge) so nearby sight walks
-        // show up quickly in review without re-routing the whole trip.
         const dayWalks = await buildWalkingConnectors(withDrives, undefined, {
           onlyDates: [reviewDay],
         })
@@ -2203,6 +2390,25 @@ export default function App() {
   async function saveAiReview() {
     if (!active || !aiReview) return
     setAiReviewBusy(true)
+
+    if (aiReview.scope === 'trip') {
+      const next =
+        aiReview.draftTrip ??
+        ({ ...active, items: aiReview.draftItems } as TripRecord)
+      await persist(next)
+      setAiReview(null)
+      setAiReviewBusy(false)
+      setDayFilter(null)
+      setNavTab('timeline')
+      setPanelOpen(true)
+      setStatus(
+        `Saved trip merge · ${aiReview.label || active.meta.name || 'Whole Trip'}`,
+      )
+      routesForTripRef.current = null
+      await buildRoutes(next)
+      return
+    }
+
     const intact = assertOtherDaysIntact(
       aiReview.beforeItems,
       aiReview.draftItems,
@@ -2214,10 +2420,15 @@ export default function App() {
       return
     }
     const next = { ...active, items: aiReview.draftItems }
+    const prevSession = aiReview.session
+    if (!prevSession) {
+      setAiReviewBusy(false)
+      return
+    }
     const session: AiCoachSessionRestore = {
-      ...aiReview.session,
+      ...prevSession,
       appliedOptionIds: [
-        ...new Set([...aiReview.session.appliedOptionIds, aiReview.optionId]),
+        ...new Set([...prevSession.appliedOptionIds, aiReview.optionId]),
       ],
     }
     const day = aiReview.day
@@ -2229,27 +2440,126 @@ export default function App() {
     setDayFilter(day)
     setNavTab('timeline')
     setPanelOpen(true)
-    setStatus(`Saved AI changes Â· ${formatDayChipLabel(active.meta, day)}`)
+    setStatus(`Saved AI changes · ${formatDayChipLabel(active.meta, day)}`)
     routesForTripRef.current = null
     await buildRoutes(next)
   }
 
   function discardAiReview() {
     if (!aiReview) return
+    if (aiReview.scope === 'trip') {
+      const restore = aiReview.beforeTrip
+      const label = aiReview.label || 'trip sketch'
+      const resume = [
+        `You discarded the “${label}” merge preview — your Journey is back as it was.`,
+        '',
+        'What should we improve before the next preview?',
+        '• Stay zones / cities',
+        '• Pace or number of nights',
+        '• Highlights to keep or drop',
+        '• Flight times or dates',
+        '• Something else — just tell me',
+      ].join('\n')
+      setAiReview(null)
+      setSelectedId(null)
+      setDayFilter(null)
+      setSubsetFitItems([])
+      setNavTab('timeline')
+      setPanelOpen(true)
+      setStatus('Discarded trip merge — Journey restored')
+      routesPendingRef.current = null
+      routesForTripRef.current = null
+      void (async () => {
+        if (restore) {
+          await persist(restore)
+          await buildRoutes(restore)
+        } else if (active) {
+          await buildRoutes(active)
+        }
+      })()
+      setTripPlannerResume(resume)
+      setTripPlannerOpen(true)
+      return
+    }
     const session = aiReview.session
     const day = aiReview.day
     setAiReview(null)
-    setAiRestore(session)
+    if (session) setAiRestore(session)
     setAiOpen(true)
     setDayFilter(day)
     setNavTab('timeline')
     setPanelOpen(true)
     setSelectedId(null)
     setStatus('Discarded AI draft')
-    // Rebuild from the saved trip — do not blank connectors first (that made
-    // paths vanish if rebuild was slow or aborted).
     routesForTripRef.current = null
     if (active) void buildRoutes(active)
+  }
+
+  /** Whole Trip sketch → Journey review (purple/grey diff, Save / Discard). */
+  function beginWholeTripReview(draftTrip: TripRecord, label: string) {
+    if (!active || aiReview) return
+    const diff = diffTripItems(active.items, draftTrip.items)
+    const beforeTrip: TripRecord = JSON.parse(JSON.stringify(active)) as TripRecord
+    setTripPlannerOpen(false)
+    setAiOpen(false)
+    setAiReview({
+      scope: 'trip',
+      beforeItems: beforeTrip.items.map((i) => ({
+        ...i,
+        tags: [...(i.tags ?? [])],
+        routeCoords: i.routeCoords
+          ? i.routeCoords.map((c) => [...c] as [number, number])
+          : [],
+      })),
+      beforeTrip,
+      draftItems: draftTrip.items,
+      draftTrip,
+      optionId: 'whole-trip',
+      day: '',
+      session: null,
+      addedIds: diff.addedIds,
+      changedIds: diff.changedIds,
+      removedIds: diff.removedIds,
+      error: null,
+      label,
+    })
+    setDayFilter(null)
+    setTypeFilter(null)
+    setNavTab('timeline')
+    setPanelOpen(true)
+    setLowerMode('none')
+    setDetailExpanded(false)
+    setStatus(
+      `Review trip merge (${summarizeMergeDiff(diff)}) — purple = new/changed, grey = removed. Save or Discard.`,
+    )
+    const newSpots = newSpotsForOverview(draftTrip.items, diff.addedIds)
+    if (newSpots.length === 0) {
+      setSubsetFitItems([])
+      setSelectedId(diff.changedIds[0] ?? diff.addedIds[0] ?? null)
+      setOverviewToken((n) => n + 1)
+    } else if (newSpots.length <= 2) {
+      setSubsetFitItems([])
+      setSelectedId(
+        earliestNewSpot(draftTrip.items, diff.addedIds)?.id ??
+          diff.addedIds[0] ??
+          diff.changedIds[0] ??
+          null,
+      )
+    } else {
+      setSelectedId(null)
+      setSubsetFitItems(newSpots)
+      setSubsetFitToken((n) => n + 1)
+    }
+    // Preview-only routes — must not write coords onto the saved Journey
+    void (async () => {
+      setRoutesStatus('Drawing merged trip paths…')
+      try {
+        routesForTripRef.current = null
+        await buildRoutes(draftTrip, { persistCoords: false })
+      } finally {
+        setRoutesStatus(null)
+      }
+    })()
   }
 
   /** Bottom binders: covering sheets close first; same binder again tucks the panel. */
@@ -2516,15 +2826,39 @@ export default function App() {
             initialMapFocus={planBootFocus}
             mapFocusApiRef={planMapFocusApiRef}
             onMapBootReady={() => setBootPlanMapReady(true)}
-            onChange={(next) => void persist(next)}
+            onChange={(next) => void enqueueTripMutation(() => next)}
+            onMutate={(mutator) => void enqueueTripMutation(mutator)}
             onStatus={setStatus}
             onAskAi={(prompt) => {
-              const { trip: next, message } = applyLocalPlanAi(
-                ensurePlanScaffold(active),
-                prompt,
-              )
-              void persist(next)
-              setStatus(message)
+              void (async () => {
+                const base = ensurePlanScaffold(active)
+                const anchorItem = base.items.find(
+                  (i) =>
+                    i.status !== 'cancelled' && isValidCoord(i.lat, i.lon),
+                )
+                if (anchorItem && isValidCoord(anchorItem.lat, anchorItem.lon)) {
+                  try {
+                    const { trip: next, added, provider } =
+                      await suggestDiscoverForAnchor({
+                        trip: base,
+                        lat: anchorItem.lat!,
+                        lon: anchorItem.lon!,
+                      })
+                    if (added > 0) {
+                      void persist(next)
+                      setStatus(
+                        `Added ${added} Discover ideas (${provider}). Review lists — no hotels invented.`,
+                      )
+                      return
+                    }
+                  } catch {
+                    /* fall through to local packs */
+                  }
+                }
+                const { trip: next, message } = applyLocalPlanAi(base, prompt)
+                void persist(next)
+                setStatus(message)
+              })()
             }}
             onJourneyHighlight={syncJourneyHighlightFromPlan}
           />
@@ -2728,7 +3062,17 @@ export default function App() {
 
       {aiReview && active ? (
         <AiReviewChrome
-          dayLabel={formatDayChipLabel(active.meta, aiReview.day)}
+          scope={aiReview.scope}
+          dayLabel={
+            aiReview.scope === 'trip'
+              ? aiReview.label || active.meta.name || 'Whole trip'
+              : formatDayChipLabel(active.meta, aiReview.day)
+          }
+          summary={summarizeMergeDiff({
+            addedIds: aiReview.addedIds,
+            changedIds: aiReview.changedIds,
+            removedIds: aiReview.removedIds,
+          })}
           busy={aiReviewBusy}
           error={aiReview.error}
           onDiscard={discardAiReview}
@@ -2809,7 +3153,35 @@ export default function App() {
                 onDayPicked={() => {
                   /* AI day is local to the coach — Steps filter stays put */
                 }}
+                onOpenTripPlanner={() => {
+                  setAiOpen(false)
+                  setTripPlannerOpen(true)
+                }}
+                onTripPrefs={(next) => void persist(next)}
                 onImplement={beginAiImplement}
+                onSeedPlanOnly={({ option, candidates, session }) => {
+                  if (!active) return
+                  const fromSteps = (option.patch.addSteps || []).map((s) => ({
+                    candidateId: s.candidateId,
+                    section: 'must' as const,
+                  }))
+                  const patch = {
+                    ...option.patch,
+                    addPlanPlaces: [
+                      ...(option.patch.addPlanPlaces || []),
+                      ...fromSteps,
+                    ],
+                  }
+                  const next = applyCoachPlanSeeds(active, patch, candidates)
+                  void persist(next)
+                  setAiRestore({
+                    ...session,
+                    appliedOptionIds: [
+                      ...new Set([...session.appliedOptionIds, option.id]),
+                    ],
+                  })
+                  setStatus('Added ideas to Plan lists (not scheduled on Journey)')
+                }}
               />
             </div>
           ) : null}
@@ -2881,6 +3253,15 @@ export default function App() {
                   layout={isPhone ? 'horizontal' : 'vertical'}
                   detailOpen={!isPhone && lowerMode === 'detail'}
                   lockMode={Boolean(aiReview)}
+                  reviewMarks={
+                    aiReview
+                      ? {
+                          addedIds: aiReview.addedIds,
+                          changedIds: aiReview.changedIds,
+                          removedIds: aiReview.removedIds,
+                        }
+                      : undefined
+                  }
                 />
               </div>
             </div>
@@ -3032,7 +3413,13 @@ export default function App() {
                   onClose={discardStepDetail}
                   onChange={(item) => {
                     if (aiReview) {
-                      if (!itemTouchesDay(item, aiReview.day)) return
+                      if (
+                        aiReview.scope === 'day' &&
+                        !itemTouchesDay(item, aiReview.day)
+                      ) {
+                        return
+                      }
+                      if (isAiReviewRemoved(item)) return
                       setAiReview((prev) =>
                         prev
                           ? {
@@ -3042,6 +3429,17 @@ export default function App() {
                                   i.id === item.id ? item : i,
                                 ),
                               ),
+                              draftTrip:
+                                prev.scope === 'trip' && prev.draftTrip
+                                  ? {
+                                      ...prev.draftTrip,
+                                      items: sortItems(
+                                        prev.draftTrip.items.map((i) =>
+                                          i.id === item.id ? item : i,
+                                        ),
+                                      ),
+                                    }
+                                  : prev.draftTrip,
                             }
                           : null,
                       )
@@ -3103,6 +3501,23 @@ export default function App() {
           openFeatureGuide({ all: true, contexts: JOURNEY_TIP_CONTEXTS })
         }
       />
+      {active ? (
+        <TripPlannerSheet
+          open={tripPlannerOpen}
+          phone={isPhone}
+          trip={ensurePlanScaffold(active)}
+          onClose={() => setTripPlannerOpen(false)}
+          resumePrompt={tripPlannerResume}
+          onResumeConsumed={() => setTripPlannerResume(null)}
+          onApplyTrip={(next, message) => {
+            void persist(next)
+            if (message) setStatus(message)
+          }}
+          onPreviewApply={(draftTrip, label) => {
+            beginWholeTripReview(draftTrip, label)
+          }}
+        />
+      ) : null}
       <PlanStartCoach
         open={planStartCoachOpen}
         onDismiss={() => {

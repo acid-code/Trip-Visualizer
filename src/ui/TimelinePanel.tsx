@@ -6,8 +6,74 @@ import { dayIndex, stepOrderMap } from '../data/analytics'
 import { dayColor } from '../data/dayTheme'
 import { sortItems } from '../data/db'
 import { isPlaceholderBase, itemTouchesDay, listTripDays, formatTripDayLabel, weekdayShort } from '../data/dayBases'
+import { isAiReviewRemoved } from '../agent/tripMergeDiff'
 import { createTapTracker, TOUCH_SCROLL_Y } from './scrollGesture'
 import { StepTimeEditor } from './StepTimeEditor'
+
+export type TimelineReviewMarks = {
+  addedIds: ReadonlySet<string> | string[]
+  changedIds?: ReadonlySet<string> | string[]
+  removedIds?: ReadonlySet<string> | string[]
+}
+
+function asIdSet(
+  ids: ReadonlySet<string> | string[] | undefined,
+): Set<string> {
+  if (!ids) return new Set()
+  return ids instanceof Set ? ids : new Set(ids)
+}
+
+function reviewCardTone(
+  item: TripItem,
+  marks: TimelineReviewMarks | undefined,
+  horizontal: boolean,
+  active: boolean,
+  placeholder: boolean,
+): string {
+  const removed = isAiReviewRemoved(item)
+  const added = asIdSet(marks?.addedIds).has(item.id)
+  const changed = asIdSet(marks?.changedIds).has(item.id)
+
+  if (removed) {
+    return horizontal
+      ? 'border-stone-300/80 bg-stone-200/70 opacity-70 grayscale'
+      : 'border-stone-300/90 bg-stone-100/90 opacity-75 grayscale'
+  }
+  if (added) {
+    return horizontal
+      ? active
+        ? 'border-violet-500 bg-violet-100 shadow-md ring-2 ring-violet-300/70'
+        : 'border-violet-400 bg-violet-50 shadow-sm ring-1 ring-violet-300/50'
+      : active
+        ? 'border-violet-500 bg-violet-100 shadow-sm ring-1 ring-violet-300/60'
+        : 'border-violet-400/90 bg-violet-50/95 shadow-sm ring-1 ring-violet-200/80'
+  }
+  if (changed) {
+    return horizontal
+      ? active
+        ? 'border-violet-400 bg-violet-50/90 shadow-md ring-2 ring-violet-200/80'
+        : 'border-violet-300 bg-violet-50/50 ring-1 ring-violet-200/40'
+      : active
+        ? 'border-violet-400 bg-violet-50 shadow-sm'
+        : 'border-violet-300/80 bg-violet-50/40'
+  }
+  if (placeholder) {
+    return horizontal
+      ? active
+        ? 'border-dashed border-amber-400 bg-amber-50 shadow-sm'
+        : 'border-dashed border-amber-300 bg-amber-50/60'
+      : active
+        ? 'border-dashed border-amber-400 bg-amber-50/90 shadow-sm'
+        : 'border-dashed border-amber-300/90 bg-amber-50/50'
+  }
+  return horizontal
+    ? active
+      ? 'border-orange-400 bg-orange-50 shadow-md ring-2 ring-orange-300/60'
+      : 'border-stone-200/80 bg-white/95'
+    : active
+      ? 'border-orange-300 bg-orange-50 shadow-sm'
+      : 'border-stone-200/80 bg-white/90'
+}
 
 type Props = {
   meta: TripMeta
@@ -32,6 +98,8 @@ type Props = {
   detailOpen?: boolean
   /** AI review lock — browse only; no filter / insert / delete. */
   lockMode?: boolean
+  /** Whole Trip / Day Coach pending merge highlights. */
+  reviewMarks?: TimelineReviewMarks
 }
 
 export function TimelinePanel({
@@ -51,6 +119,7 @@ export function TimelinePanel({
   layout = 'vertical',
   detailOpen = false,
   lockMode = false,
+  reviewMarks,
 }: Props) {
   const horizontal = layout === 'horizontal'
   const [confirmId, setConfirmId] = useState<string | null>(null)
@@ -252,6 +321,10 @@ export function TimelinePanel({
           const next = sorted[idx + 1]
           const placeholder = isPlaceholderBase(item)
           const confirming = confirmId === item.id
+          const removedMark = isAiReviewRemoved(item)
+          const addedMark = asIdSet(reviewMarks?.addedIds).has(item.id)
+          const changedMark =
+            !addedMark && asIdSet(reviewMarks?.changedIds).has(item.id)
           // Shown under day filter because stay spans into this day (not start date)
           const viaEndDate = Boolean(
             dayFilter &&
@@ -275,25 +348,9 @@ export function TimelinePanel({
             >
               <div
                 className={`relative text-left transition ${
-                  horizontal
-                    ? `w-[9.75rem] rounded-2xl border ${
-                        placeholder
-                          ? active
-                            ? 'border-dashed border-amber-400 bg-amber-50 shadow-sm'
-                            : 'border-dashed border-amber-300 bg-amber-50/60'
-                          : active
-                            ? 'border-orange-400 bg-orange-50 shadow-md ring-2 ring-orange-300/60'
-                            : 'border-stone-200/80 bg-white/95'
-                      }`
-                    : `w-full rounded-2xl border ${
-                        placeholder
-                          ? active
-                            ? 'border-dashed border-amber-400 bg-amber-50/90 shadow-sm'
-                            : 'border-dashed border-amber-300/90 bg-amber-50/50'
-                          : active
-                            ? 'border-orange-300 bg-orange-50 shadow-sm'
-                            : 'border-stone-200/80 bg-white/90'
-                      }`
+                  horizontal ? 'w-[9.75rem] rounded-2xl border' : 'w-full rounded-2xl border'
+                } ${reviewCardTone(item, reviewMarks, horizontal, active, placeholder)} ${
+                  removedMark ? 'line-through decoration-stone-400/80' : ''
                 }`}
               >
                 <div
@@ -334,6 +391,21 @@ export function TimelinePanel({
                         ) : null}
                         {placeholder ? 'base' : item.type}
                       </span>
+                      {addedMark ? (
+                        <span className="shrink-0 rounded-full bg-violet-600 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-white">
+                          New
+                        </span>
+                      ) : null}
+                      {changedMark ? (
+                        <span className="shrink-0 rounded-full bg-violet-200 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-violet-900">
+                          Changed
+                        </span>
+                      ) : null}
+                      {removedMark ? (
+                        <span className="shrink-0 rounded-full bg-stone-400 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-white">
+                          Removed
+                        </span>
+                      ) : null}
                       {viaEndDate && endDayNum != null ? (
                         <span
                           className="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold text-white"

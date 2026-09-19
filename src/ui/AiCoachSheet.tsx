@@ -6,6 +6,11 @@ import {
   gatherCoachCandidates,
   requestCoachAdvice,
 } from '../data/aiCoach'
+import {
+  briefingToPlanningHints,
+  compileTripDayBriefing,
+  rememberClarification,
+} from '../agent'
 import { describePatch } from '../data/aiCoachPatch'
 import { itemTouchesDay, listTripDays } from '../data/dayBases'
 import type { ExplorePlace } from '../data/explore'
@@ -40,7 +45,15 @@ type Props = {
   restore?: AiCoachSessionRestore | null
   onClose: () => void
   onDayPicked?: (day: string) => void
+  onOpenTripPlanner?: () => void
+  onTripPrefs?: (trip: TripRecord) => void
   onImplement: (args: {
+    day: string
+    option: AiCoachOption
+    candidates: ExplorePlace[]
+    session: AiCoachSessionRestore
+  }) => void
+  onSeedPlanOnly?: (args: {
     day: string
     option: AiCoachOption
     candidates: ExplorePlace[]
@@ -102,7 +115,10 @@ export function AiCoachSheet({
   restore = null,
   onClose,
   onDayPicked,
+  onOpenTripPlanner,
+  onTripPrefs,
   onImplement,
+  onSeedPlanOnly,
 }: Props) {
   const [phase, setPhase] = useState<Phase>('pick_day')
   const [messages, setMessages] = useState<AiChatMessage[]>([])
@@ -271,6 +287,11 @@ export function AiCoachSheet({
         setTypingDone(false)
       }
 
+      if (pendingCoachQuestion) {
+        onTripPrefs?.(rememberClarification(trip, trimmed))
+      }
+
+      const briefing = compileTripDayBriefing(trip, day)
       const body = buildCoachRequestBody({
         trip,
         day,
@@ -280,6 +301,10 @@ export function AiCoachSheet({
         clarifications: clarPayload,
         candidates: places,
       })
+      body.planningHints = [
+        ...(body.planningHints || []),
+        ...briefingToPlanningHints(briefing),
+      ].slice(0, 20)
       const result = await requestCoachAdvice(body, places, ac.signal)
       if (ac.signal.aborted) return
 
@@ -352,14 +377,26 @@ export function AiCoachSheet({
               : 'Pick a day · review before you accept'}
           </p>
         </div>
-        <button
-          type="button"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600"
-          title="Close AI"
-          onClick={closeSheet}
-        >
-          ✕
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {onOpenTripPlanner ? (
+            <button
+              type="button"
+              className="rounded-full border border-violet-400/40 bg-violet-500/15 px-2 py-1 text-[10px] font-semibold text-violet-200"
+              title="Total Trip AI — create a full trip from the model"
+              onClick={() => onOpenTripPlanner()}
+            >
+              Whole trip
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600"
+            title="Close AI"
+            onClick={closeSheet}
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       <div
@@ -546,26 +583,50 @@ export function AiCoachSheet({
                     : []
                 }
               />
-              <button
-                type="button"
-                className="w-full rounded-2xl bg-violet-600 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-violet-700"
-                onClick={() => {
-                  if (!day) return
-                  const session: AiCoachSessionRestore = {
-                    day,
-                    options,
-                    appliedOptionIds,
-                    candidates,
-                    clarifications,
-                    pendingCoachQuestion,
-                    seedIntent,
-                  }
-                  onImplement({ day, option: detail, candidates, session })
-                  setDetail(null)
-                }}
-              >
-                Implement
-              </button>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  className="w-full rounded-2xl bg-violet-600 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-violet-700"
+                  onClick={() => {
+                    if (!day) return
+                    const session: AiCoachSessionRestore = {
+                      day,
+                      options,
+                      appliedOptionIds,
+                      candidates,
+                      clarifications,
+                      pendingCoachQuestion,
+                      seedIntent,
+                    }
+                    onImplement({ day, option: detail, candidates, session })
+                    setDetail(null)
+                  }}
+                >
+                  Implement on Journey
+                </button>
+                {onSeedPlanOnly && (detail.patch.addPlanPlaces?.length || detail.patch.addSteps?.length) ? (
+                  <button
+                    type="button"
+                    className="w-full rounded-2xl border border-teal-300 bg-teal-50 py-2 text-sm font-semibold text-teal-900"
+                    onClick={() => {
+                      if (!day) return
+                      const session: AiCoachSessionRestore = {
+                        day,
+                        options,
+                        appliedOptionIds,
+                        candidates,
+                        clarifications,
+                        pendingCoachQuestion,
+                        seedIntent,
+                      }
+                      onSeedPlanOnly({ day, option: detail, candidates, session })
+                      setDetail(null)
+                    }}
+                  >
+                    Add to Plan lists only
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>

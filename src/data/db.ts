@@ -198,6 +198,7 @@ export async function createBlankTrip(opts?: {
       travelers: '',
       notes: '',
       vibe: '',
+      plannerPrefs: {},
     },
     [],
     { isExample: false },

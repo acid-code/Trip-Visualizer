@@ -4,7 +4,6 @@ import { listTripDays, weekdayShort } from '../data/dayBases'
 import {
   addPlanPlace,
   JOURNEY_SECTION_TITLE,
-  optimizeDayRoute,
   planMaybeSection,
   planSectionForExploreCategory,
   promotePlanPlaceToStep,
@@ -13,6 +12,7 @@ import {
   unschedulePlanPlace,
   upsertPlanPlaceToSection,
 } from '../data/planBoard'
+import { applyPlanOptimize, optimizePlanDay } from '../agent/planOptimize'
 import { findRegionPack } from '../data/regionPacks'
 import { createId, nowIso } from '../data/db'
 import {
@@ -42,6 +42,11 @@ import { TOUCH_SCROLL_X, TOUCH_SCROLL_Y } from './scrollGesture'
 type Props = {
   trip: TripRecord
   onChange: (next: TripRecord) => void
+  /**
+   * Concurrent-safe edits (rapid delete/reorder). When set, PlanBoard prefers
+   * this so each change applies to the latest trip, not a stale prop snapshot.
+   */
+  onMutate?: (mutator: (trip: TripRecord) => TripRecord) => void
   onAskAi?: (prompt: string) => void
   /** Prefer Google Nearby when Places is configured. */
   placesEnabled?: boolean
@@ -121,6 +126,7 @@ function tripMapAnchor(trip: TripRecord): { lat: number; lon: number } {
 export function PlanBoard({
   trip,
   onChange,
+  onMutate,
   onAskAi,
   placesEnabled = false,
   googleApiKey,
@@ -132,6 +138,10 @@ export function PlanBoard({
   onMapBootReady,
   onJourneyHighlight,
 }: Props) {
+  const commit = (mutator: (t: TripRecord) => TripRecord) => {
+    if (onMutate) onMutate(mutator)
+    else onChange(mutator(trip))
+  }
   const days = listTripDays(trip.meta)
   const [mode, setMode] = useState<PlanMode>('discover')
   const daysAll = dayFilter == null
@@ -527,7 +537,7 @@ export function PlanBoard({
       cuisine: place.cuisine || '',
       googlePhotoName: place.tags.googlePhotoName || '',
     })
-    onChange(result.trip)
+    commit(() => result.trip)
     setFocusSuggestionId(null)
     setDetailPlace(null)
     setDetailSavedId(null)
@@ -544,7 +554,7 @@ export function PlanBoard({
   }
 
   function schedulePlace(placeId: string, day: string) {
-    onChange(promotePlanPlaceToStep(trip, placeId, day))
+    commit((t) => promotePlanPlaceToStep(t, placeId, day))
     setSelectedUnscheduledId(null)
     setActiveDay(day)
     const idx = days.indexOf(day)
@@ -563,7 +573,7 @@ export function PlanBoard({
     if (j < 0 || j >= ordered.length) return
     const ids = ordered.map((p) => p.id)
     ;[ids[idx], ids[j]] = [ids[j]!, ids[idx]!]
-    onChange(reorderDayPlaces(trip, day, ids))
+    commit((t) => reorderDayPlaces(t, day, ids))
     setFocusPlaceId(placeId)
   }
 
@@ -693,7 +703,7 @@ export function PlanBoard({
    * so the user can Save again (optionally hydrated from Nearby).
    */
   function removeSavedKeepDetailOpen(placeId: string, snapshot: ExplorePlace) {
-    onChange(removePlanPlace(trip, placeId))
+    commit((t) => removePlanPlace(t, placeId))
     setDetailSavedId(null)
     setFocusPlaceId(null)
     onJourneyHighlight?.(null)
@@ -743,12 +753,16 @@ export function PlanBoard({
       onStatus?.('No Maybe list found')
       return
     }
-    onChange({
-      ...trip,
-      planPlaces: trip.planPlaces.map((p) =>
-        p.id === placeId ? { ...p, sectionId: maybe.id } : p,
-      ),
-      updatedAt: nowIso(),
+    commit((t) => {
+      const maybe = planMaybeSection(t)
+      if (!maybe) return t
+      return {
+        ...t,
+        planPlaces: t.planPlaces.map((p) =>
+          p.id === placeId ? { ...p, sectionId: maybe.id } : p,
+        ),
+        updatedAt: nowIso(),
+      }
     })
     onStatus?.(`Moved to ${maybe.title}`)
   }
@@ -1065,7 +1079,7 @@ export function PlanBoard({
           onClearDay={
             detailSavedId
               ? () => {
-                  onChange(unschedulePlanPlace(trip, detailSavedId))
+                  commit((t) => unschedulePlanPlace(t, detailSavedId))
                   onStatus?.('Removed from day · still in list')
                 }
               : undefined
@@ -1196,10 +1210,12 @@ export function PlanBoard({
                   }}
                   onSchedule={schedulePlace}
                   onUnschedule={(placeId) => {
-                    onChange(unschedulePlanPlace(trip, placeId))
+                    commit((t) => unschedulePlanPlace(t, placeId))
                     onStatus?.('Removed from day · still in list')
                   }}
-                  onRemove={(placeId) => onChange(removePlanPlace(trip, placeId))}
+                  onRemove={(placeId) =>
+                    commit((t) => removePlanPlace(t, placeId))
+                  }
                 />
               ))}
 
@@ -1353,8 +1369,11 @@ export function PlanBoard({
                             aria-label={`Optimize Day ${idx + 1}`}
                             disabled={places.length < 2}
                             onClick={() => {
-                              onChange(optimizeDayRoute(trip, day))
-                              onStatus?.(`Optimized Day ${idx + 1}`)
+                              const result = optimizePlanDay(trip, day)
+                              commit((t) => applyPlanOptimize(t, result))
+                              onStatus?.(
+                                `Day ${idx + 1}: ${result.summary}`,
+                              )
                             }}
                           >
                             <AiSparkIcon className="h-3.5 w-3.5" />
@@ -1418,7 +1437,7 @@ export function PlanBoard({
                                   className="px-1 text-[10px] font-semibold text-rose-300/90"
                                   aria-label="Unschedule"
                                   onClick={() =>
-                                    onChange(unschedulePlanPlace(trip, p.id))
+                                    commit((t) => unschedulePlanPlace(t, p.id))
                                   }
                                 >
                                   ✕

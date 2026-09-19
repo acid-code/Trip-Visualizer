@@ -591,39 +591,8 @@ export function reorderDayPlaces(
   }
 }
 
-/** Nearest-neighbor day order optimization (greedy). */
-export function optimizeDayRoute(trip: TripRecord, day: string): TripRecord {
-  const dayPlaces = trip.planPlaces
-    .filter((p) => p.scheduledDay === day && isValidCoord(p.lat, p.lon))
-    .sort((a, b) => (a.dayOrder ?? 0) - (b.dayOrder ?? 0))
-  if (dayPlaces.length < 3) return trip
-
-  const remaining = [...dayPlaces]
-  const ordered: PlanPlace[] = [remaining.shift()!]
-  while (remaining.length) {
-    const last = ordered[ordered.length - 1]!
-    let bestIdx = 0
-    let bestD = Infinity
-    for (let i = 0; i < remaining.length; i++) {
-      const cand = remaining[i]!
-      const d = haversineKm(
-        { lat: last.lat!, lon: last.lon! },
-        { lat: cand.lat!, lon: cand.lon! },
-      )
-      if (d < bestD) {
-        bestD = d
-        bestIdx = i
-      }
-    }
-    ordered.push(remaining.splice(bestIdx, 1)[0]!)
-  }
-
-  return reorderDayPlaces(
-    trip,
-    day,
-    ordered.map((p) => p.id),
-  )
-}
+/** Meal/area/fatigue-aware day order (replaces greedy nearest-neighbor). */
+export { optimizeDayRouteSmart as optimizeDayRoute } from '../agent/planOptimize'
 
 function haversineKm(
   a: { lat: number; lon: number },

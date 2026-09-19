@@ -1615,12 +1615,31 @@ function sanitizeOption(
     }
   }
 
+  const planIn = Array.isArray(patchRaw.addPlanPlaces) ? patchRaw.addPlanPlaces : []
+  const addPlanPlaces = planIn
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null
+      const r = row as Record<string, unknown>
+      const candidateId = String(r.candidateId ?? '').trim()
+      if (!candidateId || !candidateIds.has(candidateId)) return null
+      const place = candidates.find((c) => c.id === candidateId)
+      if (place?.category === 'hotel') return null
+      const sectionRaw = String(r.section ?? 'must')
+      const section =
+        sectionRaw === 'food' || sectionRaw === 'maybe' || sectionRaw === 'must'
+          ? sectionRaw
+          : 'must'
+      return { candidateId, section }
+    })
+    .filter(Boolean) as NonNullable<AiCoachOption['patch']['addPlanPlaces']>
+
   const hasAction =
     addSteps.length ||
     addDrives.length ||
     setTimes.length ||
     removeSteps.length ||
-    addNote
+    addNote ||
+    addPlanPlaces.length
   if (!hasAction) return null
 
   return {
@@ -1629,7 +1648,7 @@ function sanitizeOption(
     kind,
     summary: String(o.summary ?? '').trim().slice(0, 240),
     rationale: String(o.rationale ?? '').trim().slice(0, 600),
-    patch: { addSteps, addDrives, setTimes, removeSteps, addNote },
+    patch: { addSteps, addDrives, setTimes, removeSteps, addNote, addPlanPlaces },
   }
 }
 
@@ -3183,6 +3202,7 @@ export function critiqueAndRepairOptions(
       (opt.patch.addDrives?.length ?? 0) ||
       (opt.patch.setTimes?.length ?? 0) ||
       (opt.patch.removeSteps?.length ?? 0) ||
+      (opt.patch.addPlanPlaces?.length ?? 0) ||
       opt.patch.addNote
     if (hasAction) out.push(opt)
     else {

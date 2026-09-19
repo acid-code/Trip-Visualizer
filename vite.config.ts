@@ -327,6 +327,109 @@ function placesDevProxy(): Plugin {
           })()
         })
       })
+
+      server.middlewares.use('/api/agent', (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204
+          res.end()
+          return
+        }
+        if (req.method !== 'POST') {
+          next()
+          return
+        }
+        const chunks: Buffer[] = []
+        req.on('data', (c) => chunks.push(c as Buffer))
+        req.on('end', () => {
+          void (async () => {
+            try {
+              const raw = Buffer.concat(chunks).toString('utf8')
+              const body = JSON.parse(raw || '{}') as Record<string, unknown>
+              const handler = (await import('./api/agent')).default
+              const fakeRes = {
+                statusCode: 200,
+                status(code: number) {
+                  this.statusCode = code
+                  return this
+                },
+                setHeader() {},
+                json(payload: unknown) {
+                  res.statusCode = this.statusCode
+                  res.setHeader('Content-Type', 'application/json')
+                  res.end(JSON.stringify(payload))
+                },
+                send(payload: string) {
+                  res.statusCode = this.statusCode
+                  res.end(payload)
+                },
+              }
+              await handler(
+                { method: 'POST', body, headers: req.headers as never },
+                fakeRes,
+              )
+            } catch (err) {
+              res.statusCode = 502
+              res.setHeader('Content-Type', 'application/json')
+              res.end(
+                JSON.stringify({
+                  error: err instanceof Error ? err.message : 'Trip agent failed',
+                }),
+              )
+            }
+          })()
+        })
+      })
+
+      // Nominatim via Node (proper User-Agent) — browser direct calls often get [].
+      server.middlewares.use('/api/nominatim', (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204
+          res.end()
+          return
+        }
+        if (req.method !== 'GET') {
+          next()
+          return
+        }
+        void (async () => {
+          try {
+            const handler = (await import('./api/nominatim')).default
+            const fakeRes = {
+              statusCode: 200,
+              status(code: number) {
+                this.statusCode = code
+                return this
+              },
+              setHeader(name: string, value: string) {
+                res.setHeader(name, value)
+              },
+              json(payload: unknown) {
+                res.statusCode = this.statusCode
+                res.setHeader('Content-Type', 'application/json')
+                res.end(JSON.stringify(payload))
+              },
+              send(payload: string) {
+                res.statusCode = this.statusCode
+                res.setHeader('Content-Type', 'application/json')
+                res.end(payload)
+              },
+            }
+            await handler(
+              { method: 'GET', url: req.url, query: undefined },
+              fakeRes,
+            )
+          } catch (err) {
+            res.statusCode = 502
+            res.setHeader('Content-Type', 'application/json')
+            res.end(
+              JSON.stringify({
+                error:
+                  err instanceof Error ? err.message : 'Nominatim proxy failed',
+              }),
+            )
+          }
+        })()
+      })
     },
   }
 }

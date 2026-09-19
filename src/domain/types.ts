@@ -50,6 +50,21 @@ const finiteOrNull = z
   })
   .nullable()
 
+const PlannerPrefsSchema = z.object({
+  vibe: z.array(z.string().max(80)).max(12).optional(),
+  pace: z.enum(['soft', 'balanced', 'packed']).optional(),
+  food: z.array(z.string().max(80)).max(12).optional(),
+  maxWalkKm: z.number().finite().min(0.2).max(10).optional(),
+  transport: z.enum(['car', 'transit', 'mixed', 'unknown']).optional(),
+  party: z.string().max(200).optional(),
+  mustSees: z.array(z.string().max(120)).max(20).optional(),
+  avoid: z.array(z.string().max(120)).max(20).optional(),
+  notes: z.array(z.string().max(300)).max(24).optional(),
+  adoptedAreas: z.array(z.string().max(120)).max(24).optional(),
+  structureAppliedAt: z.number().finite().optional(),
+  structureFingerprint: z.string().max(500).optional(),
+})
+
 export const TripMetaSchema = z.object({
   name: boundedStr(200, 'Untitled trip').pipe(z.string().min(1).max(200)),
   startDate: requiredIsoDate,
@@ -60,6 +75,8 @@ export const TripMetaSchema = z.object({
   notes: boundedStr(5000),
   /** Free-text trip mood / what they're looking for — fed to Day Coach & future AI. */
   vibe: boundedStr(2000),
+  /** Structured prefs from Trip Planner / Day Helper clarifications. */
+  plannerPrefs: PlannerPrefsSchema.optional(),
 })
 
 export const TripItemSchema = z.object({

@@ -134,7 +134,8 @@ Respond with JSON only, one of:
     "addDrives":[{"fromItemId":"optional existing step id","fromCandidateId":"optional prior candidateId","toCandidateId":"...","start":"HH:MM"}],
     "setTimes":[{"itemId":"...","start":"HH:MM"}],
     "removeSteps":[{"itemId":"..."}],
-    "addNote":{"title":"...","notes":"...","start":"HH:MM"}
+    "addNote":{"title":"...","notes":"...","start":"HH:MM"},
+    "addPlanPlaces":[{"candidateId":"...","section":"must|food|maybe"}]
   }
 }]}
 
@@ -151,6 +152,10 @@ Rules:
 - Never remove flights, hotels, or placeholders via trim.
 - Trim options: removeSteps must use exact dayItems.id where canRemove is true (or matching title). On a busy/full day remove 2–4 weaker content stops — enough that the day feels lighter. Do not only remove a single trivial note when many sights exist.
 - Do not propose new hotels. Do not invent car dealerships.
+- Walk hops over ~1.5 km need addDrives (or say transit) with From→To — do not chain many long walks.
+- Prefer same-area fills; respect lodging / yesterday / tomorrow hints in planningHints.
+- You may use addPlanPlaces:[{"candidateId":"...","section":"must|food|maybe"}] to seed Plan lists without scheduling Journey steps.
+- When offering multiple options, differentiate soft_start / balanced / packed pacing.
 - Keep labels under 40 chars.`
 
 export default async function handler(req: VercelReq, res: VercelRes) {
