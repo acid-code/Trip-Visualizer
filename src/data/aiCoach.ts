@@ -8,7 +8,6 @@ import {
   type ExplorePlace,
 } from './explore'
 import { geocodePlace } from './enrichment'
-import { fetchGoogleTextViaProxy } from './placesGoogle'
 import { isValidCoord } from './validate'
 import { logClientError } from './security'
 import {
@@ -829,25 +828,10 @@ async function resolveRegionAnchors(
 ): Promise<Array<{ lat: number; lon: number; label: string }>> {
   const out: Array<{ lat: number; lon: number; label: string }> = []
   const queries = regionSearchQueries(userMessage)
+  // Nominatim only — avoid Google Text Search (Atmosphere billing SKU).
 
   for (const q of queries.slice(0, 2)) {
     if (opts?.signal?.aborted) break
-    if (opts?.useGooglePlaces) {
-      try {
-        const hit = await fetchGoogleTextViaProxy({
-          query: q,
-          apiKey: opts.googleApiKey,
-          bias: bias ? { ...bias, radiusM: 80_000 } : undefined,
-          signal: opts.signal,
-        })
-        if (hit && isValidCoord(hit.lat, hit.lon)) {
-          out.push({ lat: hit.lat, lon: hit.lon, label: hit.name || q })
-          continue
-        }
-      } catch (err) {
-        logClientError('ai-coach-region-google', err)
-      }
-    }
     try {
       const g = await geocodePlace(q)
       if (g) out.push({ lat: g.lat, lon: g.lon, label: q })
@@ -887,72 +871,21 @@ async function resolveRegionAnchors(
 }
 
 /**
- * Free-form area recommendations: Text Search near the day hotel/city, then
- * Nearby around those hits. Works for cities and countryside — not Provence-only.
+ * Free-form area recommendations used to fan out Google Text Search
+ * ("things to do near X") — that SKU drove Atmosphere billing.
+ * Nearby category explores already cover food/sights/nature around the day anchor.
  */
 async function resolveAreaRecommendationAnchors(
-  anchor: { lat: number; lon: number; label: string },
-  intent: CoachIntent,
-  fill: 'empty' | 'partial' | 'full',
-  opts?: {
+  _anchor: { lat: number; lon: number; label: string },
+  _intent: CoachIntent,
+  _fill: 'empty' | 'partial' | 'full',
+  _opts?: {
     signal?: AbortSignal
     useGooglePlaces?: boolean
     googleApiKey?: string
   },
 ): Promise<Array<{ lat: number; lon: number; label: string }>> {
-  if (!opts?.useGooglePlaces) return []
-  const area = (anchor.label || 'here').trim()
-  const queries: string[] = []
-  if (intent.fun || intent.fill || intent.city || fill === 'empty') {
-    queries.push(`things to do near ${area}`)
-    queries.push(`best sightseeing near ${area}`)
-  }
-  if (intent.city || intent.fun) {
-    queries.push(`museum or historic site near ${area}`)
-  }
-  if (intent.water) {
-    queries.push(`beach or waterfront near ${area}`)
-    queries.push(`lake or marina near ${area}`)
-    queries.push(`things to do by the water near ${area}`)
-  }
-  if (intent.wine) queries.push(`winery or wine tasting near ${area}`)
-  if (intent.food || fill === 'empty') {
-    queries.push(
-      intent.water
-        ? `seafood restaurant near ${area}`
-        : `highly rated restaurant near ${area}`,
-    )
-  }
-  if (intent.views || intent.drive) {
-    queries.push(`viewpoint or scenic lookout near ${area}`)
-  }
-  if (!queries.length) queries.push(`popular attractions near ${area}`)
-
-  const out: Array<{ lat: number; lon: number; label: string }> = []
-  const seen = new Set<string>()
-  for (const q of queries.slice(0, intent.water ? 5 : 4)) {
-    if (opts.signal?.aborted) break
-    try {
-      const hit = await fetchGoogleTextViaProxy({
-        query: q,
-        apiKey: opts.googleApiKey,
-        bias: { lat: anchor.lat, lon: anchor.lon, radiusM: 40_000 },
-        signal: opts.signal,
-      })
-      if (!hit || !isValidCoord(hit.lat, hit.lon)) continue
-      const key = `${hit.lat.toFixed(3)},${hit.lon.toFixed(3)}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      out.push({
-        lat: hit.lat,
-        lon: hit.lon,
-        label: hit.name || q,
-      })
-    } catch (err) {
-      logClientError('ai-coach-area-text', err)
-    }
-  }
-  return out
+  return []
 }
 
 function buildPlanningHints(

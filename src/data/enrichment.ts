@@ -143,57 +143,88 @@ export async function geocodePlace(query: string): Promise<{ lat: number; lon: n
   return full ? { lat: full.lat, lon: full.lon } : null
 }
 
-/** Forward geocode with name / address details (Google Text Search when keyed, else Nominatim). */
+/** Forward geocode with name / address details.
+ *  Nominatim first (free). Google Text Search only as fallback when allowed —
+ *  Text Search was the Atmosphere SKU that drove billing.
+ */
 export async function lookupPlace(
   query: string,
   opts?: {
-    /** Prefer Google Text Search via proxy when true. */
+    /**
+     * If true and Nominatim misses, try Google Text Search once.
+     * Prefer leaving this false for bulk geocode / enrich paths.
+     */
     useGooglePlaces?: boolean
     /** Data-panel override only. */
     googleApiKey?: string
     bias?: { lat: number; lon: number; radiusM?: number }
+    /**
+     * Skip Nominatim and hit Google Text first (rare — e.g. stubborn Maps place names).
+     * Default false.
+     */
+    preferGoogleText?: boolean
   },
 ): Promise<PlaceLookup | null> {
   const q = query.trim().slice(0, MAX_GEOCODE_QUERY_LEN)
   if (!q) return null
 
   const googleKey = opts?.googleApiKey?.trim()
-  if (opts?.useGooglePlaces || googleKey) {
+  const googleAllowed = Boolean(opts?.useGooglePlaces || googleKey)
+
+  async function tryGoogle(): Promise<PlaceLookup | null> {
+    if (!googleAllowed) return null
     try {
       const hit = await fetchGoogleTextViaProxy({
         query: q,
         apiKey: googleKey || undefined,
         bias: opts?.bias,
       })
-      if (hit) {
-        return {
-          lat: hit.lat,
-          lon: hit.lon,
-          name: hit.name,
-          address: hit.address || hit.name,
-          city: '',
-          osmId: hit.placeId ? `google:${hit.placeId}` : '',
-          query: q,
-        }
+      if (!hit) return null
+      return {
+        lat: hit.lat,
+        lon: hit.lon,
+        name: hit.name,
+        address: hit.address || hit.name,
+        city: '',
+        osmId: hit.placeId ? `google:${hit.placeId}` : '',
+        query: q,
       }
     } catch {
-      /* fall through to Nominatim */
+      return null
     }
   }
 
-  const url = new URL(NOMINATIM)
-  url.searchParams.set('q', q)
-  url.searchParams.set('format', 'json')
-  url.searchParams.set('addressdetails', '1')
-  url.searchParams.set('limit', '1')
-  await nominatimRateLimit()
-  const res = await fetch(url.toString(), {
-    headers: nominatimHeaders(),
-  })
-  if (!res.ok) return null
-  const data = (await res.json()) as NominatimHit[]
-  if (!data[0]) return null
-  return placeFromHit(data[0], q)
+  async function tryNominatim(): Promise<PlaceLookup | null> {
+    const url = new URL(NOMINATIM)
+    url.searchParams.set('q', q)
+    url.searchParams.set('format', 'json')
+    url.searchParams.set('addressdetails', '1')
+    url.searchParams.set('limit', '1')
+    if (opts?.bias && isValidCoord(opts.bias.lat, opts.bias.lon)) {
+      // Soft viewbox ~bias — improves “near trip” without hard filter.
+      const d = Math.min(Math.max((opts.bias.radiusM ?? 50_000) / 111_000, 0.05), 1.5)
+      url.searchParams.set(
+        'viewbox',
+        `${opts.bias.lon - d},${opts.bias.lat + d},${opts.bias.lon + d},${opts.bias.lat - d}`,
+      )
+    }
+    await nominatimRateLimit()
+    const res = await fetch(url.toString(), {
+      headers: nominatimHeaders(),
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as NominatimHit[]
+    if (!data[0]) return null
+    return placeFromHit(data[0], q)
+  }
+
+  if (opts?.preferGoogleText) {
+    return (await tryGoogle()) || (await tryNominatim())
+  }
+
+  const free = await tryNominatim()
+  if (free) return free
+  return tryGoogle()
 }
 
 /** Reverse geocode a map pin into name + address. */

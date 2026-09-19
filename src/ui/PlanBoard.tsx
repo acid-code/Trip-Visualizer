@@ -3,11 +3,9 @@ import type { PlanPlace, PlanSection, TripRecord } from '../domain/types'
 import { listTripDays, weekdayShort } from '../data/dayBases'
 import {
   addPlanPlace,
-  applyExploreEnrichmentToPlanPlace,
   JOURNEY_SECTION_TITLE,
   optimizeDayRoute,
   planMaybeSection,
-  planPlaceNeedsEnrichment,
   planSectionForExploreCategory,
   promotePlanPlaceToStep,
   removePlanPlace,
@@ -25,11 +23,7 @@ import {
   type ExploreCategory,
   type ExplorePlace,
 } from '../data/explore'
-import {
-  explorePlaceFromTextHit,
-  fetchGoogleTextViaProxy,
-  googlePlacePhotoMediaUrl,
-} from '../data/placesGoogle'
+import { googlePlacePhotoMediaUrl } from '../data/placesGoogle'
 import {
   extractCoordsFromText,
   locationQueryFromInput,
@@ -183,13 +177,6 @@ export function PlanBoard({
   const discoverListRef = useRef<HTMLDivElement>(null)
   /** Nearby layer preference while in Discover — restored when leaving Days. */
   const discoverNearbyPrefRef = useRef(false)
-  const tripRef = useRef(trip)
-  tripRef.current = trip
-  /** Place ids we've already tried to backfill this session. */
-  const enrichAttemptedRef = useRef(new Set<string>())
-  const enrichInFlightRef = useRef(new Set<string>())
-  const detailSavedIdRef = useRef<string | null>(null)
-  detailSavedIdRef.current = detailSavedId
 
   const daySafe = days.includes(activeDay) ? activeDay : (days[0] ?? '')
 
@@ -459,44 +446,12 @@ export function PlanBoard({
         return
       }
 
-      if (placesEnabled) {
-        const hit = await fetchGoogleTextViaProxy({
-          query,
-          apiKey: googleApiKey || undefined,
-          bias: { lat: anchor.lat, lon: anchor.lon, radiusM: mapView?.radiusM ?? 80_000 },
-        })
-        if (hit) {
-          const place = explorePlaceFromTextHit(hit, anchor, googleApiKey)
-          const typed =
-            place.category === 'food' ||
-            place.category === 'drink' ||
-            place.category === 'hotel' ||
-            place.category === 'sights' ||
-            place.category === 'activity' ||
-            place.category === 'nature'
-          if (typed) setSuggestCat(place.category)
-          else {
-            place.category = 'sights'
-            setSuggestCat('sights')
-          }
-          setPinnedSearch(place)
-          setFocusSuggestionId(place.id)
-          setFocusPlaceId(null)
-          setDetailSavedId(null)
-          setDetailPlace(place)
-          onStatus?.(
-            typed
-              ? `Found ${exploreCategoryLabel(place.category).toLowerCase()} — save when ready`
-              : 'Loaded place — save to Must see when ready',
-          )
-          return
-        }
-      }
-
+      // Nominatim first (free). Google Text Search only if Nominatim misses —
+      // Text Search Atmosphere was the SKU on the bill.
       const lookup = await lookupPlace(query, {
         useGooglePlaces: placesEnabled,
         googleApiKey: googleApiKey || undefined,
-        bias: { lat: anchor.lat, lon: anchor.lon, radiusM: 80_000 },
+        bias: { lat: anchor.lat, lon: anchor.lon, radiusM: mapView?.radiusM ?? 80_000 },
       })
       if (!lookup) {
         setSuggestError('No place found for that search')
@@ -530,7 +485,11 @@ export function PlanBoard({
       setFocusPlaceId(null)
       setDetailSavedId(null)
       setDetailPlace(place)
-      onStatus?.('Loaded place — save to Must see when ready')
+      onStatus?.(
+        lookup.osmId.startsWith('google:')
+          ? 'Loaded place (Google fallback) — save when ready'
+          : 'Loaded place — save to Must see when ready',
+      )
     } catch (err) {
       setSuggestError(err instanceof Error ? err.message : 'Search failed')
     } finally {
@@ -655,69 +614,6 @@ export function PlanBoard({
     setDetailSavedId(p.id)
     setDetailPlace(planPlaceToExplorePlace(p, section, days, anchor))
     onJourneyHighlight?.(journeyItemIdForPlace(p))
-    if (planPlaceNeedsEnrichment(p)) {
-      void refillPlanPlaceEnrichment(placeId)
-    }
-  }
-
-  async function refillPlanPlaceEnrichment(placeId: string) {
-    if (!placesEnabled && !googleApiKey) return
-    if (enrichInFlightRef.current.has(placeId)) return
-    const current = tripRef.current.planPlaces.find((p) => p.id === placeId)
-    if (!current || !planPlaceNeedsEnrichment(current)) return
-    enrichInFlightRef.current.add(placeId)
-    enrichAttemptedRef.current.add(placeId)
-    try {
-      const query = [current.name, current.place, current.city]
-        .filter(Boolean)
-        .join(', ')
-        .trim()
-      if (!query) return
-      const bias =
-        isValidCoord(current.lat, current.lon)
-          ? { lat: current.lat!, lon: current.lon!, radiusM: 8_000 }
-          : mapView
-            ? { lat: mapView.lat, lon: mapView.lon, radiusM: 50_000 }
-            : tripMapAnchor(tripRef.current)
-      const hit = await fetchGoogleTextViaProxy({
-        query,
-        apiKey: googleApiKey || undefined,
-        bias,
-      })
-      if (!hit) return
-      const explored = explorePlaceFromTextHit(
-        hit,
-        { lat: hit.lat, lon: hit.lon },
-        googleApiKey,
-      )
-      // Prefer Google reviews blurb when summary is empty.
-      if (!explored.summary && hit.userRatingCount) {
-        explored.summary = `${hit.userRatingCount} Google reviews`
-      }
-      const latest = tripRef.current
-      const before = latest.planPlaces.find((p) => p.id === placeId)
-      if (!before || !planPlaceNeedsEnrichment(before)) return
-      const enriched = applyExploreEnrichmentToPlanPlace(before, explored)
-      onChange({
-        ...latest,
-        planPlaces: latest.planPlaces.map((p) =>
-          p.id === placeId ? enriched : p,
-        ),
-        updatedAt: nowIso(),
-      })
-      // Refresh open detail if still viewing this place.
-      if (detailSavedIdRef.current === placeId) {
-        const section = latest.planSections.find((s) => s.id === enriched.sectionId)
-        const anchor = mapView
-          ? { lat: mapView.lat, lon: mapView.lon }
-          : tripMapAnchor(latest)
-        setDetailPlace(planPlaceToExplorePlace(enriched, section, days, anchor))
-      }
-    } catch {
-      /* keep thin snapshot; user can reopen later */
-    } finally {
-      enrichInFlightRef.current.delete(placeId)
-    }
   }
 
   function closePlaceDetail() {
@@ -739,37 +635,106 @@ export function PlanBoard({
     return () => cancelAnimationFrame(raf)
   }, [focusPlaceId, mode])
 
-  // Quietly backfill photo / hours for a few thin places (capped — Text Search costs).
-  useEffect(() => {
-    if (!placesEnabled && !googleApiKey) return
-    enrichAttemptedRef.current = new Set()
-    let cancelled = false
-    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-    const AUTO_ENRICH_CAP = 5
-    void (async () => {
-      await sleep(800)
-      const pending = tripRef.current.planPlaces
-        .filter(
-          (p) =>
-            planPlaceNeedsEnrichment(p) && !enrichAttemptedRef.current.has(p.id),
-        )
-        .slice(0, AUTO_ENRICH_CAP)
-      for (const p of pending) {
-        if (cancelled) break
-        await refillPlanPlaceEnrichment(p.id)
-        await sleep(600)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-    // Only re-run when trip identity or Places availability changes — not every place edit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trip.id, placesEnabled, googleApiKey])
+  // Quiet Text Search backfill removed — that SKU drove the bill.
+  // Discover Nearby (Google Pro / OSM) still supplies rich places when saving.
 
   function saveLabelFor(place: ExplorePlace): string {
     const section = planSectionForExploreCategory(trip, place.category)
     return section ? `Save to ${section.title}` : 'Save'
+  }
+
+  /** Prefer a richer Nearby hit (photos / hours) over a thin saved snapshot. */
+  function richerNearbyMatch(
+    place: ExplorePlace,
+    pool: ExplorePlace[],
+  ): ExplorePlace | null {
+    const name = place.name.trim().toLowerCase()
+    if (!name || !pool.length) return null
+    let best: ExplorePlace | null = null
+    let bestScore = 0
+    for (const s of pool) {
+      const sn = s.name.trim().toLowerCase()
+      if (!sn) continue
+      const nameHit = sn === name || sn.includes(name) || name.includes(sn)
+      if (!nameHit) continue
+      let score = sn === name ? 3 : 1
+      if (
+        isValidCoord(place.lat, place.lon) &&
+        isValidCoord(s.lat, s.lon) &&
+        distKm(
+          { lat: place.lat, lon: place.lon },
+          { lat: s.lat, lon: s.lon },
+        ) < 0.45
+      ) {
+        score += 2
+      }
+      if (s.images.length || s.tags.googlePhotoName) score += 1
+      if (s.openingHours) score += 1
+      if (s.rating != null) score += 1
+      if (score > bestScore) {
+        bestScore = score
+        best = s
+      }
+    }
+    return bestScore >= 3 ? best : null
+  }
+
+  function placeNeedsNearbyHydrate(place: ExplorePlace): boolean {
+    const hasPhoto = Boolean(place.images.length || place.tags.googlePhotoName)
+    const hasHours = Boolean(
+      (place.openingHours && place.openingHours.trim()) ||
+        (place.openingPeriods && place.openingPeriods.length > 0),
+    )
+    return !hasPhoto || !hasHours
+  }
+
+  /**
+   * Remove from Plan but keep the detail sheet open as an unsaved suggestion
+   * so the user can Save again (optionally hydrated from Nearby).
+   */
+  function removeSavedKeepDetailOpen(placeId: string, snapshot: ExplorePlace) {
+    onChange(removePlanPlace(trip, placeId))
+    setDetailSavedId(null)
+    setFocusPlaceId(null)
+    onJourneyHighlight?.(null)
+
+    const fromList = richerNearbyMatch(snapshot, suggestions)
+    const next = fromList || snapshot
+    setDetailPlace(next)
+    setPinnedSearch(next)
+    setFocusSuggestionId(next.id)
+    onStatus?.(
+      fromList
+        ? 'Removed — Nearby match ready; tap Save to keep with details'
+        : 'Removed — sheet still open; Save to add again',
+    )
+
+    if (fromList || !placeNeedsNearbyHydrate(snapshot)) return
+    if (!placesEnabled && !googleApiKey) return
+    if (!isValidCoord(snapshot.lat, snapshot.lon)) return
+
+    void (async () => {
+      try {
+        const places = await fetchNearbyExplore(
+          { lat: snapshot.lat, lon: snapshot.lon },
+          {
+            useGooglePlaces: placesEnabled,
+            googleApiKey: googleApiKey || undefined,
+            radiusM: 2500,
+            limit: 20,
+            rankPreference: 'DISTANCE',
+          },
+        )
+        const match = richerNearbyMatch(snapshot, places)
+        if (!match) return
+        setDetailPlace(match)
+        setPinnedSearch(match)
+        setFocusSuggestionId(match.id)
+        onStatus?.('Found Nearby details — tap Save to keep')
+      } catch {
+        /* keep thin snapshot open */
+      }
+    })()
   }
 
   function moveSavedToMaybe(placeId: string) {
@@ -1073,13 +1038,11 @@ export function PlanBoard({
           primaryTone={detailSavedId ? 'danger' : 'coral'}
           primaryLabel={detailSavedId ? 'Remove' : saveLabelFor(detailSheetPlace)}
           onPrimary={() => {
-            if (detailSavedId) {
-              onChange(removePlanPlace(trip, detailSavedId))
-              onStatus?.('Removed from list')
-              closePlaceDetail()
+            if (detailSavedId && detailSheetPlace) {
+              removeSavedKeepDetailOpen(detailSavedId, detailSheetPlace)
               return
             }
-            saveSuggestion(detailSheetPlace, false)
+            if (detailSheetPlace) saveSuggestion(detailSheetPlace, false)
           }}
           secondaryLabel="Maybe"
           onSecondary={() => {
@@ -1088,7 +1051,7 @@ export function PlanBoard({
               closePlaceDetail()
               return
             }
-            saveSuggestion(detailSheetPlace, true)
+            if (detailSheetPlace) saveSuggestion(detailSheetPlace, true)
           }}
           days={detailSavedId ? days : undefined}
           scheduledDay={detailSavedPlace?.scheduledDay || null}
