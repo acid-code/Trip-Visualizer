@@ -329,35 +329,42 @@ export function PlanBoard({
     suggestAbortRef.current = ac
     setSuggestBusy(true)
     setSuggestError(null)
-    void (async () => {
-      try {
-        const places = await fetchNearbyExplore(anchor, {
-          signal: ac.signal,
-          useGooglePlaces: placesEnabled,
-          googleApiKey: googleApiKey || undefined,
-          categories: suggestCat === 'all' ? undefined : [suggestCat],
-          radiusM,
-          limit: placesEnabled ? 20 : 30,
-          rankPreference: 'POPULARITY',
-          onCacheHit: (cached) => {
-            if (!ac.signal.aborted) {
-              setSuggestions(cached)
-              setSuggestBusy(false)
-            }
-          },
-        })
-        if (ac.signal.aborted) return
-        setSuggestions(places)
-        if (!places.length) setSuggestError('No suggestions in this map view — pan or zoom, or try another type')
-        else setSuggestError(null)
-      } catch (err) {
-        if (ac.signal.aborted) return
-        setSuggestError(err instanceof Error ? err.message : 'Could not load suggestions')
-      } finally {
-        if (!ac.signal.aborted) setSuggestBusy(false)
-      }
-    })()
-    return () => ac.abort()
+    // Debounce map pans — avoid a Nearby call on every drag frame.
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const places = await fetchNearbyExplore(anchor, {
+            signal: ac.signal,
+            useGooglePlaces: placesEnabled,
+            googleApiKey: googleApiKey || undefined,
+            categories: suggestCat === 'all' ? undefined : [suggestCat],
+            radiusM,
+            limit: placesEnabled ? 20 : 30,
+            rankPreference: 'POPULARITY',
+            onCacheHit: (cached) => {
+              if (!ac.signal.aborted) {
+                setSuggestions(cached)
+                setSuggestBusy(false)
+              }
+            },
+          })
+          if (ac.signal.aborted) return
+          setSuggestions(places)
+          if (!places.length) {
+            setSuggestError('No suggestions in this map view — pan or zoom, or try another type')
+          } else setSuggestError(null)
+        } catch (err) {
+          if (ac.signal.aborted) return
+          setSuggestError(err instanceof Error ? err.message : 'Could not load suggestions')
+        } finally {
+          if (!ac.signal.aborted) setSuggestBusy(false)
+        }
+      })()
+    }, 500)
+    return () => {
+      window.clearTimeout(timer)
+      ac.abort()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     mode,
@@ -732,21 +739,25 @@ export function PlanBoard({
     return () => cancelAnimationFrame(raf)
   }, [focusPlaceId, mode])
 
-  // Quietly backfill photo / hours / summary for places saved before enrichment existed.
+  // Quietly backfill photo / hours for a few thin places (capped — Text Search costs).
   useEffect(() => {
     if (!placesEnabled && !googleApiKey) return
     enrichAttemptedRef.current = new Set()
     let cancelled = false
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+    const AUTO_ENRICH_CAP = 5
     void (async () => {
-      await sleep(600)
-      const pending = tripRef.current.planPlaces.filter(
-        (p) => planPlaceNeedsEnrichment(p) && !enrichAttemptedRef.current.has(p.id),
-      )
+      await sleep(800)
+      const pending = tripRef.current.planPlaces
+        .filter(
+          (p) =>
+            planPlaceNeedsEnrichment(p) && !enrichAttemptedRef.current.has(p.id),
+        )
+        .slice(0, AUTO_ENRICH_CAP)
       for (const p of pending) {
         if (cancelled) break
         await refillPlanPlaceEnrichment(p.id)
-        await sleep(450)
+        await sleep(600)
       }
     })()
     return () => {

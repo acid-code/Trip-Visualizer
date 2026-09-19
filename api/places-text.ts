@@ -21,8 +21,7 @@ const TEXT_FIELD_MASK = [
   'places.websiteUri',
   'places.googleMapsUri',
   'places.regularOpeningHours',
-  'places.editorialSummary',
-  'places.generativeSummary',
+  // No editorial/generative — keep Text Search Pro (5k free), not Atmosphere.
 ].join(',')
 
 type VercelReq = {

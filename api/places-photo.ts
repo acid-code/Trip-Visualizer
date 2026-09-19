@@ -57,7 +57,11 @@ function resolveApiKey(): string {
 }
 
 export default async function handler(req: VercelReq, res: VercelRes) {
-  res.setHeader('Cache-Control', 'public, max-age=86400')
+  // Long browser/CDN cache — each upstream Google media hit is a Photo SKU.
+  res.setHeader(
+    'Cache-Control',
+    'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400',
+  )
 
   if (req.method === 'OPTIONS') {
     res.status(204).send('')

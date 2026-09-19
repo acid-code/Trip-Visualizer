@@ -1143,7 +1143,7 @@ export async function gatherCoachCandidates(
         signal: opts?.signal,
         useGooglePlaces: opts?.useGooglePlaces,
         googleApiKey: opts?.googleApiKey,
-        refreshInBackground: false,
+        // Default is already false; keep explicit for coach cost clarity.
         categories: categories?.length ? categories : [...coachCats],
       })
     } catch (err) {

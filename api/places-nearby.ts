@@ -23,8 +23,8 @@ const FIELD_MASK = [
   'places.websiteUri',
   'places.googleMapsUri',
   'places.regularOpeningHours',
-  'places.editorialSummary',
-  'places.generativeSummary',
+  // No editorial/generative summaries — those upgrade the SKU to
+  // Enterprise + Atmosphere (1k free/mo). Stay on Nearby Search Pro (5k free).
 ].join(',')
 
 const INCLUDED_TYPES_ALL = [

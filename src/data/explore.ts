@@ -582,7 +582,10 @@ export async function fetchNearbyExplore(
     googleApiKey?: string
     /** Fired immediately when a 2-day area cache hit exists (before network). */
     onCacheHit?: (places: ExplorePlace[]) => void
-    /** After a cache hit, still refresh in the background (default true). */
+    /**
+     * After a cache hit, still refresh from Google/OSM in the background.
+     * Default false — reuse the 48h cache to avoid repeat Nearby bills.
+     */
     refreshInBackground?: boolean
     /** Limit OSM / Google Nearby types (Plan Discover passes one category). */
     categories?: ExploreCategory[]
@@ -624,16 +627,13 @@ export async function fetchNearbyExplore(
     if (cached?.length) {
       let list = withDistances(cached)
       if (useGoogle) {
-        list = attachGoogleListPhotos(
-          list.map((p) =>
-            p.tags.googlePhotoName ? { ...p, images: [] as string[] } : p,
-          ),
-          opts?.googleApiKey,
-        )
+        // Reuse photo URLs already stored in IDB — wiping them forced fresh
+        // <img> loads and re-billed Place Photos on every Explore reopen.
+        list = attachGoogleListPhotos(list, opts?.googleApiKey)
       }
       cacheHit = list
       opts?.onCacheHit?.(cacheHit)
-      if (opts?.refreshInBackground === false) return cacheHit
+      if (opts?.refreshInBackground !== true) return cacheHit
     }
   }
 

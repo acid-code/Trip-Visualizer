@@ -667,7 +667,10 @@ export function dayTravelLegs(
   return legs
 }
 
-/** True when a saved Plan place is missing photo / hours / blurb snapshot. */
+/**
+ * True when a saved Plan place is missing photo or hours.
+ * Summary alone is not enough to bill another Text Search — reviews count is fine.
+ */
 export function planPlaceNeedsEnrichment(p: PlanPlace): boolean {
   const photoName = p.googlePhotoName || ''
   // Old schema capped names at 256 and truncated Google photo resource ids.
@@ -684,8 +687,7 @@ export function planPlaceNeedsEnrichment(p: PlanPlace): boolean {
     (p.openingHours && p.openingHours.trim()) ||
       (p.openingPeriods && p.openingPeriods.length > 0),
   )
-  const hasSummary = Boolean(p.enrichmentSummary && p.enrichmentSummary.trim())
-  return truncatedLegacyPhoto || !hasPhoto || !hasHours || !hasSummary
+  return truncatedLegacyPhoto || !hasPhoto || !hasHours
 }
 
 /** Merge Explore/Places snapshot onto a saved Plan place (keeps existing fields). */

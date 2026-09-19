@@ -1,7 +1,8 @@
 /**
  * Google Places API (New) — Nearby Search for Explore.
- * Cost strategy: one Nearby Search (Pro) per fresh area; photos only when needed;
- * 2-day IndexedDB cache avoids repeat calls.
+ * Cost strategy: Nearby/Text Search Pro fields only (no Atmosphere summaries);
+ * 48h Nearby IDB + 7d Text Search IDB; photos only for list budget;
+ * no background refresh after cache hit by default.
  */
 
 import { distKm } from './routes'
@@ -12,6 +13,11 @@ import {
   periodsFromGoogleRegularHours,
   weekdayTextFromGoogle,
 } from './openingHours'
+import {
+  getCachedTextHit,
+  placesTextCacheKey,
+  setCachedTextHit,
+} from './placesTextCache'
 
 const PLACES_NEARBY = 'https://places.googleapis.com/v1/places:searchNearby'
 const PLACES_TEXT = 'https://places.googleapis.com/v1/places:searchText'
@@ -20,7 +26,7 @@ const PLACES_TEXT = 'https://places.googleapis.com/v1/places:searchText'
 export const GOOGLE_NEARBY_MAX = 20
 
 /** How many list-card photos to resolve (each media URL load ≈ 1 Photo SKU). */
-export const GOOGLE_LIST_PHOTO_BUDGET = 6
+export const GOOGLE_LIST_PHOTO_BUDGET = 3
 
 const FIELD_MASK = [
   'places.id',
@@ -35,8 +41,7 @@ const FIELD_MASK = [
   'places.websiteUri',
   'places.googleMapsUri',
   'places.regularOpeningHours',
-  'places.editorialSummary',
-  'places.generativeSummary',
+  // No editorial/generative summaries — those upgrade to Enterprise + Atmosphere.
 ].join(',')
 
 /** Broad mix — Journey Explore (client filters by chip). */
@@ -495,8 +500,7 @@ const TEXT_FIELD_MASK = [
   'places.websiteUri',
   'places.googleMapsUri',
   'places.regularOpeningHours',
-  'places.editorialSummary',
-  'places.generativeSummary',
+  // No editorial/generative — keep Text Search Pro, not Atmosphere.
 ].join(',')
 
 /**
@@ -637,36 +641,64 @@ export function explorePlaceFromTextHit(
   return place
 }
 
+/** In-flight Textupe — concurrent identical Text Searches share one network call. */
+const textSearchInflight = new Map<string, Promise<GoogleTextHit | null>>()
+
 export async function fetchGoogleTextViaProxy(opts: {
   query: string
   /** Data-panel override only; omit to use server `GOOGLE_MAPS_API_KEY`. */
   apiKey?: string
   bias?: { lat: number; lon: number; radiusM?: number }
   signal?: AbortSignal
+  /** Skip IndexedDB memo (rare). */
+  skipCache?: boolean
 }): Promise<GoogleTextHit | null> {
+  const query = clampText(opts.query, 200)
+  if (!query.trim()) return null
+
+  const cacheKey = placesTextCacheKey(query, opts.bias)
+  if (!opts.skipCache) {
+    const cached = await getCachedTextHit(cacheKey)
+    if (cached !== undefined) return cached
+  }
+
+  const inflightKey = `${cacheKey}|${sanitizeSecretInput(opts.apiKey ?? '') ? 'k' : 's'}`
+  const existing = textSearchInflight.get(inflightKey)
+  if (existing) return existing
+
   const override = sanitizeSecretInput(opts.apiKey ?? '')
-  const res = await fetch('/api/places-text', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({
-      query: opts.query,
-      ...(override ? { apiKey: override } : {}),
-      bias: opts.bias,
-    }),
-    signal: opts.signal,
-  })
-  if (!res.ok) {
-    const errBody = (await res.json().catch(() => null)) as { error?: string } | null
-    const msg = errBody?.error || `Places text proxy ${res.status}`
-    logClientError('places-text-proxy', msg)
-    throw new Error(msg)
+  const request = (async (): Promise<GoogleTextHit | null> => {
+    const res = await fetch('/api/places-text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        query,
+        ...(override ? { apiKey: override } : {}),
+        bias: opts.bias,
+      }),
+      signal: opts.signal,
+    })
+    if (!res.ok) {
+      const errBody = (await res.json().catch(() => null)) as { error?: string } | null
+      const msg = errBody?.error || `Places text proxy ${res.status}`
+      logClientError('places-text-proxy', msg)
+      throw new Error(msg)
+    }
+    const json = (await res.json()) as { place?: GoogleTextHit | null }
+    const place = json.place ?? null
+    if (place && !place.category && place.types?.length) {
+      place.category = categoryFromTypes(place.primaryType || '', place.types)
+    }
+    if (!opts.skipCache) {
+      void setCachedTextHit(cacheKey, place)
+    }
+    return place
+  })()
+
+  textSearchInflight.set(inflightKey, request)
+  try {
+    return await request
+  } finally {
+    textSearchInflight.delete(inflightKey)
   }
-  const json = (await res.json()) as { place?: GoogleTextHit | null }
-  const place = json.place ?? null
-  if (!place) return null
-  // Normalize older proxy payloads that lack category.
-  if (!place.category && place.types?.length) {
-    place.category = categoryFromTypes(place.primaryType || '', place.types)
-  }
-  return place
 }
