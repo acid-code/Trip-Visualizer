@@ -6,7 +6,9 @@ import type { TripRecord } from '../domain/types'
 import { prefsFromMeta } from './context/compileDayBriefing'
 import { clearChatSession } from './chatSession'
 import { clearVersionStack } from './draftVersions'
+import { existingHotelsBrief } from './existingHotels'
 import { draftFromLiveTrip, wantsVisibleShape } from './structureDrift'
+import { gateDraftRemovals } from './stepRemovals'
 import {
   adaptSegmentToArea,
   allocateSpineToDays,
@@ -195,6 +197,14 @@ function mergeDraft(
       ...(next.itemUpdates || []),
     ].slice(-40),
     droppedHighlights: next.droppedHighlights ?? prev.droppedHighlights,
+    removeItemIds: next.removeItemIds?.length
+      ? next.removeItemIds
+      : prev.removeItemIds,
+    pendingRemovals: next.pendingRemovals?.length
+      ? next.pendingRemovals
+      : next.removeItemIds?.length
+        ? undefined
+        : prev.pendingRemovals,
     decisions: next.decisions?.length
       ? dedupeDecisions([
           ...(prev.decisions || []),
@@ -271,8 +281,74 @@ function mirrorJourneyResult(
 
 /**
  * One user turn: ask trip_chat what to do, run at most one tool, return UI payload.
+ * Removals of Journey steps are gated — ask first, apply only after an explicit yes.
  */
 export async function runTripHelper(args: {
+  trip: TripRecord
+  userMessage: string
+  transcript: TripHelperMessage[]
+  draft: FullTripDraft | null
+  checklist: TripChecklist
+  signal?: AbortSignal
+}): Promise<TripHelperResult> {
+  const result = await runTripHelperUngated(args)
+  return withRemovalGate(args.trip, args.userMessage, args.draft, result)
+}
+
+function withRemovalGate(
+  trip: TripRecord,
+  userMessage: string,
+  prevDraft: FullTripDraft | null,
+  result: TripHelperResult,
+): TripHelperResult {
+  const baseDraft = result.draft ?? prevDraft
+  if (!baseDraft) return result
+  if (
+    !baseDraft.removeItemIds?.length &&
+    !baseDraft.pendingRemovals?.length &&
+    !prevDraft?.pendingRemovals?.length &&
+    !prevDraft?.removeItemIds?.length
+  ) {
+    return result
+  }
+
+  const gated = gateDraftRemovals(
+    trip,
+    result.draft ?? baseDraft,
+    userMessage,
+    prevDraft,
+  )
+  const promoted =
+    (gated.draft.removeItemIds?.length || 0) >
+    (result.draft?.removeItemIds?.length || 0)
+  let message = result.message
+  if (gated.ask) {
+    message = [result.message, gated.ask].filter(Boolean).join('\n\n')
+  } else if (gated.keptMessage) {
+    message = [result.message, gated.keptMessage].filter(Boolean).join('\n\n')
+  }
+  return {
+    ...result,
+    message,
+    draft: gated.draft,
+    draftChanged:
+      result.draftChanged ||
+      promoted ||
+      Boolean(gated.ask) ||
+      Boolean(gated.keptMessage),
+    modeLabel: gated.ask ? 'Listening' : result.modeLabel,
+    reason: gated.ask
+      ? 'Need your OK before removing Journey steps.'
+      : gated.keptMessage
+        ? 'Keeping those Journey steps.'
+        : result.reason,
+    checklist: gated.ask
+      ? result.checklist
+      : mergeChecklist(result.checklist, promoted ? { ready: true } : {}),
+  }
+}
+
+async function runTripHelperUngated(args: {
   trip: TripRecord
   userMessage: string
   transcript: TripHelperMessage[]
@@ -301,6 +377,7 @@ export async function runTripHelper(args: {
         },
         prefs: prefsFromMeta(args.trip),
         existingSteps: existingStepsBrief(args.trip),
+        existingHotels: existingHotelsBrief(args.trip),
         currentDraft: args.draft
           ? {
               summary: args.draft.summary,
@@ -756,10 +833,17 @@ export function greetingForTrip(
   modeLabel: TripChatModeLabel
   reason: string
 } {
+  const hotels = existingHotelsBrief(trip)
   const steps = existingStepsBrief(trip)
   const flights = steps.filter((s) => s.type === 'flight')
   const areas = prefsFromMeta(trip).adoptedAreas || []
   const otherCount = steps.filter((s) => s.type !== 'flight').length
+  const hotelBit = hotels.length
+    ? ` Lodging already on the Journey: ${hotels
+        .slice(0, 3)
+        .map((h) => `${h.title}${h.city ? ` (${h.city})` : ''}`)
+        .join('; ')}${hotels.length > 3 ? '…' : ''}.`
+    : ''
   const areaBit = areas.length
     ? ` Stay zones on the Journey: ${areas.slice(0, 4).join(', ')}${
         areas.length > 4 ? '…' : ''
@@ -781,7 +865,7 @@ export function greetingForTrip(
         otherCount
           ? ` Plus ${otherCount} other step${otherCount === 1 ? '' : 's'} on the timeline.`
           : ''
-      }${areaBit}${
+      }${hotelBit}${areaBit}${
         opts?.restarted
           ? ask
           : ' Want me to build the rest of the trip around it, or reshape what you have?'
@@ -789,17 +873,19 @@ export function greetingForTrip(
       modeLabel: 'Listening',
       reason: opts?.restarted
         ? 'Restarted from the live Journey.'
-        : 'Noticed existing transit on the Journey.',
+        : hotels.length
+          ? 'Noticed existing transit and lodging on the Journey.'
+          : 'Noticed existing transit on the Journey.',
     }
   }
   const days = trip.meta.startDate && trip.meta.endDate
-  if (areas.length || otherCount) {
+  if (areas.length || otherCount || hotels.length) {
     return {
       message: `${fresh}${
         days
           ? `${trip.meta.name || 'Your trip'} (${trip.meta.startDate} → ${trip.meta.endDate}) already has shape on the Journey.`
           : 'Your Journey already has some shape.'
-      }${areaBit}${
+      }${hotelBit}${areaBit}${
         otherCount
           ? ` ${otherCount} step${otherCount === 1 ? '' : 's'} on the timeline.`
           : ''
@@ -811,7 +897,9 @@ export function greetingForTrip(
       modeLabel: 'Listening',
       reason: opts?.restarted
         ? 'Restarted from the live Journey.'
-        : 'Picking up from what’s already on the Journey.',
+        : hotels.length
+          ? 'Picking up from lodging and steps already on the Journey.'
+          : 'Picking up from what’s already on the Journey.',
     }
   }
   return {

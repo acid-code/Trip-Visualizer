@@ -243,10 +243,11 @@ describe('applyFullTripDraft — create full trip without hotels', () => {
     const flights = next.items.filter((i) => i.type === 'flight')
     expect(flights).toHaveLength(1)
     expect(flights[0]!.id).toBe('F1')
+    // Blank times get filled; already-set from/to stay (scrubbing an older tip must not clobber).
     expect(flights[0]!.start).toBe('09:40')
     expect(flights[0]!.end).toBe('12:55')
-    expect(flights[0]!.from).toBe('London Heathrow')
-    expect(flights[0]!.to).toBe('Nice Airport')
+    expect(flights[0]!.from).toBe('LHR')
+    expect(flights[0]!.to).toBe('NCE')
   })
 
   it('applyItemUpdates patches by id', () => {

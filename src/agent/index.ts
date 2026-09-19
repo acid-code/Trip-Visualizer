@@ -52,6 +52,21 @@ export {
 } from './tripMergeDiff'
 
 export {
+  alignDayPlanWithHotels,
+  dateHasRealHotel,
+  existingHotelsBrief,
+  hotelAreaForDate,
+  hotelCoveredDates,
+  isRealHotel,
+} from './existingHotels'
+
+export {
+  gateDraftRemovals,
+  userAffirmedRemovals,
+  userDeclinedRemovals,
+} from './stepRemovals'
+
+export {
   fingerprintDraft,
   fingerprintLiveTrip,
   liveDayAreas,

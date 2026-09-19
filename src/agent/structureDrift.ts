@@ -6,6 +6,7 @@
 import type { TripItem, TripRecord } from '../domain/types'
 import { enumerateDays, isPlaceholderBase } from '../data/dayBases'
 import { prefsFromMeta } from './context/compileDayBriefing'
+import { hotelAreaForDate } from './existingHotels'
 import { allocateSpineToDays } from './tripPlanner'
 import type {
   FullTripDayPlan,
@@ -377,6 +378,8 @@ function areaForDay(
   live: Map<string, string>,
   carry: string,
 ): string {
+  const hotel = hotelAreaForDate(trip, date)
+  if (hotel) return hotel.areaLabel
   const fromBase = live.get(date)
   if (fromBase) return fromBase
   const counts = new Map<string, number>()
@@ -440,6 +443,13 @@ function themeForDay(
         why: (n.notes || 'Special day you marked on the Journey.').slice(0, 280),
         special: true,
       }
+    }
+  }
+  const hotel = hotelAreaForDate(trip, date)
+  if (hotel) {
+    return {
+      theme: areaLabel.slice(0, 80),
+      why: `Based at ${hotel.hotelTitle} (already on your Journey).`,
     }
   }
   const transit = trip.items.find(

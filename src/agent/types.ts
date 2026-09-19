@@ -207,6 +207,17 @@ export type FullTripDraft = {
   /** Highlights dropped by user in the shape tree (not materialized). */
   droppedHighlights?: string[]
   /**
+   * Journey step ids to remove on apply — only after the user confirmed in chat.
+   * Unconfirmed proposals stay in pendingRemovals instead.
+   */
+  removeItemIds?: string[]
+  /** Removals the coach wants, awaiting an explicit yes/no before apply. */
+  pendingRemovals?: Array<{
+    itemId: string
+    title: string
+    reason: string
+  }>
+  /**
    * Explicit “why we added / changed this” list for the shape panel & chat.
    * Should reference existing flights, vibe, dates when relevant.
    */

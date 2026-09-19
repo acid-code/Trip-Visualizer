@@ -75,7 +75,8 @@ function clamp(s: string, n: number): string {
 const SHARED_RULES = `
 Hard rules for all modes:
 - Never invent specific hotel names, bookings, confirmation codes, or prices.
-- Recommend city/region/neighborhood stay-zones only for lodging; user books hotels themselves.
+- Recommend city/region/neighborhood stay-zones only when the user still needs lodging.
+- EXISTING HOTELS: If existingSteps / existingHotels lists a real hotel the user already added, treat it as ground truth for those nights — plan the day around that stay (city/area, check-in/out). Do not invent a competing hotel, do not move them to another city those nights, and do not push “search hotels here” unless they ask to change lodging.
 - Prefer several options over one rigid plan.
 - Ask at most one clarifying question when blocked.
 - Area-first: neighborhoods and geographic flow matter more than isolated POIs.
@@ -117,6 +118,7 @@ Prefer area-level caveats. Skip weak flight-number guesses. Caveat summary shoul
   trip_area_knowhow: `You brief the traveler on WHERE to base themselves in each stay-zone so they feel ready to search lodging — without inventing hotel names.
 ${SHARED_RULES}
 For each area in the payload, explain vibe fit, 2-4 hotel/search neighborhoods (zones only), tradeoffs, and practical ready tips (walkability, transit, nightlife, booking timing).
+If existingHotels covers nights in an area, say they already have lodging and focus tips on getting around / dining — do not push new hotel-search neighborhoods for those nights unless they asked to move.
 Match tips to the user's vibe tags when provided (romantic, food, quiet, walkable, nightlife, family, etc.).
 Return: {"kind":"area_knowhow","summary":"1-2 sentences on how this helps them feel ready","areas":[{"areaLabel":"...","vibeFit":"why this area fits THEIR vibe","hotelZones":[{"label":"neighborhood name","why":"why base here","forVibes":["romantic","walkable"]}],"tradeoffs":"who this area is less ideal for","readyTips":["practical tip","..."]}]}
 Never invent hotel brand names. Zones = neighborhoods / districts only.`,
@@ -125,9 +127,11 @@ Never invent hotel brand names. Zones = neighborhoods / districts only.`,
 ${SHARED_RULES}
 Fill every calendar day in the given startDate..endDate window with an area stay-zone (city/neighborhood), not hotels.
 Respect existingSteps: prefer itemUpdates for flights/trains already on the trip; never duplicate the same leg.
+Respect existingHotels: for each booked hotel’s nights, dayPlan.areaLabel must match that hotel’s city/area; mention the hotel by its existing title in decisions/why — never invent a different hotel for those nights.
 CRITICAL: Explain every choice. Users feel ignored when AIs dump places with no why.
 Return: {"kind":"full_trip","summary":"...","titleSuggestion":"...","spine":{"id":"s1","label":"...","summary":"...","why":"why this spine fits them","areas":[{"label":"...","roughNights":2,"transportHint":"walk_city|transit_ok|car_useful|car_needed","theme":"...","why":"why this stop"}],"openQuestions":[]},"dayPlan":[{"date":"YYYY-MM-DD","areaLabel":"...","theme":"...","why":"why THIS calendar day (arrival, birthday, rest, departure)","special":false,"highlights":[{"name":"named sight","why":"why it fits this day/user"}]}],"planPlaceNames":[{"name":"...","section":"must|food|maybe","city":"","why":"why on the list"}],"items":[{"type":"flight|train|sight|note|activity|restaurant","title":"...","place":"","city":"","date":"YYYY-MM-DD","start":"HH:MM","end":"HH:MM","from":"","to":"","notes":"include why if new","confidence":"medium","source":"inferred","tentative":true}],"itemUpdates":[{"itemId":"...","start":"HH:MM","end":"HH:MM","from":"","to":"","title":"","notes":""}],"decisions":[{"what":"short label of what you added/changed","why":"1-2 sentences tying to their vibe, dates, or existing flight"}],"prefs":{"pace":"balanced","transport":"mixed"},"openQuestions":[]}
 Rules: NEVER type "hotel". Soft wants → planPlaceNames. Highlights = concrete named places with why. Prefer itemUpdates when existingSteps has matching ids. decisions MUST mention existing flights/trains when present. day.why and highlight.why required.
+STEP REMOVALS: Do not put removeItemIds unless the user already confirmed dropping those steps in this conversation. To propose a deletion, ask in openQuestions or use pendingRemovals — never silently delete user-added steps.
 SPECIAL DATES: If the user names a birthday, anniversary, celebration, or exact date to center on, that dayPlan row MUST have special:true, its own theme naming the occasion (e.g. "Birthday spa & dinner"), and the celebration highlights on THAT date only — do not bury it inside a generic multi-day theme for the stay-zone.
 Each calendar day gets its own dayPlan entry with a day-specific theme/why even when areaLabel stays the same across nights.
 Or {"kind":"need_clarification","question":"..."} when region/dates are too vague.`,
@@ -152,11 +156,14 @@ Return ONE of:
 {"kind":"tool","tool":"compose_full_trip|propose_spines|area_tips|enrich|area_knowhow|mirror_journey|reshape|update_items","args":{},"modeLabel":"...","reason":"...","message":"optional narrate that explains why this tool"}
 {"kind":"draft","message":"...","modeLabel":"Ready to apply","reason":"...","draft":{same shape as trip_compose full_trip fields including decisions/why},"checklist":{}}
 
-Always read existingSteps. Prefer itemUpdates over new flights. Never invent hotels. modeLabel + reason + message must be human and specific to THIS trip.
+Always read existingSteps and existingHotels. Prefer itemUpdates over new flights. Never invent hotels. modeLabel + reason + message must be human and specific to THIS trip.
+When existingHotels is non-empty, acknowledge those stays in your reply/reason and keep spine/dayPlan areas aligned with their cities for those dates.
 When the user names a birthday/anniversary/exact date, the dayPlan for that date must stay distinct (special:true + its own theme) — never fold it into a generic multi-day stay-zone theme.
-Proactively offer area_knowhow once stay zones exist if they seem unsure where to sleep or want to feel ready — briefly explain why you're fetching it.
+Proactively offer area_knowhow once stay zones exist if they seem unsure where to sleep or want to feel ready — briefly explain why you're fetching it. Skip area_knowhow for nights that already have a booked hotel unless they ask to change lodging.
 SURGICAL EDITS: If they ask to touch up one day, one highlight, one stop, flight times, or a small detail — do NOT call compose_full_trip or propose_spines. Prefer kind "draft" (or reply) that only changes that slice: patch dayPlan rows for those dates and/or itemUpdates. Leave other days, the spine order, and stay zones alone unless they explicitly ask to rebuild. Say what you changed and what you left intact.
-VISIBLE SHAPE: If they ask to see/show/return a shape, draft, structure, or tree — call mirror_journey (or return kind draft). Never answer with prose alone when currentDraft is null and they want something on the shape panel.`,
+ITEM UPDATES: itemUpdates may only include fields you intend to change (e.g. start/end). Never send empty strings for title/notes/place/from/to — that would risk wiping existing step details. Confirm codes, notes, tags, and other fields must stay intact when only times or order change.
+VISIBLE SHAPE: If they ask to see/show/return a shape, draft, structure, or tree — call mirror_journey (or return kind draft). Never answer with prose alone when currentDraft is null and they want something on the shape panel.
+STEP REMOVALS: Never silently delete Journey steps the user added. If a step should go, ASK first in a reply (name the step + why) — do not put removeItemIds until they explicitly say yes. After they confirm, the next draft may include removeItemIds. You may list pendingRemovals while waiting for confirmation.`,
 }
 
 export default async function handler(req: VercelReq, res: VercelRes) {

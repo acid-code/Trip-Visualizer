@@ -20,6 +20,7 @@ import {
 } from '../data/dayBases'
 import { isIsoDate, isValidCoord } from '../data/validate'
 import { mergePlannerPrefs, prefsFromMeta } from './context/compileDayBriefing'
+import { dateHasRealHotel, existingHotelsBrief, alignDayPlanWithHotels } from './existingHotels'
 import {
   markPlacesUnhealthy,
   resolvePlaceProvider,
@@ -526,11 +527,13 @@ export async function reshapeTrip(args: {
         briefing,
         prefs: prefsFromMeta(args.trip),
         existingSteps: existingStepsBrief(args.trip),
+        existingHotels: existingHotelsBrief(args.trip),
         userMessage: args.userMessage.slice(0, 2000),
         hardRules: [
           'Prefer patches over full rewrite.',
           'Protect confirmed flights; use itemUpdates for times/from/to when user provides them.',
           'Never invent hotels.',
+          'Honor existingHotels — keep those nights in that city/hotel.',
           'If user changes area, say so clearly for adaptSegment.',
         ],
       },
@@ -613,34 +616,132 @@ export function existingStepsBrief(trip: TripRecord): Array<{
 export function applyItemUpdates(
   trip: TripRecord,
   updates: TripItemUpdate[],
+  opts?: {
+    /**
+     * When true (Whole Trip apply default): only fill blank fields.
+     * When false: may replace a filled field with a new non-empty value.
+     * Never clears existing info with blanks — times/order patches must not
+     * wipe title, notes, place, confirm, etc. on user- or coach-created steps.
+     */
+    protectFilled?: boolean
+  },
 ): TripRecord {
   if (!updates.length) return trip
+  const protect = Boolean(opts?.protectFilled)
   const byId = new Map(updates.map((u) => [u.itemId, u]))
   return {
     ...trip,
     items: trip.items.map((it) => {
       const u = byId.get(it.id)
       if (!u) return it
+
+      /** Never clear with ""; times may replace; other fields fill-only when protectFilled. */
+      const take = (
+        live: string,
+        incoming: string | undefined,
+        kind: 'time' | 'detail',
+      ): string | undefined => {
+        if (incoming === undefined) return undefined
+        const next = String(incoming)
+        if (!next.trim()) return undefined
+        const hasLive = Boolean(String(live || '').trim())
+        if (!hasLive) return next
+        if (kind === 'time') return next
+        if (protect) return undefined
+        return next
+      }
+
+      const title = take(
+        it.title,
+        u.title !== undefined ? u.title.slice(0, 200) : undefined,
+        'detail',
+      )
+      const start = take(
+        it.start,
+        u.start !== undefined ? u.start.slice(0, 8) : undefined,
+        'time',
+      )
+      const end = take(
+        it.end,
+        u.end !== undefined ? u.end.slice(0, 8) : undefined,
+        'time',
+      )
+      const from = take(
+        it.from,
+        u.from !== undefined ? u.from.slice(0, 120) : undefined,
+        'detail',
+      )
+      const to = take(
+        it.to,
+        u.to !== undefined ? u.to.slice(0, 120) : undefined,
+        'detail',
+      )
+      const place = take(
+        it.place,
+        u.place !== undefined ? u.place.slice(0, 200) : undefined,
+        'detail',
+      )
+      const city = take(
+        it.city,
+        u.city !== undefined ? u.city.slice(0, 120) : undefined,
+        'detail',
+      )
+
+      let date = it.date
+      if (u.date && isIsoDate(u.date)) {
+        if (!protect || !it.date) date = u.date
+      }
+      let endDate = it.endDate
+      if (u.endDate !== undefined) {
+        if (u.endDate === '' || u.endDate == null) {
+          // never clear an existing endDate with a blank patch
+        } else if (isIsoDate(u.endDate)) {
+          if (!protect || !String(it.endDate || '').trim()) endDate = u.endDate
+          else if (!protect) endDate = u.endDate
+        }
+      }
+
+      let notes = it.notes
+      if (u.notes !== undefined) {
+        const incoming = String(u.notes).trim()
+        if (incoming) {
+          if (!String(it.notes || '').trim()) {
+            notes = incoming.slice(0, 5000)
+          } else if (!protect) {
+            // Append only when not already present — never replace/wipe.
+            if (!it.notes.includes(incoming)) {
+              notes = `${it.notes}\n${incoming}`.trim().slice(0, 5000)
+            }
+          }
+        }
+      }
+
+      const changed =
+        title !== undefined ||
+        start !== undefined ||
+        end !== undefined ||
+        from !== undefined ||
+        to !== undefined ||
+        place !== undefined ||
+        city !== undefined ||
+        date !== it.date ||
+        endDate !== it.endDate ||
+        notes !== it.notes
+      if (!changed) return it
+
+      // Spread keeps confirm, tags, coords, cost, url, status, etc.
       return {
         ...it,
-        title: u.title !== undefined ? u.title.slice(0, 200) : it.title,
-        start: u.start !== undefined ? u.start.slice(0, 8) : it.start,
-        end: u.end !== undefined ? u.end.slice(0, 8) : it.end,
-        from: u.from !== undefined ? u.from.slice(0, 120) : it.from,
-        to: u.to !== undefined ? u.to.slice(0, 120) : it.to,
-        date: u.date && isIsoDate(u.date) ? u.date : it.date,
-        endDate:
-          u.endDate !== undefined
-            ? isIsoDate(u.endDate)
-              ? u.endDate
-              : it.endDate
-            : it.endDate,
-        notes:
-          u.notes !== undefined
-            ? `${it.notes}\n${u.notes}`.trim().slice(0, 5000)
-            : it.notes,
-        place: u.place !== undefined ? u.place.slice(0, 200) : it.place,
-        city: u.city !== undefined ? u.city.slice(0, 120) : it.city,
+        title: title !== undefined ? title : it.title,
+        start: start !== undefined ? start : it.start,
+        end: end !== undefined ? end : it.end,
+        from: from !== undefined ? from : it.from,
+        to: to !== undefined ? to : it.to,
+        place: place !== undefined ? place : it.place,
+        city: city !== undefined ? city : it.city,
+        date,
+        endDate,
+        notes,
         updatedAt: nowIso(),
       }
     }),
@@ -667,17 +768,23 @@ function parseItemUpdates(raw: unknown): TripItemUpdate[] {
       const itemId = String(x.itemId ?? x.id ?? '').trim()
       if (!itemId) return null
       const out: TripItemUpdate = { itemId: itemId.slice(0, 64) }
-      if (x.title != null) out.title = String(x.title).slice(0, 200)
-      if (x.start != null) out.start = String(x.start).slice(0, 8)
-      if (x.end != null) out.end = String(x.end).slice(0, 8)
-      if (x.from != null) out.from = String(x.from).slice(0, 120)
-      if (x.to != null) out.to = String(x.to).slice(0, 120)
-      if (x.date != null) out.date = String(x.date).slice(0, 10)
-      if (x.endDate != null) out.endDate = String(x.endDate).slice(0, 10)
-      if (x.notes != null) out.notes = String(x.notes).slice(0, 400)
-      if (x.place != null) out.place = String(x.place).slice(0, 200)
-      if (x.city != null) out.city = String(x.city).slice(0, 120)
-      return out
+      const put = (key: keyof TripItemUpdate, val: unknown, max: number) => {
+        if (val == null) return
+        const s = String(val).trim().slice(0, max)
+        if (!s) return // omit blanks so patches can't wipe fields
+        ;(out as Record<string, string>)[key] = s
+      }
+      put('title', x.title, 200)
+      put('start', x.start, 8)
+      put('end', x.end, 8)
+      put('from', x.from, 120)
+      put('to', x.to, 120)
+      put('date', x.date, 10)
+      put('endDate', x.endDate, 10)
+      put('notes', x.notes, 400)
+      put('place', x.place, 200)
+      put('city', x.city, 120)
+      return Object.keys(out).length > 1 ? out : null
     })
     .filter(Boolean)
     .slice(0, 30) as TripItemUpdate[]
@@ -1063,15 +1170,32 @@ function parseFullTripDraft(
     droppedHighlights: Array.isArray(o.droppedHighlights)
       ? o.droppedHighlights.map((h) => String(h).slice(0, 80)).slice(0, 40)
       : undefined,
+    removeItemIds: Array.isArray(o.removeItemIds)
+      ? o.removeItemIds
+          .map((id) => String(id ?? '').trim().slice(0, 64))
+          .filter(Boolean)
+          .slice(0, 40)
+      : undefined,
+    pendingRemovals: Array.isArray(o.pendingRemovals)
+      ? o.pendingRemovals
+          .map((raw) => {
+            if (!raw || typeof raw !== 'object') return null
+            const x = raw as Record<string, unknown>
+            const itemId = String(x.itemId ?? '').trim().slice(0, 64)
+            if (!itemId) return null
+            return {
+              itemId,
+              title: String(x.title ?? itemId).slice(0, 200),
+              reason: String(x.reason ?? '').slice(0, 300),
+            }
+          })
+          .filter(Boolean)
+          .slice(0, 20) as FullTripDraft['pendingRemovals']
+      : undefined,
     decisions: (decisions.length ? decisions : autoDecisions).slice(0, 16),
   }
 }
 
-/**
- * Materialize a model full-trip draft onto the journey: area day-bases,
- * themes/highlights as notes/sights, plan seeds — never invents hotels.
- * Merges itemUpdates onto existing steps; skips duplicate transit.
- */
 function fingerprintDraftStructure(
   draft: FullTripDraft,
   dayPlan: FullTripDayPlan[],
@@ -1085,11 +1209,33 @@ function fingerprintDraftStructure(
   return `${spine}|${days}`.slice(0, 500)
 }
 
+/** Day shell the user renamed / filled beyond an auto “Area base” placeholder. */
+function isCustomizedDayShell(it: TripItem): boolean {
+  if (!isPlaceholderBase(it)) return false
+  const title = it.title.trim()
+  if (!title) return false
+  if (/^day\s*\d+\s*base$/i.test(title)) return false
+  if (/\sbase$/i.test(title) && it.tags?.includes('from-full-trip-ai')) {
+    return false
+  }
+  // Real lodging / arrival name the user typed while keeping the day-base tag.
+  if (!/\sbase$/i.test(title)) return true
+  return false
+}
+
+/**
+ * Materialize a model full-trip draft onto the journey: area day-bases,
+ * themes/highlights as notes/sights, plan seeds — never invents hotels.
+ * Merges itemUpdates onto existing steps; skips duplicate transit.
+ * Protects already-filled step fields so scrubbing to an older tip cannot
+ * clobber times/names the user already set on the Journey.
+ */
+
 export function applyFullTripDraft(
   trip: TripRecord,
   draft: FullTripDraft,
 ): TripRecord {
-  const dayPlan =
+  const rawDayPlan =
     draft.dayPlan.length > 0
       ? draft.dayPlan
       : allocateSpineToDays(
@@ -1097,12 +1243,15 @@ export function applyFullTripDraft(
           trip.meta.endDate,
           draft.spine.areas,
         )
+  const dayPlan = alignDayPlanWithHotels(trip, rawDayPlan)
   const byDate = new Map(dayPlan.map((d) => [d.date, d]))
   const dropped = new Set(
     (draft.droppedHighlights || []).map((h) => h.toLowerCase()),
   )
 
-  let next = applyItemUpdates(trip, draft.itemUpdates || [])
+  let next = applyItemUpdates(trip, draft.itemUpdates || [], {
+    protectFilled: true,
+  })
   next = ensurePlanScaffold(next)
   next = {
     ...next,
@@ -1141,6 +1290,10 @@ export function applyFullTripDraft(
       if (!isPlaceholderBase(it)) return it
       const day = byDate.get(it.date)
       if (!day) return it
+      // Real hotel already covers this night — leave the shell alone.
+      if (dateHasRealHotel(next, it.date)) return it
+      // Keep user-customized day shells (real lodging name / place) intact.
+      if (isCustomizedDayShell(it)) return it
       return {
         ...it,
         title: `${day.areaLabel} base`,
@@ -1247,6 +1400,18 @@ export function applyFullTripDraft(
   })
 
   next = applyIngestDraft(next, safeItems, draft.planPlaceNames)
+
+  const removeIds = (draft.removeItemIds || [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)
+  if (removeIds.length) {
+    const drop = new Set(removeIds)
+    next = {
+      ...next,
+      items: next.items.filter((i) => !drop.has(i.id)),
+    }
+  }
+
   return { ...next, updatedAt: nowIso() }
 }
 
@@ -1470,11 +1635,13 @@ export async function composeFullTrip(args: {
         dates: days,
         prefs: prefsFromMeta(args.trip),
         existingSteps: existingStepsBrief(args.trip),
+        existingHotels: existingHotelsBrief(args.trip),
         userMessage: args.userMessage.slice(0, 2500),
         hardRules: [
           'Cover every date in dayPlan with an area stay-zone.',
           'Never invent hotel names or type:hotel items.',
           'Prefer itemUpdates for existingSteps; never duplicate the same flight leg.',
+          'Honor existingHotels: dayPlan.areaLabel must match each booked hotel’s city for those nights; cite the hotel title in decisions.',
           'Soft wants → planPlaceNames; concrete named highlights.',
           'Each calendar day needs its own dayPlan theme/why — do not reuse one generic theme across a whole stay-zone.',
           'If the user names a birthday/anniversary/special date, set special:true on that day and put celebration highlights only on that date.',
@@ -1679,6 +1846,7 @@ export async function requestAreaKnowHow(args: {
         areas: unique,
         vibe: args.trip.meta.vibe || [],
         prefs: prefsFromMeta(args.trip),
+        existingHotels: existingHotelsBrief(args.trip),
         dates: {
           start: args.trip.meta.startDate,
           end: args.trip.meta.endDate,
@@ -1700,6 +1868,7 @@ export async function requestAreaKnowHow(args: {
           'Never invent hotel brand names.',
           'Zones = neighborhoods / districts only.',
           'Match forVibes to the traveler when possible.',
+          'If existingHotels covers an area’s nights, acknowledge that lodging and focus on getting around — do not push new hotel search for those nights.',
         ],
       },
       args.signal,

@@ -367,6 +367,17 @@ const AiSketchDraftSchema = z.object({
     .optional(),
   openQuestions: z.array(boundedStr(300)).max(12).default([]),
   droppedHighlights: z.array(boundedStr(200)).max(40).optional(),
+  removeItemIds: z.array(boundedStr(64)).max(40).optional(),
+  pendingRemovals: z
+    .array(
+      z.object({
+        itemId: boundedStr(64),
+        title: boundedStr(200),
+        reason: boundedStr(300),
+      }),
+    )
+    .max(20)
+    .optional(),
   decisions: z
     .array(
       z.object({
