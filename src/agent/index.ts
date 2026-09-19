@@ -29,8 +29,10 @@ export {
 } from './chatSession'
 
 export {
+  formatSketchStamp,
   formatStructureTime,
   formatTripStructureText,
+  sketchAuthorLabel,
 } from './formatTripStructure'
 
 export {
@@ -53,7 +55,9 @@ export {
   fingerprintDraft,
   fingerprintLiveTrip,
   liveDayAreas,
+  draftFromLiveTrip,
   reconcileStructureDrift,
+  wantsVisibleShape,
   type StructureDriftResult,
 } from './structureDrift'
 
@@ -112,9 +116,21 @@ export {
 } from './tripPlanner'
 
 export {
+  AI_SKETCH_MAX_VERSIONS,
+  aiSketchFromVersionStack,
+  loadSketchStack,
+  mergeSketchSources,
+  stackFingerprint,
+  tripWithAiSketch,
+  tripWithoutAiSketch,
+  versionStackFromAiSketch,
+} from './aiSketch'
+
+export {
   applyStayZoneFromTip,
   emptyChecklist,
   greetingForTrip,
+  mergeTripDrafts,
   restartConversationForTrip,
   runTripHelper,
   selectSpineDraft,

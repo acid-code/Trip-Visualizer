@@ -7,17 +7,25 @@ import type { TripRecord } from '../domain/types'
 import {
   applyFullTripDraftWithPlaces,
   applyStayZoneFromTip,
+  clearPlaceProviderCache,
   emptyChecklist,
   fingerprintLiveTrip,
-  formatStructureTime,
+  formatSketchStamp,
   formatTripStructureText,
+  getCachedPlaceProvider,
   greetingForTrip,
+  loadSketchStack,
   placeProviderLabel,
   reconcileStructureDrift,
   resolvePlaceProvider,
   restartConversationForTrip,
   runTripHelper,
   selectSpineDraft,
+  sketchAuthorLabel,
+  stackFingerprint,
+  tripWithAiSketch,
+  tripWithoutAiSketch,
+  versionStackFromAiSketch,
   type FullTripDraft,
   type TripChatModeLabel,
   type TripChecklist,
@@ -26,8 +34,8 @@ import {
 } from '../agent'
 import {
   currentVersion,
-  loadVersionStack,
   pushDraftVersion,
+  saveVersionStack,
   scrubVersion,
   type VersionStack,
 } from '../agent/draftVersions'
@@ -56,6 +64,12 @@ type Props = {
   /** Injected after Discard — ask what to improve. */
   resumePrompt?: string | null
   onResumeConsumed?: () => void
+  /** Signed-in user — stamps shared sketches with who authored them. */
+  sketchAuthor?: {
+    uid: string
+    email: string
+    displayName: string
+  } | null
 }
 
 type ChatMsg = TripHelperMessage & { id: string }
@@ -85,6 +99,7 @@ export function TripPlannerSheet({
   onPreviewApply,
   resumePrompt,
   onResumeConsumed,
+  sketchAuthor,
 }: Props) {
   const [providerLabel, setProviderLabel] = useState('')
   const [messages, setMessages] = useState<ChatMsg[]>([])
@@ -98,6 +113,8 @@ export function TripPlannerSheet({
   const [stack, setStack] = useState<VersionStack>({ versions: [], index: -1 })
   const [applying, setApplying] = useState(false)
   const [copyFlash, setCopyFlash] = useState(false)
+  const [copiedBubbleId, setCopiedBubbleId] = useState<string | null>(null)
+  const [chatCopyFlash, setChatCopyFlash] = useState(false)
   const [thinkingLine, setThinkingLine] = useState(THINKING_LINES[0]!)
   const [present, setPresent] = useState(open)
   const [entered, setEntered] = useState(false)
@@ -109,6 +126,8 @@ export function TripPlannerSheet({
   const bootRef = useRef(false)
   const driftKeyRef = useRef('')
   const prevVersionIdRef = useRef<string | null>(null)
+  /** Ignore echo of our own sketch writes when partner sync updates trip. */
+  const sketchAtRef = useRef(0)
 
   const activeVersion = currentVersion(stack)
   const draft = activeVersion?.draft ?? null
@@ -128,6 +147,10 @@ export function TripPlannerSheet({
 
   useEffect(() => {
     if (!open) return
+    // Re-probe when last known provider was OSM so Google can recover after quota returns.
+    if (getCachedPlaceProvider() === 'osm') {
+      clearPlaceProviderCache()
+    }
     void resolvePlaceProvider().then((p) => setProviderLabel(placeProviderLabel(p)))
   }, [open])
 
@@ -147,6 +170,17 @@ export function TripPlannerSheet({
     prevVersionIdRef.current = id
   }, [activeVersion?.id])
 
+  const authorStamp = useCallback(() => {
+    if (!trip.shareEnabled || !sketchAuthor?.uid) return {}
+    const byLabel = sketchAuthorLabel(sketchAuthor)
+    if (!byLabel) return {}
+    return {
+      byUid: sketchAuthor.uid,
+      byLabel,
+      byEmail: sketchAuthor.email || undefined,
+    }
+  }, [trip.shareEnabled, sketchAuthor])
+
   const pushVersion = useCallback(
     (
       nextDraft: FullTripDraft,
@@ -155,21 +189,34 @@ export function TripPlannerSheet({
       why: string,
     ) => {
       setShapeMotion('update')
-      setStack((prev) =>
-        pushDraftVersion(trip.id, prev, {
+      setStack((prev) => {
+        const next = pushDraftVersion(trip.id, prev, {
           label,
           reason: why,
           mode,
           draft: nextDraft,
-        }),
-      )
+          ...authorStamp(),
+        })
+        stackRef.current = next
+        const withSketch = tripWithAiSketch(trip, next)
+        sketchAtRef.current = withSketch.aiSketch?.updatedAt ?? Date.now()
+        onApplyTrip(withSketch)
+        return next
+      })
     },
-    [trip.id],
+    [trip, onApplyTrip, authorStamp],
   )
 
   function scrub(delta: -1 | 1) {
     setShapeMotion(delta < 0 ? 'prev' : 'next')
-    setStack((s) => scrubVersion(trip.id, s, s.index + delta))
+    setStack((s) => {
+      const next = scrubVersion(trip.id, s, s.index + delta)
+      stackRef.current = next
+      const withSketch = tripWithAiSketch(trip, next)
+      sketchAtRef.current = withSketch.aiSketch?.updatedAt ?? Date.now()
+      onApplyTrip(withSketch)
+      return next
+    })
   }
 
   function closeSheet() {
@@ -205,6 +252,7 @@ export function TripPlannerSheet({
           reason: result.summary,
           mode: 'Reshaping the trip',
           draft: result.draft,
+          ...authorStamp(),
         })
       }
       setModeLabel('Listening')
@@ -223,7 +271,7 @@ export function TripPlannerSheet({
       ])
       return prev
     },
-    [],
+    [authorStamp],
   )
 
   const stackRef = useRef(stack)
@@ -267,12 +315,22 @@ export function TripPlannerSheet({
     setError('')
     setInput('')
     setCopyFlash(false)
-    const nextStack = applyDrift(loadVersionStack(trip.id), trip)
+    // Sketches: shared trip.aiSketch first (partners see the same tip).
+    // Chat: local session only — never on the shared trip.
+    const loaded = loadSketchStack(trip)
+    const nextStack = applyDrift(loaded, trip)
     stackRef.current = nextStack
+    sketchAtRef.current = trip.aiSketch?.updatedAt ?? 0
     setStack(nextStack)
-  }, [open, trip, applyDrift, resumePrompt, onResumeConsumed])
+    if (nextStack !== loaded) {
+      const withSketch = tripWithAiSketch(trip, nextStack)
+      sketchAtRef.current = withSketch.aiSketch?.updatedAt ?? Date.now()
+      onApplyTrip(withSketch)
+    }
+  }, [open, trip, applyDrift, resumePrompt, onResumeConsumed, onApplyTrip])
 
   // Persist full transcript (user + assistant) so reopen doesn't feel cut off.
+  // Intentionally device-local — not written onto TripRecord / share.
   useEffect(() => {
     if (!open || !bootRef.current) return
     if (!messages.length) return
@@ -288,15 +346,35 @@ export function TripPlannerSheet({
     })
   }, [open, trip.id, messages, modeLabel, reason, checklist])
 
+  // Partner (or other device) pushed a newer sketch — adopt it; keep our chat.
+  useEffect(() => {
+    if (!open || !bootRef.current) return
+    const remoteAt = trip.aiSketch?.updatedAt ?? 0
+    if (!remoteAt || remoteAt <= sketchAtRef.current) return
+    const remote = versionStackFromAiSketch(trip.aiSketch)
+    if (stackFingerprint(remote) === stackFingerprint(stackRef.current)) {
+      sketchAtRef.current = remoteAt
+      return
+    }
+    sketchAtRef.current = remoteAt
+    const next = applyDrift(remote, trip)
+    stackRef.current = next
+    saveVersionStack(trip.id, next)
+    setStack(next)
+  }, [open, trip, applyDrift])
+
   // Journey edited while the sheet is open — re-check drift.
   useEffect(() => {
     if (!open || !bootRef.current) return
-    const next = applyDrift(stackRef.current, trip)
-    if (next !== stackRef.current) {
-      stackRef.current = next
-      setStack(next)
-    }
-  }, [open, trip, applyDrift])
+    const prev = stackRef.current
+    const next = applyDrift(prev, trip)
+    if (next === prev) return
+    stackRef.current = next
+    setStack(next)
+    const withSketch = tripWithAiSketch(trip, next)
+    sketchAtRef.current = withSketch.aiSketch?.updatedAt ?? Date.now()
+    onApplyTrip(withSketch)
+  }, [open, trip, applyDrift, onApplyTrip])
 
   useEffect(() => {
     const el = scrollerRef.current
@@ -394,6 +472,10 @@ export function TripPlannerSheet({
     const empty: VersionStack = { versions: [], index: -1 }
     stackRef.current = empty
     setStack(empty)
+    // Clear shared sketches for partners; chat was already cleared locally.
+    const cleared = tripWithoutAiSketch(trip)
+    sketchAtRef.current = Date.now()
+    onApplyTrip(cleared)
     setMessages([
       { id: createId('M'), role: 'assistant', text: g.message },
     ])
@@ -405,7 +487,7 @@ export function TripPlannerSheet({
     setInput('')
     setCopyFlash(false)
     prevVersionIdRef.current = null
-  }, [busy, applying, trip])
+  }, [busy, applying, trip, onApplyTrip])
 
   async function applySelected() {
     const v = currentVersion(stack)
@@ -431,7 +513,9 @@ export function TripPlannerSheet({
       ? `v${stack.index + 1}/${stack.versions.length}`
       : 'no draft yet'
   const sketchedAt = activeVersion?.at
-  const sketchedLabel = sketchedAt ? formatStructureTime(sketchedAt) : ''
+  const sketchedLabel = sketchedAt
+    ? formatSketchStamp(sketchedAt, activeVersion?.byLabel)
+    : ''
   const shapeAnimClass =
     shapeMotion === 'next'
       ? 'trip-planner-shape-next'
@@ -441,17 +525,46 @@ export function TripPlannerSheet({
           ? 'trip-planner-shape-update'
           : ''
 
+  async function copyToClipboard(text: string): Promise<boolean> {
+    const trimmed = text.trim()
+    if (!trimmed) return false
+    try {
+      await navigator.clipboard.writeText(trimmed)
+      return true
+    } catch {
+      setError('Could not copy — try selecting the text manually')
+      return false
+    }
+  }
+
   async function copyStructure() {
     const text = formatTripStructureText(draft, trip, {
       sketchedAt: activeVersion?.at,
+      sketchedBy: activeVersion?.byLabel,
     })
     if (!text) return
-    try {
-      await navigator.clipboard.writeText(text)
+    if (await copyToClipboard(text)) {
       setCopyFlash(true)
       window.setTimeout(() => setCopyFlash(false), 1600)
-    } catch {
-      setError('Could not copy — try selecting the structure text manually')
+    }
+  }
+
+  async function copyBubble(id: string, text: string) {
+    if (!(await copyToClipboard(text))) return
+    setCopiedBubbleId(id)
+    window.setTimeout(() => {
+      setCopiedBubbleId((cur) => (cur === id ? null : cur))
+    }, 1600)
+  }
+
+  async function copyConversation() {
+    if (!messages.length) return
+    const text = messages
+      .map((m) => `${m.role === 'user' ? 'You' : 'Coach'}:\n${m.text.trim()}`)
+      .join('\n\n')
+    if (await copyToClipboard(text)) {
+      setChatCopyFlash(true)
+      window.setTimeout(() => setChatCopyFlash(false), 1600)
     }
   }
 
@@ -546,6 +659,7 @@ export function TripPlannerSheet({
           >
             {messages.map((m, mi) => {
               const isLatest = mi === messages.length - 1
+              const bubbleCopied = copiedBubbleId === m.id
               return (
               <div
                 key={m.id}
@@ -564,6 +678,24 @@ export function TripPlannerSheet({
                     text={m.text}
                     onAccent={m.role === 'user'}
                   />
+                  <div
+                    className={`mt-1.5 flex ${
+                      m.role === 'user' ? 'justify-end' : 'justify-start'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      className={`trip-planner-btn rounded-md px-1.5 py-0.5 text-[9px] font-medium transition-colors ${
+                        m.role === 'user'
+                          ? 'text-white/55 hover:bg-white/15 hover:text-white/90'
+                          : 'text-violet-200/45 hover:bg-white/10 hover:text-violet-100/80'
+                      } ${bubbleCopied ? 'trip-planner-copy-flash text-emerald-200/90' : ''}`}
+                      title="Copy this message"
+                      onClick={() => void copyBubble(m.id, m.text)}
+                    >
+                      {bubbleCopied ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
                 </div>
               </div>
               )
@@ -847,6 +979,19 @@ export function TripPlannerSheet({
                 }
               >
                 Area know-how
+              </button>
+              <button
+                type="button"
+                disabled={!messages.length}
+                className={`trip-planner-btn rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-medium text-violet-100/80 hover:bg-white/10 disabled:opacity-40 ${
+                  chatCopyFlash
+                    ? 'trip-planner-copy-flash border-emerald-400/40 text-emerald-200'
+                    : ''
+                }`}
+                title="Copy the full conversation"
+                onClick={() => void copyConversation()}
+              >
+                {chatCopyFlash ? 'Chat copied' : 'Copy chat'}
               </button>
             </div>
             <form

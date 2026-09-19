@@ -215,8 +215,8 @@ export function TripShapeTree({
           <div className="text-[10px] font-semibold uppercase tracking-wide text-violet-300/80">
             Why we chose this
           </div>
-          {decisions.map((d) => (
-            <div key={`${d.what}-${d.why.slice(0, 24)}`} className="text-[11px]">
+          {decisions.map((d, i) => (
+            <div key={`decision-${i}-${d.what.slice(0, 40)}`} className="text-[11px]">
               <div className="font-medium text-violet-50">{d.what}</div>
               <div className="text-violet-100/65">{d.why}</div>
             </div>
@@ -230,9 +230,9 @@ export function TripShapeTree({
             +{draft.planPlaceNames.length} plan seed
             {draft.planPlaceNames.length === 1 ? '' : 's'}
           </div>
-          {draft.planPlaceNames.slice(0, 4).map((p) =>
+          {draft.planPlaceNames.slice(0, 4).map((p, i) =>
             p.why ? (
-              <div key={p.name} className="pl-1">
+              <div key={`seed-${i}-${p.name}`} className="pl-1">
                 <span className="text-violet-100/80">{p.name}</span> — {p.why}
               </div>
             ) : null,

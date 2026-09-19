@@ -65,6 +65,9 @@ export function pushDraftVersion(
     reason: string
     mode: TripChatModeLabel
     draft: FullTripDraft
+    byUid?: string
+    byLabel?: string
+    byEmail?: string
   },
 ): VersionStack {
   const base =
@@ -76,6 +79,9 @@ export function pushDraftVersion(
     reason: entry.reason.slice(0, 240),
     mode: entry.mode,
     draft: entry.draft,
+    ...(entry.byUid ? { byUid: entry.byUid.slice(0, 128) } : {}),
+    ...(entry.byLabel ? { byLabel: entry.byLabel.slice(0, 120) } : {}),
+    ...(entry.byEmail ? { byEmail: entry.byEmail.slice(0, 320) } : {}),
   }
   const versions = [...base, version].slice(-MAX)
   const next = { versions, index: versions.length - 1 }

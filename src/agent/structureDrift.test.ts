@@ -5,8 +5,10 @@ import {
   formatTripStructureText,
 } from './formatTripStructure'
 import {
+  draftFromLiveTrip,
   fingerprintLiveTrip,
   reconcileStructureDrift,
+  wantsVisibleShape,
 } from './structureDrift'
 import type { FullTripDraft } from './types'
 
@@ -237,5 +239,68 @@ describe('reconcileStructureDrift', () => {
       }),
     )
     expect(a).not.toBe(b)
+  })
+})
+
+describe('draftFromLiveTrip / wantsVisibleShape', () => {
+  it('detects shape intents', () => {
+    expect(wantsVisibleShape('show me a draft of the current trip')).toBe(true)
+    expect(wantsVisibleShape('can you return a shape that i can see?')).toBe(
+      true,
+    )
+    expect(wantsVisibleShape('what hotels fit Nice?')).toBe(false)
+  })
+
+  it('mirrors day shells into a draft tip', () => {
+    const trip = baseTrip({
+      items: [
+        item({
+          id: 'B1',
+          title: 'Avignon base',
+          place: 'Avignon',
+          city: 'Avignon',
+          date: '2026-06-01',
+          tags: ['day-base', 'placeholder'],
+        }),
+        item({
+          id: 'B2',
+          title: 'Aix base',
+          place: 'Aix',
+          city: 'Aix',
+          date: '2026-06-02',
+          tags: ['day-base', 'placeholder'],
+        }),
+        item({
+          id: 'B3',
+          title: 'Aix base',
+          place: 'Aix',
+          city: 'Aix',
+          date: '2026-06-03',
+          tags: ['day-base', 'placeholder'],
+        }),
+        item({
+          id: 'B4',
+          title: 'Aix base',
+          place: 'Aix',
+          city: 'Aix',
+          date: '2026-06-04',
+          tags: ['day-base', 'placeholder'],
+        }),
+        item({
+          id: 'S1',
+          type: 'sight',
+          title: 'Pont d’Avignon',
+          city: 'Avignon',
+          date: '2026-06-01',
+        }),
+      ],
+    })
+    const draft = draftFromLiveTrip(trip)
+    expect(draft).not.toBeNull()
+    expect(draft!.dayPlan.length).toBe(4)
+    expect(draft!.spine.areas.map((a) => a.label)).toEqual(['Avignon', 'Aix'])
+    expect(draft!.dayPlan[0]?.highlights.some((h) => /Pont/i.test(h.name))).toBe(
+      true,
+    )
   })
 })

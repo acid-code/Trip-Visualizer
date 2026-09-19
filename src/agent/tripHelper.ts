@@ -6,6 +6,7 @@ import type { TripRecord } from '../domain/types'
 import { prefsFromMeta } from './context/compileDayBriefing'
 import { clearChatSession } from './chatSession'
 import { clearVersionStack } from './draftVersions'
+import { draftFromLiveTrip, wantsVisibleShape } from './structureDrift'
 import {
   adaptSegmentToArea,
   allocateSpineToDays,
@@ -159,6 +160,22 @@ function spineToDraft(
   }
 }
 
+function mergeDayPlans(
+  prev: FullTripDraft['dayPlan'],
+  next: FullTripDraft['dayPlan'] | undefined,
+): FullTripDraft['dayPlan'] {
+  if (!next?.length) return prev
+  if (!prev.length) return next
+  const prevDates = new Set(prev.map((d) => d.date))
+  const allNextInPrev = next.every((d) => prevDates.has(d.date))
+  // Partial patch for one (or a few) days — overlay without wiping the rest.
+  if (next.length < prev.length && allNextInPrev) {
+    const patch = new Map(next.map((d) => [d.date, d]))
+    return prev.map((d) => patch.get(d.date) ?? d)
+  }
+  return next
+}
+
 function mergeDraft(
   prev: FullTripDraft | null,
   next: FullTripDraft,
@@ -167,11 +184,88 @@ function mergeDraft(
   return {
     ...prev,
     ...next,
+    spine: next.spine?.areas?.length ? next.spine : prev.spine,
+    dayPlan: mergeDayPlans(prev.dayPlan, next.dayPlan),
+    planPlaceNames: next.planPlaceNames?.length
+      ? next.planPlaceNames
+      : prev.planPlaceNames,
+    items: next.items?.length ? next.items : prev.items,
     itemUpdates: [
       ...(prev.itemUpdates || []),
       ...(next.itemUpdates || []),
     ].slice(-40),
     droppedHighlights: next.droppedHighlights ?? prev.droppedHighlights,
+    decisions: next.decisions?.length
+      ? dedupeDecisions([
+          ...(prev.decisions || []),
+          ...next.decisions,
+        ]).slice(-16)
+      : prev.decisions,
+  }
+}
+
+function dedupeDecisions(
+  list: NonNullable<FullTripDraft['decisions']>,
+): NonNullable<FullTripDraft['decisions']> {
+  const seen = new Set<string>()
+  const out: NonNullable<FullTripDraft['decisions']> = []
+  for (let i = list.length - 1; i >= 0; i--) {
+    const d = list[i]!
+    const key = `${d.what.trim().toLowerCase()}|${d.why.trim().toLowerCase().slice(0, 80)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.unshift(d)
+  }
+  return out
+}
+
+/** Exported for surgical-merge unit tests. */
+export function mergeTripDrafts(
+  prev: FullTripDraft | null,
+  next: FullTripDraft,
+): FullTripDraft {
+  return mergeDraft(prev, next)
+}
+
+function mirrorJourneyResult(
+  trip: TripRecord,
+  draft: FullTripDraft | null,
+  checklist: TripChecklist,
+  narrate?: string,
+  reason?: string,
+): TripHelperResult {
+  const mirrored = draftFromLiveTrip(trip)
+  if (!mirrored) {
+    return {
+      message:
+        narrate ||
+        'Your Journey doesn’t have enough structure yet to mirror — add stay-zone day shells or a few stops, then ask again.',
+      modeLabel: 'Listening',
+      reason: reason || 'Nothing to put on the shape panel yet.',
+      draft,
+      draftChanged: false,
+      cards: [],
+      checklist,
+    }
+  }
+  return {
+    message:
+      narrate ||
+      `${mirrored.summary} It’s on the shape panel now — scrub versions on the right.`,
+    modeLabel: 'Ready to apply',
+    reason:
+      reason ||
+      mirrored.spine.why ||
+      'Mirrored your live Journey into the shape panel.',
+    draft: mergeDraft(draft, mirrored),
+    draftChanged: true,
+    cards: [],
+    checklist: mergeChecklist(checklist, {
+      vibe: true,
+      route: true,
+      stayZones: true,
+      ready: true,
+    }),
   }
 }
 
@@ -187,6 +281,14 @@ export async function runTripHelper(args: {
   signal?: AbortSignal
 }): Promise<TripHelperResult> {
   const checklist = args.checklist || DEFAULT_CHECKLIST
+  const wantShape = wantsVisibleShape(args.userMessage)
+
+  // Reliable path: user asked to see the shape and we can mirror without waiting on the model.
+  if (wantShape && !args.draft?.spine?.areas?.length) {
+    const fast = mirrorJourneyResult(args.trip, args.draft, checklist)
+    if (fast.draftChanged) return fast
+  }
+
   let turn: TripChatTurnResult
   try {
     turn = await postTripChat(
@@ -218,6 +320,15 @@ export async function runTripHelper(args: {
       args.signal,
     )
   } catch (e) {
+    if (wantShape) {
+      return mirrorJourneyResult(
+        args.trip,
+        args.draft,
+        checklist,
+        undefined,
+        'Coach unreachable — mirrored your Journey into the shape panel.',
+      )
+    }
     return {
       message:
         e instanceof Error
@@ -233,6 +344,15 @@ export async function runTripHelper(args: {
   }
 
   if (turn.kind === 'reply') {
+    if (wantShape) {
+      return mirrorJourneyResult(
+        args.trip,
+        args.draft,
+        mergeChecklist(checklist, turn.checklist),
+        turn.message,
+        turn.reason,
+      )
+    }
     return {
       message: turn.message,
       modeLabel: turn.modeLabel,
@@ -250,6 +370,15 @@ export async function runTripHelper(args: {
       ? incoming.spine
       : args.draft?.spine
     if (!spine?.areas?.length) {
+      if (wantShape) {
+        return mirrorJourneyResult(
+          args.trip,
+          args.draft,
+          mergeChecklist(checklist, turn.checklist),
+          turn.message,
+          turn.reason,
+        )
+      }
       return {
         message: turn.message,
         modeLabel: turn.modeLabel,
@@ -466,6 +595,15 @@ export async function runTripHelper(args: {
             ready: r.areas.length > 0,
           }),
         }
+      }
+      case 'mirror_journey': {
+        return mirrorJourneyResult(
+          args.trip,
+          args.draft,
+          checklist,
+          toolMsg,
+          turn.reason,
+        )
       }
       case 'reshape': {
         const r = await reshapeTrip({

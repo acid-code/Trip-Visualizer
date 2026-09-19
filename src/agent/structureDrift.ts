@@ -5,8 +5,15 @@
 
 import type { TripItem, TripRecord } from '../domain/types'
 import { enumerateDays, isPlaceholderBase } from '../data/dayBases'
+import { prefsFromMeta } from './context/compileDayBriefing'
 import { allocateSpineToDays } from './tripPlanner'
-import type { FullTripDayPlan, FullTripDraft } from './types'
+import type {
+  FullTripDayPlan,
+  FullTripDraft,
+  FullTripHighlight,
+  TransportHint,
+  TripSpineOption,
+} from './types'
 
 export type StructureDriftResult =
   | { kind: 'none' }
@@ -345,5 +352,229 @@ export function reconcileStructureDrift(
       mildNotes.length > 0
         ? `Updated the structure to match your Journey (${mildNotes.join('; ')}).`
         : 'Updated the structure to match your Journey.',
+  }
+}
+
+/** User wants a visible shape/draft tip — not a prose description alone. */
+export function wantsVisibleShape(userMessage: string): boolean {
+  const m = userMessage.toLowerCase().replace(/\s+/g, ' ').trim()
+  if (!m) return false
+  return (
+    /\b(show|see|return|give|pull|open|mirror)\b.{0,48}\b(shape|structure|tree|draft|spine|sketch)\b/.test(
+      m,
+    ) ||
+    /\b(shape|structure|draft|sketch)\b.{0,28}\b(i can see|on the (right|tree)|visible|panel)\b/.test(
+      m,
+    ) ||
+    /\bdraft of (the |my )?current\b/.test(m) ||
+    /\bcurrent (trip )?(shape|structure|draft|sketch)\b/.test(m)
+  )
+}
+
+function areaForDay(
+  trip: TripRecord,
+  date: string,
+  live: Map<string, string>,
+  carry: string,
+): string {
+  const fromBase = live.get(date)
+  if (fromBase) return fromBase
+  const counts = new Map<string, number>()
+  for (const it of trip.items) {
+    if (isPlaceholderBase(it) || it.status === 'cancelled') continue
+    if (it.date !== date && !(it.endDate && it.date <= date && it.endDate >= date)) {
+      continue
+    }
+    const label = (it.city || it.place || '').trim()
+    if (!label || /^day\s*\d+$/i.test(label)) continue
+    counts.set(label, (counts.get(label) || 0) + 1)
+  }
+  let best = ''
+  let bestN = 0
+  for (const [label, n] of counts) {
+    if (n > bestN) {
+      best = label
+      bestN = n
+    }
+  }
+  if (best) return best
+  if (carry) return carry
+  const adopted = prefsFromMeta(trip).adoptedAreas || []
+  return adopted[0] || trip.meta.name || 'Stay'
+}
+
+function highlightsForDay(trip: TripRecord, date: string): FullTripHighlight[] {
+  const out: FullTripHighlight[] = []
+  for (const it of trip.items) {
+    if (isPlaceholderBase(it) || it.status === 'cancelled') continue
+    if (it.date !== date) continue
+    if (!['sight', 'activity', 'restaurant', 'note'].includes(it.type)) continue
+    const name = (it.title || it.place || '').trim()
+    if (!name || /^day\s*\d+/i.test(name)) continue
+    out.push({
+      name: name.slice(0, 120),
+      why: (it.notes || `${it.type} already on your Journey`).slice(0, 200),
+    })
+    if (out.length >= 6) break
+  }
+  return out
+}
+
+function themeForDay(
+  trip: TripRecord,
+  date: string,
+  areaLabel: string,
+): { theme: string; why: string; special?: boolean } {
+  const notes = trip.items.filter(
+    (i) =>
+      !isPlaceholderBase(i) &&
+      i.date === date &&
+      i.type === 'note' &&
+      i.status !== 'cancelled',
+  )
+  for (const n of notes) {
+    const t = n.title.trim()
+    if (/birthday|anniversary|celebrat/i.test(t) || /birthday|anniversary/i.test(n.notes)) {
+      return {
+        theme: t || 'Celebration',
+        why: (n.notes || 'Special day you marked on the Journey.').slice(0, 280),
+        special: true,
+      }
+    }
+  }
+  const transit = trip.items.find(
+    (i) =>
+      !isPlaceholderBase(i) &&
+      i.date === date &&
+      ['flight', 'train', 'bus', 'ferry'].includes(i.type) &&
+      i.status !== 'cancelled',
+  )
+  if (transit) {
+    const corridor =
+      transit.from && transit.to
+        ? `${transit.from}→${transit.to}`
+        : transit.title
+    return {
+      theme: corridor.slice(0, 80),
+      why: `${transit.type} already on your Journey.`,
+    }
+  }
+  return {
+    theme: areaLabel.slice(0, 80),
+    why: `Mirrored from your Journey stay in ${areaLabel}.`,
+  }
+}
+
+function spineFromDayPlan(dayPlan: FullTripDayPlan[]): TripSpineOption['areas'] {
+  const areas: TripSpineOption['areas'] = []
+  for (const d of dayPlan) {
+    const last = areas[areas.length - 1]
+    if (last && norm(last.label) === norm(d.areaLabel)) {
+      last.roughNights += 1
+      continue
+    }
+    areas.push({
+      label: d.areaLabel,
+      roughNights: 1,
+      transportHint: 'transit_ok' as TransportHint,
+      theme: d.theme,
+      why: d.why,
+    })
+  }
+  return areas.slice(0, 20)
+}
+
+/**
+ * Build a shape-panel draft from what's already on the Journey.
+ * Used when the user asks to "see the shape" after restart (no chat draft yet).
+ */
+export function draftFromLiveTrip(trip: TripRecord): FullTripDraft | null {
+  const days = enumerateDays(trip.meta.startDate, trip.meta.endDate)
+  if (!days.length) return null
+  const live = liveDayAreas(trip)
+  const hasAnything =
+    live.size > 0 ||
+    trip.items.some((i) => !isPlaceholderBase(i) && i.status !== 'cancelled') ||
+    (prefsFromMeta(trip).adoptedAreas || []).length > 0
+  if (!hasAnything) return null
+
+  let carry = ''
+  const dayPlan: FullTripDayPlan[] = days.map((date) => {
+    const areaLabel = areaForDay(trip, date, live, carry)
+    carry = areaLabel
+    const { theme, why, special } = themeForDay(trip, date, areaLabel)
+    return {
+      date,
+      areaLabel,
+      theme,
+      why,
+      special,
+      highlights: highlightsForDay(trip, date),
+    }
+  })
+
+  const spineAreas = spineFromDayPlan(dayPlan)
+  if (!spineAreas.length) {
+    const fallback = allocateSpineToDays(
+      trip.meta.startDate,
+      trip.meta.endDate,
+      [
+        {
+          label: trip.meta.name || 'Trip',
+          roughNights: Math.max(1, days.length),
+          transportHint: 'transit_ok',
+        },
+      ],
+    )
+    return {
+      summary: `Shape mirrored from ${trip.meta.name || 'your Journey'}.`,
+      spine: {
+        id: 'live',
+        label: trip.meta.name || 'Current Journey',
+        summary: 'Mirrored from what’s already on your timeline.',
+        why: 'You asked to see the structure of the trip you already have.',
+        areas: [
+          {
+            label: trip.meta.name || 'Stay',
+            roughNights: Math.max(1, days.length),
+            transportHint: 'transit_ok',
+          },
+        ],
+        openQuestions: [],
+      },
+      dayPlan: fallback,
+      planPlaceNames: [],
+      items: [],
+      openQuestions: [],
+      decisions: [
+        {
+          what: 'Mirrored live Journey',
+          why: 'No stay-zone shells yet — sketched calendar days from your dates.',
+        },
+      ],
+    }
+  }
+
+  const label = spineAreas.map((a) => a.label).join(' → ')
+  return {
+    summary: `Shape mirrored from your Journey (${dayPlan.length} days). Scrub versions on the right, then apply when ready.`,
+    spine: {
+      id: 'live',
+      label: label.slice(0, 80) || trip.meta.name || 'Current Journey',
+      summary: 'Mirrored from day shells and steps already on your timeline.',
+      why: 'You asked to see the structure — this is what’s on the Journey now, not a rebuilt plan.',
+      areas: spineAreas,
+      openQuestions: [],
+    },
+    dayPlan,
+    planPlaceNames: [],
+    items: [],
+    openQuestions: [],
+    decisions: [
+      {
+        what: 'Mirrored live Journey into the shape panel',
+        why: 'So you can see stay zones and days without inventing a new route.',
+      },
+    ],
   }
 }

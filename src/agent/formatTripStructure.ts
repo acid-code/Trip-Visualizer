@@ -32,17 +32,41 @@ export function formatStructureTime(at: number): string {
   }
 }
 
+/** "Sep 20, 2026, 01:45 · Asaf" when shared attribution is present. */
+export function formatSketchStamp(
+  at: number,
+  byLabel?: string | null,
+): string {
+  const when = formatStructureTime(at)
+  if (!when) return ''
+  const who = String(byLabel || '').trim()
+  return who ? `${when} · ${who}` : when
+}
+
+/** Prefer display name, else email local-part, else email. */
+export function sketchAuthorLabel(user: {
+  displayName?: string
+  email?: string
+}): string {
+  const name = String(user.displayName || '').trim()
+  if (name) return name.slice(0, 80)
+  const email = String(user.email || '').trim()
+  if (!email) return ''
+  const local = email.split('@')[0] || email
+  return local.slice(0, 80)
+}
+
 /** Copyable trip plan from the shape tree (draft + live transit). */
 export function formatTripStructureText(
   draft: FullTripDraft | null,
   trip: TripRecord,
-  opts?: { sketchedAt?: number },
+  opts?: { sketchedAt?: number; sketchedBy?: string },
 ): string {
   const lines: string[] = []
   const title =
     draft?.spine.label || trip.meta.name || 'Trip structure'
   const when = opts?.sketchedAt
-    ? formatStructureTime(opts.sketchedAt)
+    ? formatSketchStamp(opts.sketchedAt, opts.sketchedBy)
     : ''
   lines.push(when ? `${title} · sketched ${when}` : title)
   if (trip.meta.startDate && trip.meta.endDate) {

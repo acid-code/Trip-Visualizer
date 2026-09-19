@@ -235,6 +235,7 @@ export type TripChatToolName =
   | 'set_stay_zone'
   | 'enrich'
   | 'area_knowhow'
+  | 'mirror_journey'
   | 'reshape'
   | 'update_items'
 
@@ -304,6 +305,11 @@ export type TripDraftVersion = {
   reason: string
   mode: TripChatModeLabel
   draft: FullTripDraft
+  /** Who sketched this tip (for shared trips). */
+  byUid?: string
+  /** Short display label: name or email. */
+  byLabel?: string
+  byEmail?: string
 }
 
 export type TripPlannerResult =

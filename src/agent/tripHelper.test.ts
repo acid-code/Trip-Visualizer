@@ -4,8 +4,10 @@ import {
   clearChatSession,
   greetingForTrip,
   loadChatSession,
+  mergeTripDrafts,
   restartConversationForTrip,
   saveChatSession,
+  type FullTripDraft,
 } from './index'
 
 function flightItem(partial: Partial<TripItem> & { id: string }): TripItem {
@@ -69,6 +71,49 @@ function tripWithFlight(): TripRecord {
   }
 }
 
+function baseDraft(): FullTripDraft {
+  return {
+    summary: 'Coast loop',
+    spine: {
+      id: 's1',
+      label: 'Nice → Menton',
+      summary: 'Coast',
+      areas: [
+        { label: 'Nice', roughNights: 3, transportHint: 'walk_city', theme: 'Base' },
+        { label: 'Menton', roughNights: 2, transportHint: 'transit_ok', theme: 'Quiet' },
+      ],
+      openQuestions: [],
+    },
+    dayPlan: [
+      {
+        date: '2026-10-01',
+        areaLabel: 'Nice',
+        theme: 'Arrive',
+        why: 'Landing day',
+        highlights: [],
+      },
+      {
+        date: '2026-10-02',
+        areaLabel: 'Nice',
+        theme: 'Old town',
+        why: 'Explore',
+        highlights: [{ name: 'Cours Saleya', why: 'Market' }],
+      },
+      {
+        date: '2026-10-03',
+        areaLabel: 'Nice',
+        theme: 'Birthday',
+        special: true,
+        why: 'Celebration',
+        highlights: [{ name: 'Spa', why: 'Treat' }],
+      },
+    ],
+    planPlaceNames: [],
+    items: [],
+    openQuestions: [],
+  }
+}
+
 describe('greetingForTrip / restart', () => {
   it('mentions existing flight and stay zones', () => {
     const g = greetingForTrip(tripWithFlight())
@@ -104,5 +149,33 @@ describe('greetingForTrip / restart', () => {
     expect(g.modeLabel).toBe('Listening')
 
     clearChatSession(trip.id)
+  })
+})
+
+describe('mergeTripDrafts surgical day patch', () => {
+  it('overlays one day without wiping the rest', () => {
+    const prev = baseDraft()
+    const next: FullTripDraft = {
+      ...prev,
+      summary: 'Touched birthday only',
+      dayPlan: [
+        {
+          date: '2026-10-03',
+          areaLabel: 'Nice',
+          theme: 'Birthday dinner',
+          special: true,
+          why: 'Romantic dinner',
+          highlights: [{ name: 'Port', why: 'Evening views' }],
+        },
+      ],
+      decisions: [{ what: 'Birthday evening', why: 'User asked for dinner focus' }],
+    }
+    const merged = mergeTripDrafts(prev, next)
+    expect(merged.dayPlan).toHaveLength(3)
+    expect(merged.dayPlan[0]?.theme).toBe('Arrive')
+    expect(merged.dayPlan[1]?.theme).toBe('Old town')
+    expect(merged.dayPlan[2]?.theme).toBe('Birthday dinner')
+    expect(merged.dayPlan[2]?.highlights[0]?.name).toBe('Port')
+    expect(merged.spine.areas).toHaveLength(2)
   })
 })

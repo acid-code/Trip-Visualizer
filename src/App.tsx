@@ -3509,6 +3509,15 @@ export default function App() {
           onClose={() => setTripPlannerOpen(false)}
           resumePrompt={tripPlannerResume}
           onResumeConsumed={() => setTripPlannerResume(null)}
+          sketchAuthor={
+            cloudUser
+              ? {
+                  uid: cloudUser.uid,
+                  email: cloudUser.email,
+                  displayName: cloudUser.displayName,
+                }
+              : null
+          }
           onApplyTrip={(next, message) => {
             void persist(next)
             if (message) setStatus(message)

@@ -266,6 +266,140 @@ export const PlanPlaceSchema = z.object({
   googlePhotoName: boundedStr(1024).default(''),
 })
 
+/** Whole Trip AI sketch tip — rides share sync; chat transcripts stay local. */
+const AiSketchTransportHintSchema = z.enum([
+  'walk_city',
+  'transit_ok',
+  'car_useful',
+  'car_needed',
+])
+
+const AiSketchDayPlanSchema = z.object({
+  date: requiredIsoDate,
+  areaLabel: boundedStr(120),
+  theme: boundedStr(200),
+  why: boundedStr(400).optional(),
+  special: z.boolean().optional(),
+  highlights: z
+    .array(
+      z.object({
+        name: boundedStr(200),
+        why: boundedStr(300),
+      }),
+    )
+    .max(12)
+    .default([]),
+})
+
+const AiSketchDraftSchema = z.object({
+  summary: boundedStr(800),
+  titleSuggestion: boundedStr(200).optional(),
+  spine: z.object({
+    id: boundedStr(64),
+    label: boundedStr(120),
+    summary: boundedStr(500),
+    why: boundedStr(500).optional(),
+    areas: z
+      .array(
+        z.object({
+          label: boundedStr(120),
+          roughNights: z.number().int().min(0).max(40),
+          transportHint: AiSketchTransportHintSchema.catch('transit_ok'),
+          theme: boundedStr(200).optional(),
+          why: boundedStr(400).optional(),
+        }),
+      )
+      .max(20),
+    openQuestions: z.array(boundedStr(300)).max(12).default([]),
+  }),
+  dayPlan: z.array(AiSketchDayPlanSchema).max(60).default([]),
+  planPlaceNames: z
+    .array(
+      z.object({
+        name: boundedStr(200),
+        section: z.enum(['must', 'food', 'maybe']).catch('maybe'),
+        city: boundedStr(120).optional(),
+        why: boundedStr(300).optional(),
+      }),
+    )
+    .max(40)
+    .default([]),
+  items: z
+    .array(
+      z.object({
+        type: boundedStr(40),
+        title: boundedStr(300),
+        place: boundedStr(500).optional().default(''),
+        city: boundedStr(120).optional().default(''),
+        date: optionalIsoDate,
+        endDate: optionalIsoDate.optional(),
+        start: boundedStr(5).optional(),
+        end: boundedStr(5).optional(),
+        from: boundedStr(200).optional(),
+        to: boundedStr(200).optional(),
+        notes: boundedStr(500).optional(),
+        confidence: z.enum(['high', 'medium', 'low']).catch('medium'),
+        source: z
+          .enum(['user_text', 'inferred', 'web'])
+          .catch('inferred'),
+        tentative: z.boolean().optional(),
+      }),
+    )
+    .max(40)
+    .default([]),
+  itemUpdates: z
+    .array(
+      z.object({
+        itemId: boundedStr(64),
+        title: boundedStr(300).optional(),
+        start: boundedStr(5).optional(),
+        end: boundedStr(5).optional(),
+        from: boundedStr(200).optional(),
+        to: boundedStr(200).optional(),
+        date: optionalIsoDate.optional(),
+        endDate: optionalIsoDate.optional(),
+        notes: boundedStr(500).optional(),
+        place: boundedStr(500).optional(),
+        city: boundedStr(120).optional(),
+      }),
+    )
+    .max(40)
+    .optional(),
+  openQuestions: z.array(boundedStr(300)).max(12).default([]),
+  droppedHighlights: z.array(boundedStr(200)).max(40).optional(),
+  decisions: z
+    .array(
+      z.object({
+        what: boundedStr(120),
+        why: boundedStr(400),
+      }),
+    )
+    .max(16)
+    .optional(),
+  prefs: PlannerPrefsSchema.optional(),
+})
+
+export const AiSketchSchema = z.object({
+  versions: z
+    .array(
+      z.object({
+        id: boundedStr(64),
+        at: z.number().finite(),
+        label: boundedStr(80),
+        reason: boundedStr(240),
+        mode: boundedStr(40),
+        draft: AiSketchDraftSchema,
+        byUid: boundedStr(128).optional(),
+        byLabel: boundedStr(120).optional(),
+        byEmail: boundedStr(320).optional(),
+      }),
+    )
+    .max(6)
+    .default([]),
+  index: z.number().int().min(-1).max(5).default(-1),
+  updatedAt: z.number().finite().optional(),
+})
+
 export const TripRecordSchema = z.object({
   id: z
     .unknown()
@@ -284,6 +418,11 @@ export const TripRecordSchema = z.object({
   shareOwnerUid: boundedStr(128).optional(),
   shareOwnerEmail: boundedStr(320).optional(),
   revision: z.number().int().min(0).max(1_000_000_000).optional(),
+  /**
+   * Whole Trip AI sketch versions (structure only). Syncs with share.
+   * Chat transcripts are intentionally NOT stored here — device-local only.
+   */
+  aiSketch: AiSketchSchema.optional(),
 })
 
 export type TripMeta = z.infer<typeof TripMetaSchema>
@@ -291,6 +430,7 @@ export type TripItem = z.infer<typeof TripItemSchema>
 export type PlanSection = z.infer<typeof PlanSectionSchema>
 export type PlanPlace = z.infer<typeof PlanPlaceSchema>
 export type TripRecord = z.infer<typeof TripRecordSchema>
+export type AiSketch = z.infer<typeof AiSketchSchema>
 
 /** Defaults for PlanPlace enrichment snapshot fields (tests + hand-built places). */
 export function blankPlanPlaceEnrichment(): Pick<

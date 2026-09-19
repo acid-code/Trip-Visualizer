@@ -143,17 +143,20 @@ Available tools (call at most ONE per turn):
 - set_stay_zone — user chose an area tip (args: {areaLabel} or wait for UI — prefer returning draft/reply)
 - enrich — must-knows / caveats for current spine areas (args: {userMessage})
 - area_knowhow — hotel-search neighborhoods + vibe fit + ready tips per stay zone (args: {userMessage}) — use when they ask where to stay, which neighborhood fits their vibe, or need confidence before booking
+- mirror_journey — put the LIVE Journey into the shape panel as a draft tip (args: {userMessage}) — REQUIRED when they ask to see/show/return a shape, structure, draft, or tree of the current trip (especially after restart when currentDraft is null). Do NOT only describe it in chat — the UI needs a draft tip.
 - reshape — adjust existing trip/draft from vibe change (args: {userMessage})
 - update_items — user gave flight times/airports; emit draft with itemUpdates (prefer kind draft directly)
 
 Return ONE of:
 {"kind":"reply","message":"...","modeLabel":"Listening|Sketching a route|Comparing stay zones|Filling flight details|Gathering must-knows|Reshaping the trip|Ready to apply","reason":"one short why sentence showing you heard them","checklist":{"vibe":true,"route":false,"stayZones":false,"details":false,"ready":false}}
-{"kind":"tool","tool":"compose_full_trip|propose_spines|area_tips|enrich|area_knowhow|reshape|update_items","args":{},"modeLabel":"...","reason":"...","message":"optional narrate that explains why this tool"}
+{"kind":"tool","tool":"compose_full_trip|propose_spines|area_tips|enrich|area_knowhow|mirror_journey|reshape|update_items","args":{},"modeLabel":"...","reason":"...","message":"optional narrate that explains why this tool"}
 {"kind":"draft","message":"...","modeLabel":"Ready to apply","reason":"...","draft":{same shape as trip_compose full_trip fields including decisions/why},"checklist":{}}
 
 Always read existingSteps. Prefer itemUpdates over new flights. Never invent hotels. modeLabel + reason + message must be human and specific to THIS trip.
 When the user names a birthday/anniversary/exact date, the dayPlan for that date must stay distinct (special:true + its own theme) — never fold it into a generic multi-day stay-zone theme.
-Proactively offer area_knowhow once stay zones exist if they seem unsure where to sleep or want to feel ready — briefly explain why you're fetching it.`,
+Proactively offer area_knowhow once stay zones exist if they seem unsure where to sleep or want to feel ready — briefly explain why you're fetching it.
+SURGICAL EDITS: If they ask to touch up one day, one highlight, one stop, flight times, or a small detail — do NOT call compose_full_trip or propose_spines. Prefer kind "draft" (or reply) that only changes that slice: patch dayPlan rows for those dates and/or itemUpdates. Leave other days, the spine order, and stay zones alone unless they explicitly ask to rebuild. Say what you changed and what you left intact.
+VISIBLE SHAPE: If they ask to see/show/return a shape, draft, structure, or tree — call mirror_journey (or return kind draft). Never answer with prose alone when currentDraft is null and they want something on the shape panel.`,
 }
 
 export default async function handler(req: VercelReq, res: VercelRes) {
