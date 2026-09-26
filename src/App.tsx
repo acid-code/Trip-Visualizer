@@ -115,7 +115,8 @@ import {
   fetchNearbyExplore,
   type ExplorePlace,
 } from './data/explore'
-import { hydrateGooglePlacePhoto } from './data/placesGoogle'
+import { googlePlacePhotoMediaUrl, hydrateGooglePlacePhoto } from './data/placesGoogle'
+import { fetchPlaceCard } from './data/placeCard'
 import {
   FEATURE_TIPS,
   JOURNEY_TIP_CONTEXTS,
@@ -1487,6 +1488,7 @@ export default function App() {
       const place = await lookupPlace(query, {
         useGooglePlaces: placesEnabled,
         googleApiKey: effectiveGoogleKey || undefined,
+        googlePinFallback: true,
         bias,
       })
       if (!place) {
@@ -1724,6 +1726,7 @@ export default function App() {
       const pinned = await pinItemOnMap(item, {
         useGooglePlaces: placesEnabled,
         googleApiKey: effectiveGoogleKey || undefined,
+        googlePinFallback: true,
         hotels: active.items.filter((i) => i.type === 'hotel'),
       })
       const withoutPlaceholder = replaceId
@@ -1743,6 +1746,67 @@ export default function App() {
       setPanelOpen(true)
 
       const isLeg = ['flight', 'train', 'bus', 'ferry', 'drive'].includes(pinned.type)
+      const cardQuery = (pinned.place || pinned.title || '').trim()
+      if (
+        !isLeg &&
+        placesEnabled &&
+        cardQuery &&
+        isValidCoord(pinned.lat, pinned.lon) &&
+        pinned.rating == null &&
+        !pinned.googleMapsUri
+      ) {
+        const tripId = next.id
+        const itemId = pinned.id
+        const lat = pinned.lat!
+        const lon = pinned.lon!
+        void (async () => {
+          try {
+            const card = await fetchPlaceCard({
+              query: cardQuery,
+              lat,
+              lon,
+              apiKey: effectiveGoogleKey || undefined,
+            })
+            if (!card) return
+            const fresh = await getTrip(tripId)
+            const item = fresh?.items.find((i) => i.id === itemId)
+            if (!fresh || !item || item.googleMapsUri || item.rating != null) return
+            const photo = card.photoName ? googlePlacePhotoMediaUrl(card.photoName) : ''
+            const patched = {
+              ...item,
+              rating: card.rating ?? item.rating,
+              googleMapsUri: card.googleMapsUri || item.googleMapsUri,
+              url: item.url || card.website,
+              enrichmentSummary:
+                item.enrichmentSummary ||
+                (card.userRatingCount ? `${card.userRatingCount} Google reviews` : ''),
+              enrichmentImage: item.enrichmentImage || photo,
+              enrichmentSource: item.enrichmentSource || (card.placeId ? 'Google' : ''),
+              updatedAt: nowIso(),
+            }
+            await persist({
+              ...fresh,
+              items: fresh.items.map((i) => (i.id === itemId ? patched : i)),
+            })
+            setStepDraft((draft) =>
+              draft && draft.id === itemId
+                ? {
+                    ...draft,
+                    rating: patched.rating,
+                    googleMapsUri: patched.googleMapsUri,
+                    url: draft.url || patched.url,
+                    enrichmentSummary: draft.enrichmentSummary || patched.enrichmentSummary,
+                    enrichmentImage: draft.enrichmentImage || patched.enrichmentImage,
+                    enrichmentSource: draft.enrichmentSource || patched.enrichmentSource,
+                  }
+                : draft,
+            )
+          } catch (err) {
+            logClientError('place-card', err)
+          }
+        })()
+      }
+
       const hasFrom = isValidCoord(pinned.lat, pinned.lon)
       const hasTo = isValidCoord(pinned.latTo, pinned.lonTo)
 

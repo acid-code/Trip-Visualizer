@@ -390,10 +390,18 @@ function MapSection({
         />
         <span className="mt-1 block text-[10px]">
           {serverPlacesConfigured
-            ? 'Blank uses the server key. Photoreal 3D needs a key here.'
+            ? 'Blank uses the server key. Photoreal 3D needs a key here. Place search uses LocationIQ; Google fills rating and hours when you open a place.'
             : 'Optional. Prefer GOOGLE_MAPS_API_KEY on the server. 3D tiles need a key here.'}
         </span>
       </label>
+      <a
+        href="https://locationiq.com"
+        target="_blank"
+        rel="noreferrer"
+        className="mt-1 inline-block text-[10px] text-[var(--sky)] underline"
+      >
+        Search by LocationIQ.com
+      </a>
       <label className="mt-3 block text-xs text-[var(--ink-muted)]">
         Cesium ion token (optional)
         <input

@@ -227,6 +227,8 @@ function placesDevProxy(): Plugin {
       // Use standalone /api handlers (not src/data) — client modules touch import.meta.env.
       mountApiPost('/api/places-nearby', 'api/places-nearby.ts')
       mountApiPost('/api/places-text', 'api/places-text.ts')
+      mountApiPost('/api/geocode', 'api/geocode.ts')
+      mountApiPost('/api/places-card', 'api/places-card.ts')
 
       // Same multi-mirror Overpass handler as Vercel (Vite http-proxy only hit one host).
       server.middlewares.use('/api/overpass', (req, res, next) => {
@@ -336,6 +338,9 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   if (env.GOOGLE_MAPS_API_KEY) {
     process.env.GOOGLE_MAPS_API_KEY = env.GOOGLE_MAPS_API_KEY
+  }
+  if (env.LOCATIONIQ_API_KEY) {
+    process.env.LOCATIONIQ_API_KEY = env.LOCATIONIQ_API_KEY
   }
   if (env.GEMINI_API_KEY) {
     process.env.GEMINI_API_KEY = env.GEMINI_API_KEY

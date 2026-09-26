@@ -24,6 +24,7 @@ import {
   type ExplorePlace,
 } from '../data/explore'
 import { googlePlacePhotoMediaUrl } from '../data/placesGoogle'
+import { fetchPlaceCard, mergeExplorePlaceCard } from '../data/placeCard'
 import {
   extractCoordsFromText,
   locationQueryFromInput,
@@ -163,6 +164,8 @@ export function PlanBoard({
   const [focusPlaceId, setFocusPlaceId] = useState<string | null>(null)
   const [focusSuggestionId, setFocusSuggestionId] = useState<string | null>(null)
   const [detailPlace, setDetailPlace] = useState<ExplorePlace | null>(null)
+  const tripRef = useRef(trip)
+  tripRef.current = trip
   /** When set, detail sheet is a saved Plan place (not a Nearby suggestion). */
   const [detailSavedId, setDetailSavedId] = useState<string | null>(null)
   const [filterMenu, setFilterMenu] = useState<'type' | 'day' | null>(null)
@@ -401,6 +404,54 @@ export function PlanBoard({
     setFocusSuggestionId(null)
   }
 
+  async function enrichSearchPlace(place: ExplorePlace, query: string) {
+    if (place.tags.cardFetched === '1') return
+    const card = await fetchPlaceCard({
+      query: place.name,
+      altQuery: query,
+      lat: place.lat,
+      lon: place.lon,
+      placeId: place.osmId.startsWith('google:') ? place.osmId.slice('google:'.length) : undefined,
+      apiKey: googleApiKey || undefined,
+    })
+    if (!card) return
+    const enriched = mergeExplorePlaceCard(place, card)
+    setDetailPlace((cur) => (cur && cur.id === place.id ? enriched : cur))
+    setPinnedSearch((cur) => (cur && cur.id === place.id ? enriched : cur))
+    const current = tripRef.current
+    const saved = current.planPlaces.find((p) => {
+      if (p.osmId && (p.osmId === place.id || p.osmId === place.osmId || p.osmId === enriched.osmId)) {
+        return true
+      }
+      return (
+        p.lat != null &&
+        p.lon != null &&
+        Math.abs(p.lat - place.lat) < 0.0002 &&
+        Math.abs(p.lon - place.lon) < 0.0002 &&
+        p.name === place.name
+      )
+    })
+    if (!saved) return
+    const result = upsertPlanPlaceToSection(current, {
+      sectionId: saved.sectionId,
+      name: enriched.name,
+      place: enriched.address || enriched.name,
+      lat: enriched.lat,
+      lon: enriched.lon,
+      url: enriched.website || saved.url,
+      googleMapsUri: enriched.tags.googleMapsUri || saved.googleMapsUri,
+      osmId: enriched.osmId || saved.osmId,
+      enrichmentSummary: enriched.summary || saved.enrichmentSummary,
+      enrichmentImage: enriched.images[0] || saved.enrichmentImage,
+      images: enriched.images.slice(0, 6),
+      openingHours: enriched.openingHours || saved.openingHours,
+      openingPeriods: enriched.openingPeriods || saved.openingPeriods,
+      rating: enriched.rating ?? saved.rating,
+      googlePhotoName: enriched.tags.googlePhotoName || saved.googlePhotoName,
+    })
+    onChange(result.trip)
+  }
+
   async function searchRecommendation(raw: string) {
     const q = raw.trim()
     if (!q) return
@@ -446,11 +497,10 @@ export function PlanBoard({
         return
       }
 
-      // Nominatim first (free). Google Text Search only if Nominatim misses —
-      // Text Search Atmosphere was the SKU on the bill.
       const lookup = await lookupPlace(query, {
         useGooglePlaces: placesEnabled,
         googleApiKey: googleApiKey || undefined,
+        googlePinFallback: true,
         bias: { lat: anchor.lat, lon: anchor.lon, radiusM: mapView?.radiusM ?? 80_000 },
       })
       if (!lookup) {
@@ -471,12 +521,13 @@ export function PlanBoard({
         distKm: 0,
         rating: null,
         cuisine: '',
-        website: '',
+        website: lookup.website || '',
         menuUrl: '',
-        openingHours: '',
+        openingHours: lookup.openingHours || '',
         address: lookup.address || '',
         tags: {
           source: lookup.osmId.startsWith('google:') ? 'google' : 'search',
+          searchQuery: query,
         },
       }
       setPinnedSearch(place)
@@ -485,11 +536,10 @@ export function PlanBoard({
       setFocusPlaceId(null)
       setDetailSavedId(null)
       setDetailPlace(place)
-      onStatus?.(
-        lookup.osmId.startsWith('google:')
-          ? 'Loaded place (Google fallback) — save when ready'
-          : 'Loaded place — save to Must see when ready',
-      )
+      onStatus?.('Loaded place — save to Must see when ready')
+      if (placesEnabled || googleApiKey) {
+        void enrichSearchPlace(place, query)
+      }
     } catch (err) {
       setSuggestError(err instanceof Error ? err.message : 'Search failed')
     } finally {

@@ -1,7 +1,8 @@
 import type { PlanPlace, TripItem } from '../domain/types'
 import { lookupAirport } from './airports'
 import { nowIso } from './db'
-import { fetchGoogleTextViaProxy } from './placesGoogle'
+import { geocodeViaProxy } from './geocodeProxy'
+import { fetchPlaceCard } from './placeCard'
 import { fetchOsrmRoute } from './routes'
 import { MAX_GEOCODE_QUERY_LEN, safeHttpsUrl } from './security'
 import { isValidCoord, parseLat, parseLon } from './validate'
@@ -44,6 +45,10 @@ export type PlaceLookup = {
   city: string
   osmId: string
   query: string
+  /** OSM website when LocationIQ returned one. */
+  website?: string
+  /** OSM opening hours when LocationIQ returned them. */
+  openingHours?: string
 }
 
 type NominatimAddress = {
@@ -144,50 +149,71 @@ export async function geocodePlace(query: string): Promise<{ lat: number; lon: n
 }
 
 /** Forward geocode with name / address details.
- *  Nominatim first (free). Google Text Search only as fallback when allowed —
- *  Text Search was the Atmosphere SKU that drove billing.
+ *  LocationIQ (server proxy) first, then public Nominatim.
+ *  Google Text Search is not used. A single interactive miss may resolve a pin
+ *  through Place Details (`googlePinFallback`) — never during bulk import.
  */
 export async function lookupPlace(
   query: string,
   opts?: {
-    /**
-     * If true and Nominatim misses, try Google Text Search once.
-     * Prefer leaving this false for bulk geocode / enrich paths.
-     */
+    /** Kept so older callers compile. Does not call Text Search. */
     useGooglePlaces?: boolean
     /** Data-panel override only. */
     googleApiKey?: string
     bias?: { lat: number; lon: number; radiusM?: number }
     /**
-     * Skip Nominatim and hit Google Text first (rare — e.g. stubborn Maps place names).
-     * Default false.
+     * When LocationIQ and Nominatim both miss, resolve a pin with a free
+     * place-id search plus Place Details. Interactive search only.
      */
-    preferGoogleText?: boolean
+    googlePinFallback?: boolean
   },
 ): Promise<PlaceLookup | null> {
   const q = query.trim().slice(0, MAX_GEOCODE_QUERY_LEN)
   if (!q) return null
 
   const googleKey = opts?.googleApiKey?.trim()
-  const googleAllowed = Boolean(opts?.useGooglePlaces || googleKey)
 
-  async function tryGoogle(): Promise<PlaceLookup | null> {
-    if (!googleAllowed) return null
+  async function tryLocationIq(): Promise<PlaceLookup | null> {
     try {
-      const hit = await fetchGoogleTextViaProxy({
-        query: q,
-        apiKey: googleKey || undefined,
-        bias: opts?.bias,
-      })
+      const hit = await geocodeViaProxy(q, opts?.bias)
       if (!hit) return null
       return {
         lat: hit.lat,
         lon: hit.lon,
         name: hit.name,
         address: hit.address || hit.name,
-        city: '',
-        osmId: hit.placeId ? `google:${hit.placeId}` : '',
+        city: hit.city,
+        osmId: hit.osmId,
         query: q,
+        website: hit.website,
+        openingHours: hit.openingHours,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  async function tryGooglePin(): Promise<PlaceLookup | null> {
+    if (!opts?.googlePinFallback) return null
+    if (!opts.useGooglePlaces && !googleKey) return null
+    try {
+      const card = await fetchPlaceCard({
+        query: q,
+        lat: opts.bias?.lat,
+        lon: opts.bias?.lon,
+        apiKey: googleKey || undefined,
+      })
+      if (!card || !isValidCoord(card.lat, card.lon)) return null
+      return {
+        lat: card.lat!,
+        lon: card.lon!,
+        name: card.name || q,
+        address: card.address || card.name || q,
+        city: '',
+        osmId: card.placeId ? `google:${card.placeId}` : '',
+        query: q,
+        website: card.website,
+        openingHours: card.openingHours,
       }
     } catch {
       return null
@@ -218,13 +244,9 @@ export async function lookupPlace(
     return placeFromHit(data[0], q)
   }
 
-  if (opts?.preferGoogleText) {
-    return (await tryGoogle()) || (await tryNominatim())
-  }
-
-  const free = await tryNominatim()
-  if (free) return free
-  return tryGoogle()
+  const located = (await tryLocationIq()) || (await tryNominatim())
+  if (located) return located
+  return tryGooglePin()
 }
 
 /** Reverse geocode a map pin into name + address. */
@@ -352,6 +374,11 @@ export type PinMapOpts = {
   googleApiKey?: string
   /** Hotels (or other pinned stays) used as From/To fallbacks for drives. */
   hotels?: TripItem[]
+  /**
+   * OSM miss on a single add/search may use Place Details for the pin.
+   * Bulk import forces this off.
+   */
+  googlePinFallback?: boolean
 }
 
 /** Resolve a phone paste: Google Maps URL, "lat, lon", or plain address. */
@@ -367,6 +394,7 @@ export async function resolveLocationInput(
   const g = await lookupPlace(q, {
     useGooglePlaces: opts?.useGooglePlaces,
     googleApiKey: opts?.googleApiKey,
+    googlePinFallback: opts?.googlePinFallback,
   })
   if (!g) return null
   return { lat: g.lat, lon: g.lon, query: q }
@@ -435,6 +463,7 @@ export async function pinItemOnMap(
   const g = await lookupPlace(normalizeGeocodeQuery(q), {
     useGooglePlaces: opts?.useGooglePlaces,
     googleApiKey: opts?.googleApiKey,
+    googlePinFallback: opts?.googlePinFallback,
   })
   if (g) {
     next.lat = g.lat
@@ -482,6 +511,7 @@ export async function pinTripItemsOnMap(
   for (const i of needIdx) {
     out[i] = await pinItemOnMap(out[i]!, {
       ...opts,
+      googlePinFallback: false,
       hotels: [...(opts?.hotels ?? []), ...hotels()],
     })
     done += 1
