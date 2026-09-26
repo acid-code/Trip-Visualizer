@@ -95,6 +95,16 @@ export function MapSearchBar({
           </button>
         </form>
       )}
+      {open ? (
+        <a
+          href="https://locationiq.com"
+          target="_blank"
+          rel="noreferrer"
+          className="pointer-events-auto pl-1 text-[9px] text-white/70 underline decoration-white/30"
+        >
+          Search by LocationIQ.com
+        </a>
+      ) : null}
       {hint ? (
         <p
           className={
